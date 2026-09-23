@@ -19,6 +19,8 @@ export type Intersection = {
   horizon_time?: number[];
 };
 export type Mesh = {
+  scalar: (number | null)[];
+  twt_range: [number, number];
   x: number[];
   y: number[];
   z: (number | null)[];
@@ -36,6 +38,12 @@ export type SceneData = {
   vmin: number;
   vmax: number;
 };
+// Shared by horizons only; seismic colors and amplitude clipping are independent.
+export const PETREL_COLORMAP = [
+  [0, "#ff0000"], [1 / 7, "#ff8000"], [2 / 7, "#ffff00"],
+  [3 / 7, "#00c040"], [4 / 7, "#00ffff"], [5 / 7, "#0000ff"],
+  [6 / 7, "#8000c0"], [1, "#ff00ff"],
+];
 const dash: Record<string, string> = {
   solid: "solid",
   dashed: "dash",
@@ -179,6 +187,10 @@ export function buildTraces(
     if (!hd) continue;
     if (h.display_mode === "full_surface" && hd.mesh) {
       const mesh = hd.mesh;
+      const [tmin, tmax] = mesh.twt_range;
+      const twtColor = h.color_by !== "solid";
+      // A constant-time horizon uses the middle color, with a nonzero scale.
+      const padding = tmin === tmax ? Math.max(0.5, Math.abs(tmin) * 1e-6) : 0;
       if (h.surface_mode !== "wireframe")
         traces.push({
           type: "mesh3d",
@@ -189,15 +201,29 @@ export function buildTraces(
           j: mesh.j,
           k: mesh.k,
           color: h.color,
+          ...(twtColor ? {
+            intensity: mesh.scalar,
+            intensitymode: "vertex",
+            colorscale: PETREL_COLORMAP,
+            cauto: false,
+            cmin: tmin - padding,
+            cmax: tmax + padding,
+          } : {}),
           opacity: h.opacity,
           name: h.name,
-          flatshading: false,
-          lighting: {
-            ambient: 0.85,
-            diffuse: 0.5,
-            specular: 0.1,
-            roughness: 0.9,
-          },
+          flatshading: h.smooth_shading === false,
+          // gl-mesh3d computes vertex normals when useFacetNormals is false.
+          lighting: h.lighting === false
+            ? { ambient: 1, diffuse: 0, specular: 0, fresnel: 0 }
+            : {
+                // Keep at least 80% of the colormap RGB in unlit areas;
+                // gentle diffuse shading reveals relief without darkening the map.
+                ambient: 0.8, diffuse: 0.2, specular: 0.05,
+                roughness: 0.55, fresnel: 0,
+              },
+          // gl-mesh3d unprojects this position by inverse projection/view/model
+          // every frame, so the light remains attached to the camera during orbit.
+          lightposition: { x: 0, y: 0, z: -1 },
           showscale: false,
           showlegend: false,
           hovertemplate: `${safe(h.name)}<br>Inline: %{y}<br>Crossline: %{x}<br>TWT: %{z:.1f} ms<extra></extra>`,

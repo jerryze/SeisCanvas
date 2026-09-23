@@ -160,3 +160,30 @@ def test_scene_api_and_validation(cube, tmp_path):
         ).status_code
         == 200
     )
+
+
+def test_surface_scalar_range_uses_native_extrema(tmp_path):
+    h = make_horizon(tmp_path)
+    h.data[6, 2] = 999  # Omitted by the two-by-two preview.
+    coarse = horizon_mesh(h, 2)
+    fine = horizon_mesh(h, 5)
+    assert coarse["scalar"] == coarse["z"]
+    assert coarse["twt_range"] == fine["twt_range"] == [200, 999]
+    assert 999 not in coarse["scalar"]
+    other = make_horizon(tmp_path)
+    other.data[:, 2] += 1000
+    assert horizon_mesh(other, 2)["twt_range"] == [1200, 1212]
+
+
+def test_surface_defaults_and_import_range(tmp_path):
+    from backend.models import Horizon3DStyle
+    style = Horizon3DStyle(id="test", name="test")
+    assert style.color_by == "twt" and style.horizon_colormap == "petrel"
+    assert style.smooth_shading and style.lighting
+    assert style.opacity == 1 and style.surface_mode == "surface"
+    h = make_horizon(tmp_path)
+    imported = server.add_horizon(h)
+    try:
+        assert imported["twt_range"] == (200, 212)
+    finally:
+        server.horizons.pop(imported["id"])

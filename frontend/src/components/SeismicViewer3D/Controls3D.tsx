@@ -340,6 +340,36 @@ export function Horizon3DControls({
       </label>
       {h.display_mode === "full_surface" ? (
         <>
+          <div className="control-note">
+            TWT 范围：{h.twt_range
+              ? `${h.twt_range[0].toFixed(1)}–${h.twt_range[1].toFixed(1)} ms`
+              : "—"}
+          </div>
+          <label className="field">
+            Color By · 着色依据
+            <select value={h.color_by || "twt"}
+              onChange={(e) => onChange({ color_by: e.target.value as HS["color_by"] })}>
+              <option value="twt">TWT · 独立时间范围</option>
+              <option value="solid">Solid · 单色</option>
+            </select>
+          </label>
+          {h.color_by !== "solid" && (
+            <label className="field">
+              Colormap · 层位色标
+              <select value={h.horizon_colormap || "petrel"}
+                onChange={() => onChange({ horizon_colormap: "petrel" })}>
+                <option value="petrel">Petrel</option>
+              </select>
+              <span style={{ display: "block", height: 10, background: "linear-gradient(to right, #ff0000, #ff8000, #ffff00, #00c040, #00ffff, #0000ff, #8000c0, #ff00ff)" }} />
+              <small>低 TWT → 高 TWT · 每个层位独立归一化</small>
+            </label>
+          )}
+          <Toggle label="Smooth Shading · 平滑着色"
+            checked={h.smooth_shading !== false}
+            onChange={(smooth_shading) => onChange({ smooth_shading })} />
+          <Toggle label="Lighting · 光照"
+            checked={h.lighting !== false}
+            onChange={(lighting) => onChange({ lighting })} />
           <label className="field">
             曲面样式
             <select

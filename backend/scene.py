@@ -151,6 +151,9 @@ def horizon_mesh(horizon, maximum=256):
         x=xx.ravel().tolist(),
         y=yy.ravel().tolist(),
         z=serial(zz.ravel()),
+        scalar=serial(zz.ravel()),
+        # Native picks, not preview samples: extrema remain stable at every quality.
+        twt_range=[float(horizon.data[:, 2].min()), float(horizon.data[:, 2].max())],
         i=faces[:, 0].tolist(),
         j=faces[:, 1].tolist(),
         k=faces[:, 2].tolist(),

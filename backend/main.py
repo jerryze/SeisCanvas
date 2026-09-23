@@ -42,7 +42,8 @@ def add_horizon(h):
     key = uuid4().hex
     horizons[key] = h
     return Horizon3DStyle(
-        id=key, name=h.name, color=COLORS[(len(horizons) - 1) % len(COLORS)]
+        id=key, name=h.name, color=COLORS[(len(horizons) - 1) % len(COLORS)],
+        twt_range=(float(h.data[:, 2].min()), float(h.data[:, 2].max()))
     ).model_dump()
 
 

@@ -1,4 +1,9 @@
 export type HS = {
+  color_by: "twt" | "solid";
+  horizon_colormap: "petrel";
+  smooth_shading: boolean;
+  lighting: boolean;
+  twt_range: [number, number] | null;
   display_mode: "full_surface" | "slice_intersections";
   opacity: number;
   surface_mode: "surface" | "wireframe" | "surface_wireframe";

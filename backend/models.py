@@ -123,7 +123,12 @@ class Slices(BaseModel):
 
 class Horizon3DStyle(HorizonStyle):
     display_mode: Literal["full_surface", "slice_intersections"] = "slice_intersections"
-    opacity: float = Field(0.7, ge=0, le=1)
+    opacity: float = Field(1, ge=0, le=1)
+    color_by: Literal["twt", "solid"] = "twt"
+    horizon_colormap: Literal["petrel"] = "petrel"
+    smooth_shading: bool = True
+    lighting: bool = True
+    twt_range: tuple[float, float] | None = None
     surface_mode: Literal["surface", "wireframe", "surface_wireframe"] = "surface"
     wireframe_width: float = Field(1, ge=0.2, le=6)
     time_slice_tolerance: float = Field(4, ge=0, le=1000)

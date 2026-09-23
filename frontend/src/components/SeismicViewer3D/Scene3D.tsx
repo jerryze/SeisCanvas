@@ -206,14 +206,30 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
   }, [data, sceneStyle, maps, drag, loading]);
   useEffect(() => {
     if (loading || rendering || !data || cameraKey === displayedCamera.current) return;
-    const el = plot.current;
+    const el = plot.current as any;
     if (!el) return;
-    displayedCamera.current = cameraKey;
+    const requestedCamera = structuredClone(view.scene.camera);
+    const requestedKey = cameraKey;
+    const version = renderVersion.current;
     renderQueue.current = renderQueue.current
-      .then(() => Plotly.relayout(el, { "scene.camera": latest.current.view.scene.camera } as any))
-      .then(() => {})
+      .catch(() => {})
+      .then(async () => {
+        if (version !== renderVersion.current || !el.isConnected) return;
+        // Projection changes recreate Plotly's GL scene. Supplying geometry in
+        // the same update prevents a new scene containing only the axis objects.
+        // Mouse orbit events already update displayedCamera and skip this path.
+        const current = latest.current.view;
+        const next = { ...current, scene: { ...current.scene, camera: requestedCamera } };
+        await Plotly.react(el, buildTraces(data, next, maps),
+          buildLayout(data, next, drag) as any, {
+            responsive: true, displayModeBar: false, scrollZoom: true,
+            plotGlPixelRatio: Math.min(window.devicePixelRatio, 2),
+          });
+        applyDepthLayers(el);
+        displayedCamera.current = requestedKey;
+      })
       .catch((e) => latest.current.onError(String(e)));
-  }, [cameraKey, loading, rendering, data]);
+  }, [cameraKey, loading, rendering, data, maps, drag]);
   useEffect(() => {
     const el = plot.current;
     if (!el) return;
@@ -395,7 +411,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
               .map((h) => (
                 <span key={h.id}>
                   <i style={{ background: h.color }} />
-                  {h.name} ·{" "}
+                  {h.name}{h.display_mode === "full_surface" && h.twt_range ? ` · ${h.twt_range[0].toFixed(1)}–${h.twt_range[1].toFixed(1)} ms` : ""} ·{" "}
                   {h.display_mode === "full_surface" ? "曲面" : "交线"}
                 </span>
               ))}
