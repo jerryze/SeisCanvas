@@ -1,0 +1,13 @@
+"""Start the built local SeisCanvas application."""
+
+import os
+import tempfile
+from pathlib import Path
+
+os.environ.setdefault(
+    "MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "seiscanvas-mpl")
+)
+import uvicorn
+
+if __name__ == "__main__":
+    uvicorn.run("backend.main:app", host="127.0.0.1", port=8000)
