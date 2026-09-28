@@ -273,14 +273,23 @@ class SceneExportRequest(BaseModel):
 
 class HorizonMapState(BaseModel):
     horizon: str
+    #: Active color scalar: horizon TWT, seismic amplitude along the horizon,
+    #: or (once implemented) a difference between two horizons.
+    color_by: Literal["twt", "amplitude"] = "twt"
     display: Literal["filled", "contour", "filled_contour"] = "filled_contour"
-    colormap: Literal["petrel", "turbo", "viridis", "cividis", "jet"] = "petrel"
+    colormap: Literal[
+        "petrel", "turbo", "viridis", "cividis", "jet",
+        "seismic", "RdBu", "coolwarm",
+    ] = "petrel"
     reverse_colormap: bool = False
     range_mode: Literal["auto", "manual"] = "auto"
     vmin: float | None = None
     vmax: float | None = None
+    #: Amplitude auto range: symmetric +-percentile of |amplitude|.
+    clip_percentile: float = Field(99.0, gt=0, le=100)
     contours: bool = True
-    interval: float = Field(10, gt=0)
+    #: Contour interval; ``None`` derives a 1/2/5 step from the scalar range.
+    interval: float | None = Field(None, gt=0)
     line_width: float = Field(0.5, ge=0.1, le=6)
     labels: bool = False
     colorbar: bool = True

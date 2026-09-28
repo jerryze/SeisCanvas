@@ -397,7 +397,9 @@ def test_export_all_builds_a_categorised_zip_with_a_manifest(client):
         assert figures[0]["render"]["interpolation"] == "bicubic"
         assert figures[0]["render"]["resolution"] == "export"
         assert figures[1]["crossline"] == 30
-        assert figures[2]["contour_interval"] == 10 and figures[2]["colorbar"] is True
+        assert figures[2]["contour_interval"] is None
+        assert figures[2]["contour_interval_auto"] is True  # Auto 1/2/5 step.
+        assert figures[2]["colorbar"] is True
         assert figures[3]["slices"]["time"] == [204]
         assert figures[3]["render"]["font"] == "Times New Roman"
         assert figures[3]["pixel_size"] == [400, 300]

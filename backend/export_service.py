@@ -107,9 +107,11 @@ def add_map(survey, horizons, req: QueueMapRequest) -> dict:
         settings.dpi,
         settings.format,
     )
-    data = render_map(horizon, state, settings)
+    data = render_map(survey, horizon, state, settings)
     summary = {
         "horizon": horizon.name,
+        "color_by": state.color_by,
+        "clip_percentile": state.clip_percentile,
         "scalar": scalar,
         "display": state.display,
         "colormap": state.colormap,
@@ -119,6 +121,7 @@ def add_map(survey, horizons, req: QueueMapRequest) -> dict:
         "vmax": state.vmax,
         "contours": state.contours,
         "contour_interval": state.interval,
+        "contour_interval_auto": state.interval is None,
         "contour_line_width": state.line_width,
         "contour_labels": state.labels,
         "colorbar": state.colorbar,

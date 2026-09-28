@@ -89,7 +89,7 @@ def horizon_map(state: HorizonMapState):
         if state.horizon not in horizons:
             raise HTTPException(404, "Horizon not found.")
         try:
-            return map_data(horizons[state.horizon], state)
+            return map_data(require_survey(), horizons[state.horizon], state)
         except ValueError as e:
             raise error(e)
 
@@ -100,7 +100,7 @@ def horizon_map_export(req: HorizonMapExport):
         if req.state.horizon not in horizons:
             raise HTTPException(404, "Horizon not found.")
         try:
-            content = render_map(horizons[req.state.horizon], req.state, req.settings)
+            content = render_map(require_survey(), horizons[req.state.horizon], req.state, req.settings)
             return Response(content, media_type=export_queue.MIME[req.settings.format])
         except ValueError as e:
             raise error(e)

@@ -7,9 +7,17 @@ from backend.regular_geometry import SAMPLE_BYTES
 
 
 def read_samples(survey, trace_ids, samples):
+    """Read original amplitudes for selected traces.
+
+    ``samples`` is either a 1-D array of sample indices shared by every trace
+    (result gains a trailing axis) or an array matching ``trace_ids`` shape for
+    per-point reads (result matches ``trace_ids`` shape).
+    """
     ids = np.asarray(trace_ids, dtype=np.int64)
     samples = np.asarray(samples, dtype=np.int64)
-    result = np.full((*ids.shape, len(samples)), np.nan, dtype=np.float32)
+    per_cell = samples.shape == ids.shape
+    shape = ids.shape if per_cell else (*ids.shape, *samples.shape)
+    result = np.full(shape, np.nan, dtype=np.float32)
     valid = ids >= 0
     if not valid.any():
         return result
@@ -28,7 +36,10 @@ def read_samples(survey, trace_ids, samples):
             with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
                 raw = np.ndarray((survey.count, ns), dtype=f'V{width}', buffer=mapped,
                                  offset=offset + 240, strides=(stride, width))
-                picked = raw[ids[valid, None], samples[None, :]].copy()
+                if per_cell:
+                    picked = raw[ids[valid], samples[valid]].copy()
+                else:
+                    picked = raw[ids[valid, None], samples[None, :]].copy()
                 del raw
             if fmt == 1:
                 values = segyio.tools.native(picked.view(np.float32))
@@ -40,7 +51,10 @@ def read_samples(survey, trace_ids, samples):
         else:
             # Nonstandard layouts remain supported through segyio; only selected traces.
             with segyio.open(str(survey.path), ignore_geometry=True) as sg:
-                result[valid] = np.asarray([sg.trace[int(i)][samples] for i in ids[valid]])
+                if per_cell:
+                    result[valid] = [sg.trace[int(i)][int(s)] for i, s in zip(ids[valid], samples[valid])]
+                else:
+                    result[valid] = np.asarray([sg.trace[int(i)][samples] for i in ids[valid]])
     return result
 
 

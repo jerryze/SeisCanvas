@@ -10,13 +10,16 @@ import { Group, Num, Toggle } from "./Controls";
 
 type State = {
   horizon: string;
+  color_by: "twt" | "amplitude";
   display: string;
   colormap: string;
   reverse_colormap: boolean;
   range_mode: string;
   vmin: number | null;
   vmax: number | null;
+  clip_percentile: number;
   contours: boolean;
+  interval_auto: boolean;
   interval: number;
   line_width: number;
   labels: boolean;
@@ -28,6 +31,7 @@ type Data = {
   x: number[];
   y: number[];
   z: (number | null)[][];
+  colorbar_title?: string;
   twt_range: number[];
   vmin: number;
   vmax: number;
@@ -55,13 +59,16 @@ export default function HorizonMap({
 }) {
   const [state, setState] = useState<State>({
     horizon: horizons[0]?.id || "",
+    color_by: "twt",
     display: "filled_contour",
     colormap: "petrel",
     reverse_colormap: false,
     range_mode: "auto",
     vmin: null,
     vmax: null,
+    clip_percentile: 99,
     contours: true,
+    interval_auto: true,
     interval: 10,
     line_width: 0.5,
     labels: false,
@@ -106,7 +113,12 @@ export default function HorizonMap({
       setData(null);
     }
   }, [horizons, state.horizon]);
-  const query = JSON.stringify({ ...state, x_range: null, y_range: null });
+  const query = JSON.stringify({
+    ...state,
+    interval: state.interval_auto ? null : state.interval,
+    x_range: null,
+    y_range: null,
+  });
   useEffect(() => {
     const abort = new AbortController();
     let active = true;
@@ -165,7 +177,7 @@ export default function HorizonMap({
             zmax: data.vmax,
             colorscale: data.colorscale,
             showscale: state.colorbar,
-            colorbar: { title: { text: "TWT (ms)" } },
+            colorbar: { title: { text: data.colorbar_title || "TWT (ms)" } },
             zsmooth: false,
             connectgaps: false,
             hoverongaps: false,
@@ -184,7 +196,7 @@ export default function HorizonMap({
               cmax: data.vmax,
               colorscale: data.colorscale,
               showscale: state.colorbar,
-              colorbar: { title: { text: "TWT (ms)" } },
+              colorbar: { title: { text: data.colorbar_title || "TWT (ms)" } },
             },
             hoverinfo: "skip",
           });
@@ -346,6 +358,23 @@ export default function HorizonMap({
               y_range: null,
             }),
         )}
+        {select(
+          "颜色变量",
+          state.color_by,
+          [
+            ["twt", "TWT"],
+            ["amplitude", "沿层振幅"],
+          ],
+          (color_by) =>
+            patch({
+              color_by: color_by as State["color_by"],
+              colormap: color_by === "amplitude" ? "seismic" : "petrel",
+              range_mode: "auto",
+              vmin: null,
+              vmax: null,
+              interval_auto: true,
+            }),
+        )}
         <div className="map-range-summary">
           <span>
             层位时间范围 <small>ms</small>
@@ -382,10 +411,19 @@ export default function HorizonMap({
         {select(
           "色标",
           state.colormap,
-          ["petrel", "turbo", "viridis", "cividis", "jet"].map((v) => [
-            v,
-            v[0].toUpperCase() + v.slice(1),
-          ]),
+          (state.color_by === "amplitude"
+            ? [
+                ["seismic", "Seismic"],
+                ["RdBu", "RdBu"],
+                ["coolwarm", "Coolwarm"],
+              ]
+            : [
+                ["petrel", "Petrel"],
+                ["turbo", "Turbo"],
+                ["viridis", "Viridis"],
+                ["cividis", "Cividis"],
+                ["jet", "Jet"],
+              ]) as [string, string][],
           (colormap) => patch({ colormap }),
         )}
         {gradient && (
@@ -436,19 +474,31 @@ export default function HorizonMap({
         {state.range_mode === "manual" && (
           <div className="field-row">
             <label>
-              最小值 · ms
+              最小值{state.color_by === "amplitude" ? "" : " · ms"}
               <Num
                 value={state.vmin ?? 0}
                 onChange={(vmin) => patch({ vmin })}
               />
             </label>
             <label>
-              最大值 · ms
+              最大值{state.color_by === "amplitude" ? "" : " · ms"}
               <Num
                 value={state.vmax ?? 1}
                 onChange={(vmax) => patch({ vmax })}
               />
             </label>
+          </div>
+        )}
+        {state.color_by === "amplitude" && state.range_mode === "auto" && (
+          <div className="section-number">
+            <span>裁剪百分位 %</span>
+            <Num
+              value={state.clip_percentile}
+              min={0.1}
+              max={100}
+              step={0.1}
+              onChange={(clip_percentile) => patch({ clip_percentile })}
+            />
           </div>
         )}
         <Toggle
@@ -467,16 +517,23 @@ export default function HorizonMap({
           className="map-contour-fields"
           disabled={!state.contours || state.display === "filled"}
         >
+          <Toggle
+            label="自动间隔"
+            checked={state.interval_auto}
+            onChange={(interval_auto) => patch({ interval_auto })}
+          />
           <div className="field-row">
-            <label>
-              间隔 · ms
-              <Num
-                value={state.interval}
-                min={0.01}
-                step={1}
-                onChange={(interval) => patch({ interval })}
-              />
-            </label>
+            {!state.interval_auto && (
+              <label>
+                间隔{state.color_by === "amplitude" ? "" : " · ms"}
+                <Num
+                  value={state.interval}
+                  min={0.01}
+                  step={1}
+                  onChange={(interval) => patch({ interval })}
+                />
+              </label>
+            )}
             <label>
               线宽 · pt
               <Num
