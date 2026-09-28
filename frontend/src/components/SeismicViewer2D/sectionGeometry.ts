@@ -109,7 +109,7 @@ export function buildLayout(section: Section, view: VS, drag: "zoom" | "pan") {
     paper_bgcolor: "#fff",
     plot_bgcolor: "#fff",
     font: {
-      family: "Inter, Arial, sans-serif",
+      family: "DM Sans, 'PingFang SC', Arial, sans-serif",
       color: "#425367",
       size: 11,
     },

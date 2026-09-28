@@ -37,6 +37,7 @@ import {
   makeSlice,
 } from "./types";
 import { api, json } from "./api/client";
+import { formatAmplitude } from "./format";
 import { useOriginalProbe, ProbeReadout } from "./components/Probe";
 import Scene3D, { Scene3DHandle } from "./components/SeismicViewer3D/Scene3D";
 import {
@@ -640,7 +641,7 @@ export default function App() {
           onClick={() => setExportOpen(true)}
         >
           <Plus size={15} />
-          Add to Export
+          加入导出
         </button>
 
         <button
@@ -649,7 +650,7 @@ export default function App() {
           title="导出队列"
         >
           <Package size={15} />
-          Export Queue · {queue.length}
+          导出队列 · {queue.length}
         </button>
       </header>
 
@@ -700,7 +701,7 @@ export default function App() {
                 className={view.view_mode === "map" ? "active" : ""}
                 onClick={() => setView((v) => ({ ...v, view_mode: "map" }))}
               >
-                Horizon Map
+                层位地图
               </button>
             </div>
 
@@ -723,7 +724,7 @@ export default function App() {
                 </>
               )}
 
-            {view.view_mode === "2d" && (
+            {meta && view.view_mode === "2d" && (
               <SectionPanel
                 view={view}
                 sections={sections}
@@ -735,21 +736,23 @@ export default function App() {
               />
             )}
 
-            <div hidden={view.view_mode === "map"}>
+            {meta && view.view_mode !== "map" && (
               <SeismicPanel view={view} maps={maps} preview={preview} onSeismic={seismic} />
-            </div>
+            )}
 
-            <HorizonPanel
-              view={view}
-              selected={selected}
-              onSelect={setSelected}
-              busy={busy}
-              meta={meta}
-              onStyle={style}
-              onPatch={setView}
-              onDelete={deleteHorizon}
-              onAdd={uploadHorizons}
-            />
+            {meta && (
+              <HorizonPanel
+                view={view}
+                selected={selected}
+                onSelect={setSelected}
+                busy={busy}
+                meta={meta}
+                onStyle={style}
+                onPatch={setView}
+                onDelete={deleteHorizon}
+                onAdd={uploadHorizons}
+              />
+            )}
           </aside>
         )}
 
@@ -917,11 +920,11 @@ export default function App() {
 
                   {section && (
                     <div className="amplitude-key">
-                      <span>{section.vmin.toPrecision(3)}</span>
+                      <span>{formatAmplitude(section.vmin)}</span>
 
                       <i style={{ background: preview }} />
 
-                      <span>{section.vmax.toPrecision(3)}</span>
+                      <span>{formatAmplitude(section.vmax)}</span>
 
                       <b>振幅</b>
                     </div>
@@ -995,7 +998,7 @@ export default function App() {
 
       {exportOpen && view.view_mode === "2d" && (
         <ExportDialog
-          title="二维剖面 · Add to Export"
+          title="二维剖面 · 加入导出"
           settings={settings}
           onChange={(p) => setSettings((s) => ({ ...s, ...p }))}
           onClose={() => setExportOpen(false)}

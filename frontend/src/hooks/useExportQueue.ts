@@ -35,7 +35,7 @@ export function useExportQueue(opts: {
       const r = await api("/export/queue", json(body));
       const item: ExportItem = await r.json();
       await refresh();
-      notify(`Added to Export Queue\n${item.filename}`);
+      notify(`已加入导出队列\n${item.filename}`);
       return item;
     },
     [refresh, notify],
@@ -68,7 +68,7 @@ export function useExportQueue(opts: {
       task("清空导出队列…", async () => {
         await api("/export/queue", { method: "DELETE" });
         await refresh();
-        notify("Export queue cleared");
+        notify("队列已清空");
       }),
     [task, refresh, notify],
   );

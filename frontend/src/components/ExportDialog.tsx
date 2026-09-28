@@ -52,7 +52,6 @@ export default function ExportDialog({
       >
         <div className="modal-heading">
           <div>
-            <span className="eyebrow">ADD TO EXPORT</span>
             <h2>{title}</h2>
           </div>
           <button className="icon" title="关闭导出" disabled={busy} onClick={onClose}>
@@ -143,19 +142,6 @@ export default function ExportDialog({
             </section>
           )}
           <section>
-            <h3>数据集 · Dataset</h3>
-            <label className="field">
-              项目 / 数据集名称
-              <input
-                aria-label="项目或数据集名称"
-                type="text"
-                value={dataset}
-                placeholder={datasetPlaceholder}
-                onChange={(e) => onDataset(e.target.value)}
-              />
-            </label>
-          </section>
-          <section>
             <h3>文字样式</h3>
             <div className="field-row">
               <label>
@@ -212,6 +198,19 @@ export default function ExportDialog({
               </label>
             )}
           </section>
+          <section>
+            <h3>数据集</h3>
+            <label className="field">
+              项目 / 数据集名称
+              <input
+                aria-label="项目或数据集名称"
+                type="text"
+                value={dataset}
+                placeholder={datasetPlaceholder}
+                onChange={(e) => onDataset(e.target.value)}
+              />
+            </label>
+          </section>
         </fieldset>
         {error && (
           <div className="error" role="alert">
@@ -228,7 +227,7 @@ export default function ExportDialog({
             onClick={onExport}
           >
             {busy ? <LoaderCircle className="spin" size={16} /> : <Plus size={16} />}{" "}
-            {busy ? "正在渲染…" : "Add to Export"}
+            {busy ? "正在渲染…" : "加入导出"}
           </button>
         </div>
       </div>

@@ -18,7 +18,6 @@ type Props = {
 export default function ExportQueue({
   open,
   items,
-  session,
   busy,
   onClose,
   onRename,
@@ -68,11 +67,10 @@ export default function ExportQueue({
   return (
     <>
       <div className="queue-backdrop" onClick={onClose} />
-      <aside className="queue-drawer" role="dialog" aria-modal="true" aria-label="Export Queue">
+      <aside className="queue-drawer" role="dialog" aria-modal="true" aria-label="导出队列">
         <header className="queue-head">
           <div>
-            <span className="eyebrow">EXPORT QUEUE</span>
-            <h2>{items.length} items</h2>
+            <h2>{items.length} 张图</h2>
           </div>
           <button className="icon" title="关闭导出队列" onClick={onClose}>
             <X size={18} />
@@ -120,13 +118,13 @@ export default function ExportQueue({
                 </span>
                 <div className="queue-actions">
                   <button className="secondary" onClick={() => setPreview(item)}>
-                    <Eye size={13} /> Preview
+                    <Eye size={13} /> 预览
                   </button>
                   <button className="secondary" disabled={!!busy} onClick={() => startRename(item)}>
-                    <Pencil size={13} /> Rename
+                    <Pencil size={13} /> 重命名
                   </button>
                   <button className="secondary danger" disabled={!!busy} onClick={() => onDelete(item)}>
-                    <Trash2 size={13} /> Delete
+                    <Trash2 size={13} /> 删除
                   </button>
                 </div>
               </div>
@@ -157,18 +155,18 @@ export default function ExportQueue({
                 disabled={!items.length || !!busy}
                 onClick={() => setConfirming(true)}
               >
-                Clear Queue
+                清空队列
               </button>
               <button
                 className="primary"
                 disabled={!items.length || !!busy}
                 onClick={onExportAll}
               >
-                {busy ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} Export All
+                {busy ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} 导出全部
               </button>
             </>
           )}
-          <span className="queue-session">Session {session || "—"} · 临时文件仅保留在本次会话</span>
+          <span className="queue-session">临时文件仅保留在本次会话</span>
         </footer>
       </aside>
 
@@ -183,7 +181,6 @@ export default function ExportQueue({
           >
             <div className="modal-heading">
               <div>
-                <span className="eyebrow">PREVIEW · ZIP CONTENT</span>
                 <h2>{preview.filename}</h2>
               </div>
               <button className="icon" title="关闭预览" onClick={() => setPreview(null)}>

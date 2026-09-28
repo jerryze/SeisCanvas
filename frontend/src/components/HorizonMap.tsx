@@ -1,12 +1,12 @@
 import ExportDialog from "./ExportDialog";
-import { Layers, Palette, ScanLine } from "lucide-react";
+import { Layers, MousePointer2, Move, Palette, RotateCcw, ScanLine } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Plotly from "plotly.js-dist-min";
 import type { HS } from "../types";
 import type { ExportDialogSettings } from "../types";
 import { api } from "../api/client";
-import { Num, Toggle } from "./Controls";
+import { Group, Num, Toggle } from "./Controls";
 
 type State = {
   horizon: string;
@@ -240,6 +240,7 @@ export default function HorizonMap({
             dragmode: drag,
             paper_bgcolor: "#fff",
             plot_bgcolor: "#fff",
+            font: { family: "DM Sans, 'PingFang SC', Arial, sans-serif", color: "#425367", size: 11 },
             xaxis: {
               title: { text: "Crossline" },
               range: state.x_range || [data.x[0] - 0.5, data.x.at(-1)! + 0.5],
@@ -330,11 +331,7 @@ export default function HorizonMap({
     .join(",");
   const controls = (
     <div className="map-controls">
-      <section className="map-control-section">
-        <h3>
-          <Layers size={15} />
-          层位地图<span>HORIZON MAP</span>
-        </h3>
+      <Group icon={<Layers size={16} />} title="层位地图">
         {select(
           "当前层位",
           state.horizon,
@@ -380,12 +377,8 @@ export default function HorizonMap({
             </button>
           ))}
         </div>
-      </section>
-      <section className="map-control-section">
-        <h3>
-          <Palette size={15} />
-          色彩映射
-        </h3>
+      </Group>
+      <Group icon={<Palette size={16} />} title="色彩映射">
         {select(
           "色标",
           state.colormap,
@@ -463,12 +456,8 @@ export default function HorizonMap({
           checked={state.colorbar}
           onChange={(colorbar) => patch({ colorbar })}
         />
-      </section>
-      <section className="map-control-section">
-        <h3>
-          <ScanLine size={15} />
-          等值线
-        </h3>
+      </Group>
+      <Group icon={<ScanLine size={16} />} title="等值线">
         <Toggle
           label="显示等值线"
           checked={state.contours}
@@ -505,7 +494,7 @@ export default function HorizonMap({
             onChange={(labels) => patch({ labels })}
           />
         </fieldset>
-      </section>
+      </Group>
     </div>
   );
   const host = document.getElementById("horizon-map-controls");
@@ -515,14 +504,34 @@ export default function HorizonMap({
       <div className="viewer-card">
         <div className="viewer-toolbar">
           <b>
-            Horizon Map ·{" "}
+            层位地图 ·{" "}
             {horizons.find((h) => h.id === state.horizon)?.name || "请导入层位"}
           </b>
           <div className="tools">
-            <button onClick={() => setDrag("zoom")}>缩放</button>
-            <button onClick={() => setDrag("pan")}>平移</button>
-            <button onClick={() => patch({ x_range: null, y_range: null })}>
-              重置视图
+            <button
+              title="框选缩放"
+              className={`icon ` + `${drag === "zoom" ? "chosen" : ""}`}
+              onClick={() => setDrag("zoom")}
+            >
+              <MousePointer2 size={16} />
+            </button>
+
+            <button
+              title="平移"
+              className={`icon ` + `${drag === "pan" ? "chosen" : ""}`}
+              onClick={() => setDrag("pan")}
+            >
+              <Move size={16} />
+            </button>
+
+            <span className="divider" />
+
+            <button
+              className="reset"
+              onClick={() => patch({ x_range: null, y_range: null })}
+            >
+              <RotateCcw size={14} />
+              重置
             </button>
           </div>
         </div>
@@ -534,14 +543,13 @@ export default function HorizonMap({
         {loading && <p>正在绘制层位地图…</p>}
         <div
           ref={plot}
+          className="map-plot"
           style={{
-            height: "65vh",
-            minHeight: 400,
             visibility: data ? "visible" : "hidden",
           }}
         />
       </div>
-      {exportOpen && <ExportDialog title="层位地图 · Add to Export" settings={settings}
+      {exportOpen && <ExportDialog title="层位地图 · 加入导出" settings={settings}
         onChange={p => setSettings(s => ({...s, ...p}))}
         onClose={onCloseExport} onExport={addToExport} busy={saving}
         disabled={!data || loading} error={error} rendering={false}

@@ -321,7 +321,7 @@ export function buildLayout(
 ) {
   const axes = settings?.show_axes ?? view.scene.show_axes,
     labels = settings?.show_axis_labels ?? view.scene.show_axis_labels;
-  const family = settings?.font || "Arial, sans-serif";
+  const family = settings?.font || "DM Sans, 'PingFang SC', Arial, sans-serif";
   const fontSize = settings?.font_size
     ? (settings.font_size * 4) / 3
     : undefined;

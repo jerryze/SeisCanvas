@@ -18,6 +18,7 @@ import { VS, Meta, Camera, Export3D, perspective, exportPixels, MAX_SCENE_PIXELS
 import { SceneData, buildTraces, buildLayout } from "./sceneGeometry";
 import { useOriginalProbe, ProbeReadout } from "../Probe";
 import { api } from "../../api/client";
+import { formatAmplitude } from "../../format";
 /** A finalised WebGL capture, ready to be stored in the export session. */
 export type Scene3DCapture = {
   png: string;
@@ -342,7 +343,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
           <div className="viewer-label">
             <Box size={15} />
             <span>三维切片组合</span>
-            <span className="tag">{count} SLICES</span>
+            <span className="tag">{count} 切片</span>
           </div>
           <div className="tools">
             <button
@@ -420,7 +421,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
           {data && (
             <div className="amplitude-key">
               <span>
-                {data.vmin.toPrecision(3)} … {data.vmax.toPrecision(3)}
+                {formatAmplitude(data.vmin)} … {formatAmplitude(data.vmax)}
               </span>
               <b>共享振幅范围</b>
             </div>

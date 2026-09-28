@@ -418,7 +418,7 @@ export function Export3DDialog({
   });
   const patch = (p: Partial<ExportDialogSettings>) =>
     setSettings((s) => ({ ...s, ...(p as Partial<Export3D>) }));
-  return <ExportDialog title="三维场景 · Add to Export" scene settings={settings}
+  return <ExportDialog title="三维场景 · 加入导出" scene settings={settings}
     onChange={patch} onClose={onClose} onExport={() => onExport(settings)}
     dataset={dataset} onDataset={onDataset} datasetPlaceholder={datasetPlaceholder}
     busy={!!busy} error={error} />;

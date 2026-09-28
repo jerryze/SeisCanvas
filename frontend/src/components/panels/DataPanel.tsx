@@ -54,19 +54,19 @@ export default function DataPanel({
       </button>
 
       <label className="field">
-        Geometry Mode
+        几何模式
         <select
           value={geometryMode}
           disabled={!!busy}
           onChange={(e) => onGeometryMode(e.target.value)}
         >
-          <option value="auto">Auto</option>
-          <option value="regular">Regular Grid (Fast)</option>
+          <option value="auto">自动</option>
+          <option value="regular">规则网格（快速）</option>
         </select>
       </label>
       <div className="field-row">
         <label>
-          Inline byte
+          Inline 字节
           <Num
             value={bytes.il}
             onChange={(il) => onBytes((b) => ({ ...b, il }))}
@@ -76,7 +76,7 @@ export default function DataPanel({
         </label>
 
         <label>
-          Crossline byte
+          Crossline 字节
           <Num
             value={bytes.xl}
             onChange={(xl) => onBytes((b) => ({ ...b, xl }))}
