@@ -13,12 +13,23 @@ import {
   Move,
   Orbit,
   Box,
-  Download,
 } from "lucide-react";
-import { VS, Meta, Camera, Export3D, perspective } from "../../types";
+import { VS, Meta, Camera, Export3D, perspective, exportPixels, MAX_SCENE_PIXELS } from "../../types";
 import { SceneData, buildTraces, buildLayout } from "./sceneGeometry";
+import { useOriginalProbe, ProbeReadout } from "../Probe";
+import { api } from "../../api/client";
+import { formatAmplitude } from "../../format";
+/** A finalised WebGL capture, ready to be stored in the export session. */
+export type Scene3DCapture = {
+  png: string;
+  format: "png" | "pdf" | "svg";
+  width_px: number;
+  height_px: number;
+  scale: number;
+  pixel_size: [number, number];
+};
 export type Scene3DHandle = {
-  exportFigure: (settings: Export3D) => Promise<void>;
+  captureFigure: (settings: Export3D) => Promise<Scene3DCapture>;
 };
 type Props = {
   view: VS;
@@ -59,21 +70,9 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
     [loading, setLoading] = useState(true),
     [rendering, setRendering] = useState(true),
     [drag, setDrag] = useState<"orbit" | "pan">("orbit");
-  const [exported, setExported] = useState<{
-    url: string;
-    preview: string;
-    format: string;
-    filename: string;
-    width: number;
-    height: number;
-  } | null>(null);
-  const downloadUrl = useRef<string | null>(null);
-  useEffect(
-    () => () => {
-      if (downloadUrl.current) URL.revokeObjectURL(downloadUrl.current);
-    },
-    [],
-  );
+  const { reading: probe, probe: runProbe, reset: resetProbe } = useOriginalProbe();
+  const probeRef = useRef(runProbe);
+  probeRef.current = runProbe;
   const loadingRef = useRef(loading);
   loadingRef.current = loading;
   const latest = useRef({ view, onCamera, onError, onReady });
@@ -124,18 +123,12 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
     latest.current.onReady(false);
     const timer = setTimeout(async () => {
       try {
-        const response = await fetch("/api/scene", {
+        const response = await api("/scene", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...latest.current.view, view_mode: "3d" }),
           signal: abort.signal,
         });
-        if (!response.ok) {
-          const e = await response.json();
-          throw new Error(
-            typeof e.detail === "string" ? e.detail : JSON.stringify(e.detail),
-          );
-        }
         const next = await response.json();
         if (active) {
           setData(next);
@@ -169,6 +162,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
         if (version !== renderVersion.current) return;
         el.removeAllListeners?.("plotly_relayout");
         el.removeAllListeners?.("plotly_webglcontextlost");
+        el.removeAllListeners?.("plotly_hover");
         await Plotly.react(
           el,
           buildTraces(data, latest.current.view, maps),
@@ -189,6 +183,21 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
             latest.current.onCamera(event["scene.camera"]);
           }
         });
+        // Slice textures are resampled for display, so the amplitude readout
+        // asks the backend for the original sample under the cursor.
+        el.on("plotly_hover", (event: any) => {
+          const point = event?.points?.[0];
+          const info = point?.data?.meta?.probe;
+          if (!info) return;
+          const { kind, position } = info;
+          if (kind === "time") {
+            probeRef.current({ kind, position, crossline: point.x, inline: point.y });
+          } else if (kind === "inline") {
+            probeRef.current({ kind, position, crossline: point.x, time: point.z });
+          } else {
+            probeRef.current({ kind, position, inline: point.y, time: point.z });
+          }
+        });
         el.on("plotly_webglcontextlost", () => {
           latest.current.onReady(false);
           latest.current.onError(
@@ -206,14 +215,33 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
   }, [data, sceneStyle, maps, drag, loading]);
   useEffect(() => {
     if (loading || rendering || !data || cameraKey === displayedCamera.current) return;
-    const el = plot.current;
+    const el = plot.current as any;
     if (!el) return;
-    displayedCamera.current = cameraKey;
+    const requestedCamera = structuredClone(view.scene.camera);
+    const requestedKey = cameraKey;
+    const version = renderVersion.current;
     renderQueue.current = renderQueue.current
-      .then(() => Plotly.relayout(el, { "scene.camera": latest.current.view.scene.camera } as any))
-      .then(() => {})
+      .catch(() => {})
+      .then(async () => {
+        if (version !== renderVersion.current || !el.isConnected) return;
+        // Projection changes recreate Plotly's GL scene. Supplying geometry in
+        // the same update prevents a new scene containing only the axis objects.
+        // Mouse orbit events already update displayedCamera and skip this path.
+        const current = latest.current.view;
+        const next = { ...current, scene: { ...current.scene, camera: requestedCamera } };
+        await Plotly.react(el, buildTraces(data, next, maps),
+          buildLayout(data, next, drag) as any, {
+            responsive: true, displayModeBar: false, scrollZoom: true,
+            plotGlPixelRatio: Math.min(window.devicePixelRatio, 2),
+          });
+        applyDepthLayers(el);
+        displayedCamera.current = requestedKey;
+      })
       .catch((e) => latest.current.onError(String(e)));
-  }, [cameraKey, loading, rendering, data]);
+  }, [cameraKey, loading, rendering, data, maps, drag]);
+  useEffect(() => {
+    resetProbe();
+  }, [data]);
   useEffect(() => {
     const el = plot.current;
     if (!el) return;
@@ -230,21 +258,13 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
   useImperativeHandle(
     ref,
     () => ({
-      exportFigure: async (settings) => {
+      captureFigure: async (settings) => {
         if (!dataRef.current || loading || rendering)
           throw new Error("请等待三维场景加载完成。");
-        const width = Math.round(settings.width),
-          height = Math.round(settings.height),
-          scale = settings.scale;
-        if (
-          width < 400 ||
-          height < 300 ||
-          scale < 1 ||
-          scale > 4 ||
-          width * height * scale * scale > 24_000_000
-        )
+        const { width, height, scale, pixels } = exportPixels(settings);
+        if (pixels[0] * pixels[1] > MAX_SCENE_PIXELS)
           throw new Error(
-            "请使用至少 400 × 300 像素，1–4 倍分辨率，总像素不超过 2400 万。",
+            `三维栅格渲染上限为 ${MAX_SCENE_PIXELS / 1_000_000} 百万像素，请减小尺寸或降低 DPI。`,
           );
         const el = document.createElement("div");
         el.style.cssText = `position:fixed;left:-20000px;top:0;width:${width}px;height:${height}px;`;
@@ -254,11 +274,36 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
             `${(settings.font_size * 4) / 3}px "${settings.font}"`,
           );
           const current = latest.current.view;
+          // Publication capture re-reads the slices at the best texture quality
+          // and with the requested interpolation instead of reusing the
+          // interactive texture. Falls back to the browsed scene on failure.
+          let scene = dataRef.current;
+          const publication = {
+            ...current,
+            scene: { ...current.scene, quality: 512 as const },
+            seismic: { ...current.seismic, interpolation: settings.interpolation },
+          };
+          if (
+            current.scene.quality < 512 ||
+            current.seismic.interpolation !== settings.interpolation
+          ) {
+            try {
+              scene = await (
+                await api("/scene", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(publication),
+                })
+              ).json();
+            } catch {
+              /* Keep the browsed texture when the extra read fails. */
+            }
+          }
           await Plotly.newPlot(
             el,
-            buildTraces(dataRef.current, current, maps, settings),
+            buildTraces(scene, current, maps, settings),
             {
-              ...buildLayout(dataRef.current, current, drag, settings),
+              ...buildLayout(scene, current, drag, settings),
               width,
               height,
               autosize: false,
@@ -266,49 +311,20 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
             { displayModeBar: false, plotGlPixelRatio: scale },
           );
           applyDepthLayers(el);
-          const url = await Plotly.toImage(el, {
+          const png = await Plotly.toImage(el, {
             format: "png",
             width,
             height,
             scale,
           });
-          let fileUrl = url;
-          if (settings.format !== "png") {
-            const response = await fetch("/api/export/3d", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                png: url,
-                format: settings.format,
-                width,
-                height,
-                scale,
-              }),
-            });
-            if (!response.ok) {
-              const body = await response.json();
-              throw new Error(
-                typeof body.detail === "string"
-                  ? body.detail
-                  : "三维格式转换失败",
-              );
-            }
-            fileUrl = URL.createObjectURL(await response.blob());
-          }
-          if (downloadUrl.current) URL.revokeObjectURL(downloadUrl.current);
-          downloadUrl.current = settings.format === "png" ? null : fileUrl;
-          const a = document.createElement("a");
-          a.href = fileUrl;
-          a.download = `SeisCanvas_3D_${width * scale}x${height * scale}.${settings.format}`;
-          a.click();
-          setExported({
-            url: fileUrl,
-            preview: url,
-            format: settings.format.toUpperCase(),
-            filename: a.download,
-            width: width * scale,
-            height: height * scale,
-          });
+          return {
+            png,
+            format: settings.format,
+            width_px: width,
+            height_px: height,
+            scale,
+            pixel_size: [width * scale, height * scale] as [number, number],
+          };
         } finally {
           Plotly.purge(el);
           el.remove();
@@ -327,7 +343,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
           <div className="viewer-label">
             <Box size={15} />
             <span>三维切片组合</span>
-            <span className="tag">{count} SLICES</span>
+            <span className="tag">{count} 切片</span>
           </div>
           <div className="tools">
             <button
@@ -389,13 +405,15 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
             )}
         </div>
         <div className="viewer-bottom">
+          <ProbeReadout reading={probe} />
+
           <div className="legend">
             {view.horizons
               .filter((h) => h.visible)
               .map((h) => (
                 <span key={h.id}>
                   <i style={{ background: h.color }} />
-                  {h.name} ·{" "}
+                  {h.name}{h.display_mode === "full_surface" && h.twt_range ? ` · ${h.twt_range[0].toFixed(1)}–${h.twt_range[1].toFixed(1)} ms` : ""} ·{" "}
                   {h.display_mode === "full_surface" ? "曲面" : "交线"}
                 </span>
               ))}
@@ -403,27 +421,15 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
           {data && (
             <div className="amplitude-key">
               <span>
-                {data.vmin.toPrecision(3)} … {data.vmax.toPrecision(3)}
+                {formatAmplitude(data.vmin)} … {formatAmplitude(data.vmax)}
               </span>
               <b>共享振幅范围</b>
             </div>
           )}
         </div>
       </div>
-      {exported && (
-        <details className="export-preview">
-          <summary>
-            上次导出 · {exported.width} × {exported.height} {exported.format}
-          </summary>
-          <a href={exported.url} download={exported.filename}>
-            再次下载 {exported.format}
-          </a>
-          <img src={exported.preview} alt="三维导出预览" />
-        </details>
-      )}
       <div className="canvas-footer">
         <span>拖动旋转 · 滚轮缩放 · 平移工具移动场景</span>
-        <span>坐标使用真实数值 · TWT 向下 · 相机自动保留</span>
       </div>
     </>
   );

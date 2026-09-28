@@ -36,3 +36,28 @@ test('depth adapter biases each draw and restores GL state even after errors',as
   assert.equal(enabled,false);assert.equal(factor,0);assert.equal(units,0);
   assert.throws(()=>object.drawTransparent(),/draw failure/);assert.equal(enabled,false);assert.equal(units,0);
 });
+test('surface colors use independent native TWT ranges and stay separate from seismic',()=>{
+  const v=state(),d=data();
+  const mesh=(lo,hi)=>({x:[30,40,30],y:[10,10,12],z:[lo,lo,hi],scalar:[lo,lo,hi],twt_range:[lo,hi],i:[0],j:[1],k:[2],edges:[]});
+  v.horizons=['a','b'].map(id=>({id,name:id,visible:true,display_mode:'full_surface',surface_mode:'surface',color:'#123456',opacity:1,color_by:'twt',smooth_shading:true,lighting:true}));
+  d.horizons={a:{mesh:mesh(400,500)},b:{mesh:mesh(700,900)}};
+  const [a,b]=buildTraces(d,v,colors).filter(t=>t.type==='mesh3d');
+  assert.deepEqual([a.cmin,a.cmax,b.cmin,b.cmax],[400,500,700,900]);
+  assert.deepEqual(a.intensity,[400,400,500]);assert.deepEqual(a.colorscale,b.colorscale);
+  assert.equal(a.colorscale[0][1],'#ff0000');assert.equal(a.colorscale.at(-1)[1],'#ff00ff');
+  assert.equal(a.flatshading,false);assert.equal(a.lighting.ambient,.8);assert.equal(a.lighting.diffuse,.2);
+  // Across all surface slopes, lighting retains 80–100% of base RGB.
+  for (const cosine of [-1, 0, .5, 1]) {
+    const brightness=Math.min(a.lighting.ambient+a.lighting.diffuse*Math.max(cosine,0),1);
+    assert.ok(brightness>=.8 && brightness<=1);
+  }
+  assert.equal(a.lighting.specular,.05);
+  assert.deepEqual(a.lightposition,{x:0,y:0,z:-1});
+  v.horizons[0].color_by='solid';v.horizons[0].smooth_shading=false;v.horizons[0].lighting=false;
+  const solid=buildTraces(d,v,colors).find(t=>t.type==='mesh3d');
+  assert.equal(solid.color,'#123456');assert.equal(solid.intensity,undefined);
+  assert.equal(solid.flatshading,true);assert.equal(solid.lighting.ambient,1);assert.equal(solid.lighting.diffuse,0);
+  d.horizons.b.mesh=mesh(700,700);
+  const flat=buildTraces(d,v,colors).filter(t=>t.type==='mesh3d')[1];
+  assert.ok(flat.cmin<700&&flat.cmax>700);assert.equal((700-flat.cmin)/(flat.cmax-flat.cmin),.5);
+});

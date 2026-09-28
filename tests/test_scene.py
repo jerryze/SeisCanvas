@@ -11,7 +11,7 @@ from backend.scene import (
 )
 from backend.models import ViewState3D, Seismic
 import backend.main as server
-from test_seiscanvas import cube
+from conftest import make_horizon
 
 
 def test_three_planes_use_same_samples(cube):
@@ -32,19 +32,6 @@ def test_three_planes_use_same_samples(cube):
         timeslice(cube, 100)
     with pytest.raises(ValueError):
         slice_data(cube, "inline", 10.5)
-
-
-def make_horizon(tmp_path, hole=False):
-    p = tmp_path / "h.txt"
-    p.write_text(
-        "\n".join(
-            f"{y} {x} {200+2*y+x}"
-            for y in range(5)
-            for x in range(5)
-            if not (hole and (y, x) == (1, 1))
-        )
-    )
-    return Horizon(p)
 
 
 def test_surface_orientation_and_mask(tmp_path):
@@ -160,3 +147,107 @@ def test_scene_api_and_validation(cube, tmp_path):
         ).status_code
         == 200
     )
+
+
+def test_surface_scalar_range_uses_native_extrema(tmp_path):
+    h = make_horizon(tmp_path)
+    h.data[6, 2] = 999  # Omitted by the two-by-two preview.
+    coarse = horizon_mesh(h, 2)
+    fine = horizon_mesh(h, 5)
+    assert coarse["scalar"] == coarse["z"]
+    assert coarse["twt_range"] == fine["twt_range"] == [200, 999]
+    assert 999 not in coarse["scalar"]
+    other = make_horizon(tmp_path)
+    other.data[:, 2] += 1000
+    assert horizon_mesh(other, 2)["twt_range"] == [1200, 1212]
+
+
+def test_surface_defaults_and_import_range(tmp_path):
+    from backend.models import Horizon3DStyle
+    style = Horizon3DStyle(id="test", name="test")
+    assert style.color_by == "twt" and style.horizon_colormap == "petrel"
+    assert style.smooth_shading and style.lighting
+    assert style.opacity == 1
+    h = make_horizon(tmp_path)
+    imported = server.add_horizon(h)
+    try:
+        assert imported["twt_range"] == (200, 212)
+    finally:
+        server.horizons.pop(imported["id"])
+
+
+def test_slice_reads_stay_bounded_and_never_load_the_native_grid(cube, monkeypatch):
+    import backend.preview as preview
+    real_read = preview.read_samples
+    calls = []
+    def read(survey, ids, samples):
+        calls.append((np.asarray(ids).size, len(samples)))
+        return real_read(survey, ids, samples)
+    monkeypatch.setattr(preview, 'read_samples', read)
+    monkeypatch.setattr(cube, 'section', lambda *a: pytest.fail('full section read'))
+    # The native slice is small, so it is read once and area-averaged down.
+    plane, values = slice_data(cube, 'time', 204, 2, 'bilinear')
+    assert calls == [(6, 1)]
+    assert values.shape == (2, 2)
+    assert plane['native_shape'] == [2, 3] and plane['render_shape'] == [2, 3]
+    assert plane['interpolation'] == 'bilinear'
+    slice_data(cube, 'time', 204, 2, 'bilinear')
+    assert len(calls) == 1  # cached per method
+    slice_data(cube, 'inline', 12, 2, 'bilinear')
+    assert calls[-1] == (3, 4)  # 3 traces x 4 samples of the native inline slice
+
+
+def test_slice_downsampling_is_antialiased_and_nearest_keeps_real_samples(cube):
+    exact, nearest = slice_data(cube, 'time', 204, 2, 'nearest')
+    assert nearest.shape == (2, 2)
+    assert exact['amplitude'] == [[1031, 1039], [1231, 1239]]
+    assert set(np.unique(nearest)).issubset({1031.0, 1039.0, 1231.0, 1239.0})
+    smooth, bilinear = slice_data(cube, 'time', 204, 2, 'bilinear')
+    assert bilinear.shape == (2, 2)
+    assert not np.array_equal(bilinear, nearest)
+    assert bilinear.min() >= nearest.min() and bilinear.max() <= nearest.max()
+
+
+def test_slice_read_falls_back_to_the_texture_grid_when_budget_is_tight(cube, monkeypatch):
+    import backend.preview as preview
+    import backend.scene as scene
+    calls = []
+    real_read = preview.read_samples
+    def read(survey, ids, samples):
+        calls.append(np.asarray(ids).size)
+        return real_read(survey, ids, samples)
+    monkeypatch.setattr(preview, 'read_samples', read)
+    monkeypatch.setattr(scene, 'SLICE_NATIVE_BUDGET', 2)
+    monkeypatch.setattr(scene, 'SLICE_SUPERSAMPLE_BUDGET', 4)
+    plane, values = slice_data(cube, 'time', 204, 2, 'bilinear')
+    assert calls == [4]  # exactly the texture cells, no supersample
+    assert values.shape == (2, 2)
+    assert plane['interpolation'] == 'bilinear'
+
+
+def test_horizon_geometry_is_lazy(tmp_path):
+    h = make_horizon(tmp_path, True)
+    horizon_intersection(h, 'inline', 1)
+    assert not hasattr(h, '_grid3d')
+    horizon_mesh(h, 3)
+    assert not hasattr(h, '_grid3d')
+
+
+def test_horizon_local_cache_and_invalidation(tmp_path, monkeypatch):
+    import backend.horizon_cache as cache
+    monkeypatch.setattr(cache, 'CACHE_DIR', tmp_path / 'cache')
+    p = tmp_path / 'local.txt'
+    p.write_text('1 2 100\n3 4 200\n')
+    first = Horizon(p)
+    second = Horizon(p)
+    assert not first.cache_hit and second.cache_hit
+    np.testing.assert_array_equal(first.data, second.data)
+    p.write_text('1 2 1234\n3 4 200\n')
+    assert not Horizon(p).cache_hit
+    assert not Horizon(p, columns=(1, 0, 2)).cache_hit
+    monkeypatch.setattr(server, 'choose_segy', lambda kind: str(p))
+    c = TestClient(server.app)
+    selection = c.post('/api/horizons/pick').json()
+    response = c.post('/api/horizons/local', json={'token': selection['token']})
+    assert response.status_code == 200
+    server.horizons.pop(response.json()[0]['id'])

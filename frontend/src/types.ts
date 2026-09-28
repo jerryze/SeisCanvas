@@ -1,8 +1,11 @@
 export type HS = {
+  color_by: "twt" | "solid";
+  horizon_colormap: "petrel";
+  smooth_shading: boolean;
+  lighting: boolean;
+  twt_range: [number, number] | null;
   display_mode: "full_surface" | "slice_intersections";
   opacity: number;
-  surface_mode: "surface" | "wireframe" | "surface_wireframe";
-  wireframe_width: number;
   time_slice_tolerance: number;
   id: string;
   name: string;
@@ -12,6 +15,8 @@ export type HS = {
   marker: { visible: boolean; shape: string; size: number };
   outline: { enabled: boolean; width: number };
 };
+export type Interpolation = "nearest" | "bilinear" | "bicubic";
+export type ResolutionMode = "export" | "view";
 export type SS = {
   colormap: string;
   reverse_colormap: boolean;
@@ -21,9 +26,13 @@ export type SS = {
   vmin: number | null;
   vmax: number | null;
   reverse_polarity: boolean;
+  /** Display interpolation: bilinear while browsing, bicubic for figures. */
+  interpolation: Interpolation;
+  /** Match the render grid to the viewport pixels instead of a fixed grid. */
+  adaptive_resolution: boolean;
 };
 export type VS = {
-  view_mode: "2d" | "3d";
+  view_mode: "2d" | "3d" | "map";
   slices: SliceCollection;
   scene: SceneSettings;
   view_type: "inline" | "crossline";
@@ -50,6 +59,13 @@ export type Section = {
   vmin: number;
   vmax: number;
   horizons: Record<string, number[][]>;
+  /** Display raster bookkeeping: the source window and the render grid. */
+  native_shape?: number[];
+  render_shape?: number[];
+  preview_shape?: number[];
+  interpolation?: Interpolation;
+  adaptive?: boolean;
+  window?: { x_range: [number, number]; time_range: [number, number] };
 };
 
 export type SliceKind = "inline" | "crossline" | "time";
@@ -80,13 +96,77 @@ export type Export3D = {
   format: "png" | "pdf" | "svg";
   font: string;
   font_size: number;
+  /** Physical page size in millimetres, like the 2D export. */
   width: number;
   height: number;
-  scale: number;
+  dpi: 300 | 600;
   background: string;
   show_axes: boolean;
   show_axis_labels: boolean;
   show_bounding_box: boolean;
+  /** Publication texture resampling; bicubic by default. */
+  interpolation: Interpolation;
+};
+/** A WebGL figure is rasterised: derive the layout pixels and the device scale. */
+export function exportPixels(settings: {
+  width: number;
+  height: number;
+  dpi: number;
+}) {
+  const scale = settings.dpi >= 600 ? 4 : 3;
+  const width = Math.max(
+    64,
+    Math.round(((settings.width / 25.4) * settings.dpi) / scale),
+  );
+  const height = Math.max(
+    64,
+    Math.round(((settings.height / 25.4) * settings.dpi) / scale),
+  );
+  return { width, height, scale, pixels: [width * scale, height * scale] as const };
+}
+export const MAX_SCENE_PIXELS = 24_000_000;
+
+/** Settings shape accepted by the shared "Add to Export" dialog (2D, map or 3D). */
+export type ExportDialogSettings = {
+  format: "png" | "pdf" | "svg";
+  width: number;
+  height: number;
+  dpi: number;
+  font: string;
+  font_size: number;
+  show_axes: boolean;
+  show_labels?: boolean;
+  show_title?: boolean;
+  show_axis_labels?: boolean;
+  show_bounding_box?: boolean;
+  background?: string;
+  interpolation?: Interpolation;
+  resolution?: ResolutionMode;
+};
+
+/** An immutable figure already rendered and stored in the export session. */
+export type ExportItem = {
+  id: string;
+  index: number;
+  dataset: string;
+  view_type: string;
+  folder: string;
+  filename: string;
+  format: string;
+  width_mm: number | null;
+  height_mm: number | null;
+  dpi: number | null;
+  pixel_size: [number, number] | null;
+  scale: number | null;
+  size_bytes: number;
+  created_at: string;
+  detail: string;
+};
+export type ExportQueueState = {
+  session: string;
+  dataset: string | null;
+  count: number;
+  items: ExportItem[];
 };
 export const perspective: Camera = {
   eye: { x: 1.25, y: 1.25, z: 0.9 },

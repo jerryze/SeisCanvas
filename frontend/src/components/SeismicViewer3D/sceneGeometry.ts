@@ -1,4 +1,5 @@
 import type { VS, Export3D } from "../../types";
+import { PLOT_DASH } from "../plotStyle";
 export type SliceData = {
   id: string;
   kind: "inline" | "crossline" | "time";
@@ -19,13 +20,14 @@ export type Intersection = {
   horizon_time?: number[];
 };
 export type Mesh = {
+  scalar: (number | null)[];
+  twt_range: [number, number];
   x: number[];
   y: number[];
   z: (number | null)[];
   i: number[];
   j: number[];
   k: number[];
-  edges: number[][];
   native_shape: number[];
   preview_shape: number[];
 };
@@ -36,12 +38,13 @@ export type SceneData = {
   vmin: number;
   vmax: number;
 };
-const dash: Record<string, string> = {
-  solid: "solid",
-  dashed: "dash",
-  dotted: "dot",
-  dashdot: "dashdot",
-};
+// Shared by horizons only; seismic colors and amplitude clipping are independent.
+export const PETREL_COLORMAP = [
+  [0, "#ff0000"], [1 / 7, "#ff8000"], [2 / 7, "#ffff00"],
+  [3 / 7, "#00c040"], [4 / 7, "#00ffff"], [5 / 7, "#0000ff"],
+  [6 / 7, "#8000c0"], [1, "#ff00ff"],
+];
+// scatter3d supports a reduced marker set (no triangle); keep 3D-specific symbols here.
 const symbols: Record<string, string> = {
   circle: "circle",
   square: "square",
@@ -82,9 +85,10 @@ export function buildTraces(
   const traces: any[] = [];
   const s = view.seismic;
   const colors = maps[s.colormap] || [
-    [0, "#000080"],
+    // Fallback until the catalog arrives: the Pos / 0 / Neg reference ramp.
+    [0, "#23238e"],
     [0.5, "#ffffff"],
-    [1, "#800000"],
+    [1, "#8c0000"],
   ];
   const colorscale = s.reverse_colormap
     ? colors.map((c, i) => [c[0], colors[colors.length - 1 - i][1]])
@@ -134,6 +138,9 @@ export function buildTraces(
       opacity: state.opacity,
       connectgaps: false,
       name: `${plane.kind} ${plane.position}`,
+      // The texture may be resampled, so hover coordinates are resolved back
+      // to the original SEG-Y sample by the probe readout.
+      meta: { probe: { kind: plane.kind, position: plane.position } },
       lighting: {
         ambient: 1,
         diffuse: 0,
@@ -142,7 +149,7 @@ export function buildTraces(
         fresnel: 0,
       },
       hovertemplate:
-        "Inline: %{y}<br>Crossline: %{x}<br>TWT: %{z:.1f} ms<br>Amplitude: %{surfacecolor:.3f}<extra>" +
+        "Inline: %{y}<br>Crossline: %{x}<br>TWT: %{z:.1f} ms<extra>" +
         plane.kind +
         " " +
         plane.position +
@@ -179,9 +186,11 @@ export function buildTraces(
     if (!hd) continue;
     if (h.display_mode === "full_surface" && hd.mesh) {
       const mesh = hd.mesh;
-      if (h.surface_mode !== "wireframe")
-        traces.push({
-          type: "mesh3d",
+      const [tmin, tmax] = mesh.twt_range;
+      const twtColor = h.color_by !== "solid";
+      // A constant-time horizon uses the middle color, with a nonzero scale.
+      const padding = tmin === tmax ? Math.max(0.5, Math.abs(tmin) * 1e-6) : 0;
+      traces.push({          type: "mesh3d",
           x: mesh.x,
           y: mesh.y,
           z: mesh.z,
@@ -189,39 +198,33 @@ export function buildTraces(
           j: mesh.j,
           k: mesh.k,
           color: h.color,
+          ...(twtColor ? {
+            intensity: mesh.scalar,
+            intensitymode: "vertex",
+            colorscale: PETREL_COLORMAP,
+            cauto: false,
+            cmin: tmin - padding,
+            cmax: tmax + padding,
+          } : {}),
           opacity: h.opacity,
           name: h.name,
-          flatshading: false,
-          lighting: {
-            ambient: 0.85,
-            diffuse: 0.5,
-            specular: 0.1,
-            roughness: 0.9,
-          },
+          flatshading: h.smooth_shading === false,
+          // gl-mesh3d computes vertex normals when useFacetNormals is false.
+          lighting: h.lighting === false
+            ? { ambient: 1, diffuse: 0, specular: 0, fresnel: 0 }
+            : {
+                // Keep at least 80% of the colormap RGB in unlit areas;
+                // gentle diffuse shading reveals relief without darkening the map.
+                ambient: 0.8, diffuse: 0.2, specular: 0.05,
+                roughness: 0.55, fresnel: 0,
+              },
+          // gl-mesh3d unprojects this position by inverse projection/view/model
+          // every frame, so the light remains attached to the camera during orbit.
+          lightposition: { x: 0, y: 0, z: -1 },
           showscale: false,
           showlegend: false,
           hovertemplate: `${safe(h.name)}<br>Inline: %{y}<br>Crossline: %{x}<br>TWT: %{z:.1f} ms<extra></extra>`,
         });
-      if (h.surface_mode !== "surface") {
-        const x: (number | null)[] = [],
-          y: (number | null)[] = [],
-          z: (number | null)[] = [];
-        for (const [a, b] of mesh.edges) {
-          x.push(mesh.x[a], mesh.x[b], null);
-          y.push(mesh.y[a], mesh.y[b], null);
-          z.push(mesh.z[a], mesh.z[b], null);
-        }
-        traces.push(
-          line(
-            x,
-            y,
-            z,
-            h.surface_mode === "wireframe" ? h.color : "#233840",
-            (h.wireframe_width * 4) / 3,
-            { opacity: h.opacity, meta: { depthLayer: 1 } },
-          ),
-        );
-      }
     }
     if (h.display_mode === "slice_intersections")
       for (const pts of hd.intersections || []) {
@@ -254,7 +257,7 @@ export function buildTraces(
             line: {
               color: "#000",
               width: ((h.line.width + 2 * h.outline.width) * 4) / 3,
-              dash: dash[h.line.style],
+              dash: PLOT_DASH[h.line.style],
             },
             hoverinfo: "skip",
           });
@@ -270,7 +273,7 @@ export function buildTraces(
           line: {
             color: h.color,
             width: (h.line.width * 4) / 3,
-            dash: dash[h.line.style],
+            dash: PLOT_DASH[h.line.style],
           },
           marker: {
             color: h.color,
@@ -318,14 +321,18 @@ export function buildLayout(
 ) {
   const axes = settings?.show_axes ?? view.scene.show_axes,
     labels = settings?.show_axis_labels ?? view.scene.show_axis_labels;
-  const family = settings?.font || "Arial, sans-serif";
+  const family = settings?.font || "DM Sans, 'PingFang SC', Arial, sans-serif";
   const fontSize = settings?.font_size
     ? (settings.font_size * 4) / 3
     : undefined;
+  // A publication figure prints in pure black; the on-screen viewer keeps the
+  // softer interface ink. Both titles and tick labels must be overridden
+  // explicitly, because Plotly resolves scene text from the axis definition.
+  const ink = settings ? "#000000" : "#425367";
   const axis = (title: string, range: number[]) => ({
     title: {
       text: labels ? title : "",
-      font: { family, size: fontSize ?? 12 },
+      font: { family, size: fontSize ?? 12, color: ink },
     },
     range,
     autorange: false,
@@ -336,14 +343,14 @@ export function buildLayout(
     zeroline: false,
     showline: axes,
     linecolor: "#c0cdd3",
-    tickfont: { family, size: fontSize ?? 10 },
+    tickfont: { family, size: fontSize ?? 10, color: ink },
     ticks: axes ? "outside" : "",
   });
   return {
     autosize: true,
     margin: { l: 12, r: 12, t: 12, b: 12 },
     paper_bgcolor: settings?.background || view.scene.background,
-    font: { family, size: fontSize ?? 12, color: "#425367" },
+    font: { family, size: fontSize ?? 12, color: ink },
     showlegend: false,
     scene: {
       xaxis: axis("Crossline", data.bounds.x),
