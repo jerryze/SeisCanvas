@@ -55,6 +55,18 @@ def get_cmap(name, reverse=False):
     return cmap.reversed() if reverse else cmap
 
 
+def font_family(name):
+    """Matplotlib family list: the requested face, then a matching bundled one.
+
+    Times New Roman and Arial are system fonts, so a machine without them falls
+    back to a serif or sans face instead of Matplotlib's default with a warning.
+    """
+    if not name:
+        return ["DejaVu Sans"]
+    serif = "Times" in name or "Serif" in name
+    return [name, "DejaVu Serif" if serif else "DejaVu Sans"]
+
+
 class ArrayCache(OrderedDict):
     """Bound retained array memory as well as entry count (shared by 2D/3D)."""
     def __init__(self, max_bytes=256 * 1024 * 1024):
@@ -406,7 +418,7 @@ def render(survey, horizons, state, settings):
         *ax.get_xticklabels(),
         *ax.get_yticklabels(),
     ]:
-        txt.set_fontfamily(settings.font)
+        txt.set_fontfamily(font_family(settings.font))
         txt.set_fontsize(settings.font_size)
     out = io.BytesIO()
     fig.savefig(out, format=settings.format, dpi=settings.dpi)

@@ -65,3 +65,18 @@ def test_export_axes_visibility(tmp_path, monkeypatch, show_axes):
     render_map(make_horizon(tmp_path), HorizonMapState(horizon='h'), Settings(show_axes=show_axes))
     assert figures[0].axes[0].axison == show_axes
     assert figures[0].axes[1].axison  # Colorbar remains independently visible.
+
+
+def test_map_export_uses_the_publication_font(tmp_path, monkeypatch):
+    from matplotlib.figure import Figure
+    from matplotlib.text import Text
+    figures = []
+    def capture(*args, **kwargs):
+        fig = Figure(*args, **kwargs)
+        figures.append(fig)
+        return fig
+    monkeypatch.setattr('backend.horizon_map.Figure', capture)
+    render_map(make_horizon(tmp_path), HorizonMapState(horizon='h'), Settings())
+    texts = figures[0].findobj(Text)
+    assert texts
+    assert all(t.get_fontfamily() == ['Times New Roman', 'DejaVu Serif'] for t in texts)

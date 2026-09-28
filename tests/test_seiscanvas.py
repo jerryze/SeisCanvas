@@ -189,6 +189,40 @@ def test_2d_export_box_ratio(cube, monkeypatch, ratio):
     assert ax.get_xlim() == (29.5, 38.5)
 
 
+def test_publication_font_defaults_and_fallback(cube, monkeypatch):
+    import warnings
+    from matplotlib.figure import Figure
+    from matplotlib.font_manager import FontProperties, findfont
+    from backend.core import font_family
+    from backend.models import Scene3DSettings
+
+    assert Settings().font == "Times New Roman"
+    assert Scene3DSettings().font == "Times New Roman"
+    assert font_family("Times New Roman") == ["Times New Roman", "DejaVu Serif"]
+    assert font_family("Arial") == ["Arial", "DejaVu Sans"]
+    assert font_family(None) == ["DejaVu Sans"]
+    # A machine without the system face still resolves to the bundled serif.
+    assert findfont(FontProperties(family=font_family("Missing Face Serif"))).endswith(
+        "DejaVuSerif.ttf"
+    )
+
+    figures = []
+
+    def capture(*args, **kwargs):
+        figure = Figure(*args, **kwargs)
+        figures.append(figure)
+        return figure
+
+    monkeypatch.setattr("backend.core.Figure", capture)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message=".*findfont.*")
+        data = render(cube, {}, ViewState(section_number=12), Settings())
+    assert data.startswith(b"\x89PNG")
+    ax = figures[0].axes[0]
+    assert ax.title.get_fontfamily() == ["Times New Roman", "DejaVu Serif"]
+    assert ax.xaxis.label.get_fontfamily() == ["Times New Roman", "DejaVu Serif"]
+
+
 def test_section_export_without_axes(cube, monkeypatch):
     from matplotlib.figure import Figure
     figures = []

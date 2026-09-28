@@ -13,12 +13,20 @@ import {
   Move,
   Orbit,
   Box,
-  Download,
 } from "lucide-react";
-import { VS, Meta, Camera, Export3D, perspective } from "../../types";
+import { VS, Meta, Camera, Export3D, perspective, exportPixels, MAX_SCENE_PIXELS } from "../../types";
 import { SceneData, buildTraces, buildLayout } from "./sceneGeometry";
+/** A finalised WebGL capture, ready to be stored in the export session. */
+export type Scene3DCapture = {
+  png: string;
+  format: "png" | "pdf" | "svg";
+  width_px: number;
+  height_px: number;
+  scale: number;
+  pixel_size: [number, number];
+};
 export type Scene3DHandle = {
-  exportFigure: (settings: Export3D) => Promise<void>;
+  captureFigure: (settings: Export3D) => Promise<Scene3DCapture>;
 };
 type Props = {
   view: VS;
@@ -59,21 +67,6 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
     [loading, setLoading] = useState(true),
     [rendering, setRendering] = useState(true),
     [drag, setDrag] = useState<"orbit" | "pan">("orbit");
-  const [exported, setExported] = useState<{
-    url: string;
-    preview: string;
-    format: string;
-    filename: string;
-    width: number;
-    height: number;
-  } | null>(null);
-  const downloadUrl = useRef<string | null>(null);
-  useEffect(
-    () => () => {
-      if (downloadUrl.current) URL.revokeObjectURL(downloadUrl.current);
-    },
-    [],
-  );
   const loadingRef = useRef(loading);
   loadingRef.current = loading;
   const latest = useRef({ view, onCamera, onError, onReady });
@@ -246,21 +239,13 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
   useImperativeHandle(
     ref,
     () => ({
-      exportFigure: async (settings) => {
+      captureFigure: async (settings) => {
         if (!dataRef.current || loading || rendering)
           throw new Error("请等待三维场景加载完成。");
-        const width = Math.round(settings.width),
-          height = Math.round(settings.height),
-          scale = settings.scale;
-        if (
-          width < 400 ||
-          height < 300 ||
-          scale < 1 ||
-          scale > 4 ||
-          width * height * scale * scale > 24_000_000
-        )
+        const { width, height, scale, pixels } = exportPixels(settings);
+        if (pixels[0] * pixels[1] > MAX_SCENE_PIXELS)
           throw new Error(
-            "请使用至少 400 × 300 像素，1–4 倍分辨率，总像素不超过 2400 万。",
+            `三维栅格渲染上限为 ${MAX_SCENE_PIXELS / 1_000_000} 百万像素，请减小尺寸或降低 DPI。`,
           );
         const el = document.createElement("div");
         el.style.cssText = `position:fixed;left:-20000px;top:0;width:${width}px;height:${height}px;`;
@@ -282,49 +267,20 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
             { displayModeBar: false, plotGlPixelRatio: scale },
           );
           applyDepthLayers(el);
-          const url = await Plotly.toImage(el, {
+          const png = await Plotly.toImage(el, {
             format: "png",
             width,
             height,
             scale,
           });
-          let fileUrl = url;
-          if (settings.format !== "png") {
-            const response = await fetch("/api/export/3d", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                png: url,
-                format: settings.format,
-                width,
-                height,
-                scale,
-              }),
-            });
-            if (!response.ok) {
-              const body = await response.json();
-              throw new Error(
-                typeof body.detail === "string"
-                  ? body.detail
-                  : "三维格式转换失败",
-              );
-            }
-            fileUrl = URL.createObjectURL(await response.blob());
-          }
-          if (downloadUrl.current) URL.revokeObjectURL(downloadUrl.current);
-          downloadUrl.current = settings.format === "png" ? null : fileUrl;
-          const a = document.createElement("a");
-          a.href = fileUrl;
-          a.download = `SeisCanvas_3D_${width * scale}x${height * scale}.${settings.format}`;
-          a.click();
-          setExported({
-            url: fileUrl,
-            preview: url,
-            format: settings.format.toUpperCase(),
-            filename: a.download,
-            width: width * scale,
-            height: height * scale,
-          });
+          return {
+            png,
+            format: settings.format,
+            width_px: width,
+            height_px: height,
+            scale,
+            pixel_size: [width * scale, height * scale] as [number, number],
+          };
         } finally {
           Plotly.purge(el);
           el.remove();
@@ -426,17 +382,6 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
           )}
         </div>
       </div>
-      {exported && (
-        <details className="export-preview">
-          <summary>
-            上次导出 · {exported.width} × {exported.height} {exported.format}
-          </summary>
-          <a href={exported.url} download={exported.filename}>
-            再次下载 {exported.format}
-          </a>
-          <img src={exported.preview} alt="三维导出预览" />
-        </details>
-      )}
       <div className="canvas-footer">
         <span>拖动旋转 · 滚轮缩放 · 平移工具移动场景</span>
         <span>坐标使用真实数值 · TWT 向下 · 相机自动保留</span>

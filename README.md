@@ -104,6 +104,19 @@ npm run dev
 
 ## 图片导出
 
+导出采用“暂存 → 队列管理 → 批量打包”流程：
+
+```text
+调整视图 → Add to Export（按当前导出参数完成最终渲染）→ Export Queue 管理 → Export All 生成 ZIP
+```
+
+- 每次 `Add to Export` 立即渲染最终文件并写入本次会话的临时目录，不触发浏览器下载；加入后继续修改 inline、crossline、色标、层位、相机等设置都不会改变已暂存的图片。
+- 顶栏 `Export Queue · N` 打开导出队列，支持 Preview、Rename、Delete、Clear Queue、Export All；Preview 显示的正是 ZIP 中的最终文件。
+- `Export All` 只整理已渲染文件和生成 `export_manifest.json`，不重复执行 Matplotlib 或三维高分辨率渲染，最后打包为 `SeisCanvas_{Dataset}_Export_{YYYYMMDD_HHmm}.zip`（多数据集时为 `SeisCanvas_BatchExport_YYYYMMDD_HHmm.zip`）。
+- 文件名为自描述式科研命名 `{Dataset}_{View}_{Location/Target}_{Content}_{KeyStyle}_{Size}_{DPI}`，例如 `F3_2D_Inline_IL0350_Horizons6_Seismic_180x100mm_600dpi.png`；同名文件自动追加 `_02`、`_03`。
+- 一个 ZIP 可混合 PNG、PDF、SVG，并按 `2D/Inline`、`2D/Crossline`、`3D`、`HorizonMap`、`HorizonProfile` 自动分类；根目录包含 `export_manifest.json`，记录数据集、完整 ViewState 与绘图参数（振幅范围、裁剪百分位、色标、层位颜色与线型、字体、三维相机、光照、透明度、垂向夸张、等值线间隔等）。
+- 暂存文件保存在 `/tmp/seiscanvas/session_xxxxxx/`（Windows 使用系统临时目录），包含 `manifest.json` 和 `figures/`；会话结束或超出保留数量后自动清理。
+
 ### 二维导出
 
 - 支持 PNG、PDF、SVG。
@@ -113,10 +126,10 @@ npm run dev
 ### 三维导出
 
 - 支持 PNG、PDF、SVG。
-- 设置图片宽高（像素）和 1–4 倍输出分辨率。
-- 设置字体与字号，以及背景、坐标轴、轴标签和包围盒的显示状态。
+- 与二维一致，设置图片宽高（毫米）与 300 / 600 DPI；内部据此换算光栅像素（300 DPI 采用 3×、600 DPI 采用 4× 采样），单图上限约 2400 万像素。
+- 设置字体与字号，以及背景、坐标轴、轴标签和包围盒的显示状态；导出文字为纯黑 `#000000`（界面预览仍使用界面配色）。
 
-二维与三维导出均提供 DejaVu Sans、DejaVu Serif、Arial、Times New Roman 字体选项及 5–30 pt 字号设置。DejaVu 字体随应用提供，Arial 和 Times New Roman 使用系统字体。
+二维、三维与层位地图导出统一提供 DejaVu Sans、DejaVu Serif、Arial、Times New Roman 字体选项及 5–30 pt 字号设置，默认使用 Times New Roman。DejaVu 字体随应用提供，Arial 和 Times New Roman 使用系统字体；系统缺少所选字体时自动回退到对应的衬线或无衬线字体。
 
 ## 层位曲面着色
 

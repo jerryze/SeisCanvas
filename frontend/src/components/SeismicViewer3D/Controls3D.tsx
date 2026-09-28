@@ -309,81 +309,89 @@ export function Horizon3DControls({
 }) {
   return (
     <div className="horizon-3d-controls">
-      <label className="field">
-        三维显示
-        <select
-          value={h.display_mode}
-          onChange={(e) =>
-            onChange({ display_mode: e.target.value as HS["display_mode"] })
-          }
-        >
-          <option value="full_surface">完整曲面</option>
-          <option value="slice_intersections">
-            切片交线
-          </option>
-        </select>
-      </label>
-      <label className="field">
-        透明度
-        <Num
-          value={h.opacity}
-          min={0}
-          max={1}
-          step={0.05}
-          onChange={(opacity) => onChange({ opacity })}
-        />
-      </label>
+      <div className="field-row">
+        <label className="field">
+          三维显示
+          <select
+            value={h.display_mode}
+            onChange={(e) =>
+              onChange({ display_mode: e.target.value as HS["display_mode"] })
+            }
+          >
+            <option value="full_surface">完整曲面</option>
+            <option value="slice_intersections">
+              切片交线
+            </option>
+          </select>
+        </label>
+        <label className="field">
+          透明度
+          <Num
+            value={h.opacity}
+            min={0}
+            max={1}
+            step={0.05}
+            onChange={(opacity) => onChange({ opacity })}
+          />
+        </label>
+      </div>
       {h.display_mode === "full_surface" ? (
         <>
-          <label className="field">
-            着色依据
-            <select value={h.color_by || "twt"}
-              onChange={(e) => onChange({ color_by: e.target.value as HS["color_by"] })}>
-              <option value="twt">TWT · 层位时间</option>
-              <option value="solid">单色</option>
-            </select>
-          </label>
-          {h.color_by !== "solid" && (
+          <div className="field-row">
             <label className="field">
-              层位色标
-              <select value={h.horizon_colormap || "petrel"}
-                onChange={() => onChange({ horizon_colormap: "petrel" })}>
-                <option value="petrel">Petrel</option>
+              着色依据
+              <select value={h.color_by || "twt"}
+                onChange={(e) => onChange({ color_by: e.target.value as HS["color_by"] })}>
+                <option value="twt">TWT · 层位时间</option>
+                <option value="solid">单色</option>
               </select>
-              <span style={{ display: "block", height: 10, background: "linear-gradient(to right, #ff0000, #ff8000, #ffff00, #00c040, #00ffff, #0000ff, #8000c0, #ff00ff)" }} />
             </label>
-          )}
-          <Toggle label="平滑着色"
-            checked={h.smooth_shading !== false}
-            onChange={(smooth_shading) => onChange({ smooth_shading })} />
-          <Toggle label="柔和光照"
-            checked={h.lighting !== false}
-            onChange={(lighting) => onChange({ lighting })} />
-          <label className="field">
-            曲面样式
-            <select
-              value={h.surface_mode}
-              onChange={(e) =>
-                onChange({ surface_mode: e.target.value as HS["surface_mode"] })
-              }
-            >
-              <option value="surface">曲面</option>
-              <option value="wireframe">网格</option>
-              <option value="surface_wireframe">曲面与网格</option>
-            </select>
-          </label>
-          {h.surface_mode !== "surface" && (
+            {h.color_by !== "solid" && (
+              <label className="field">
+                层位色标
+                <select value={h.horizon_colormap || "petrel"}
+                  onChange={() => onChange({ horizon_colormap: "petrel" })}>
+                  <option value="petrel">Petrel</option>
+                </select>
+                <span style={{ display: "block", height: 8, background: "linear-gradient(to right, #ff0000, #ff8000, #ffff00, #00c040, #00ffff, #0000ff, #8000c0, #ff00ff)" }} />
+              </label>
+            )}
+          </div>
+          <div className="check-row">
+            <Toggle label="平滑着色"
+              checked={h.smooth_shading !== false}
+              onChange={(smooth_shading) => onChange({ smooth_shading })} />
+            <Toggle label="柔和光照"
+              checked={h.lighting !== false}
+              onChange={(lighting) => onChange({ lighting })} />
+          </div>
+          <div className="field-row">
             <label className="field">
-              网格线宽
-              <Num
-                value={h.wireframe_width}
-                min={0.2}
-                max={6}
-                step={0.1}
-                onChange={(wireframe_width) => onChange({ wireframe_width })}
-              />
+              曲面样式
+              <select
+                value={h.surface_mode}
+                onChange={(e) =>
+                  onChange({ surface_mode: e.target.value as HS["surface_mode"] })
+                }
+              >
+                <option value="surface">曲面</option>
+                <option value="wireframe">网格</option>
+                <option value="surface_wireframe">曲面与网格</option>
+              </select>
             </label>
-          )}
+            {h.surface_mode !== "surface" && (
+              <label className="field">
+                网格线宽
+                <Num
+                  value={h.wireframe_width}
+                  min={0.2}
+                  max={6}
+                  step={0.1}
+                  onChange={(wireframe_width) => onChange({ wireframe_width })}
+                />
+              </label>
+            )}
+          </div>
         </>
       ) : (
         <label className="field">
@@ -406,29 +414,36 @@ export function Export3DDialog({
   scene,
   busy,
   error,
+  dataset,
+  datasetPlaceholder,
+  onDataset,
   onClose,
   onExport,
 }: {
   scene: SceneSettings;
   busy: string;
   error: string;
+  dataset: string;
+  datasetPlaceholder?: string;
+  onDataset: (value: string) => void;
   onClose: () => void;
   onExport: (s: Export3D) => void;
 }) {
   const [settings, setSettings] = useState<Export3D>({
     format: "png",
-    font: "DejaVu Sans",
+    font: "Times New Roman",
     font_size: 10,
-    width: 1200,
-    height: 900,
-    scale: 2,
+    width: 180,
+    height: 120,
+    dpi: 300,
     background: "#ffffff",
     show_axes: scene.show_axes,
     show_axis_labels: scene.show_axis_labels,
     show_bounding_box: scene.show_bounding_box,
   });
   const patch = (p: Partial<Export3D>) => setSettings((s) => ({ ...s, ...p }));
-  return <ExportDialog title="导出三维场景" scene settings={settings}
+  return <ExportDialog title="三维场景 · Add to Export" scene settings={settings}
     onChange={patch} onClose={onClose} onExport={() => onExport(settings)}
+    dataset={dataset} onDataset={onDataset} datasetPlaceholder={datasetPlaceholder}
     busy={!!busy} error={error} />;
 }

@@ -9,6 +9,7 @@ from matplotlib.cm import ScalarMappable
 from pydantic import Field, model_validator
 from typing import Literal
 from backend.models import BaseModel, Settings
+from backend.core import font_family
 from backend.scene import horizon_grid, serial
 
 PETREL = ['#ff0000', '#ff8000', '#ffff00', '#00c040', '#00ffff', '#0000ff', '#8000c0', '#ff00ff']
@@ -98,7 +99,7 @@ def render_map(horizon, state, settings):
         cb.solids.set_rasterized(False)
     from matplotlib.text import Text
     for text in fig.findobj(Text):
-        text.set_fontfamily(settings.font)
+        text.set_fontfamily(font_family(settings.font))
         text.set_fontsize(settings.font_size)
     out = io.BytesIO()
     fig.savefig(out, format=settings.format, dpi=settings.dpi)

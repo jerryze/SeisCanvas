@@ -81,8 +81,9 @@ class Settings(BaseModel):
     width: float = Field(180, ge=40, le=500)
     height: float = Field(100, ge=30, le=500)
     dpi: Literal[300, 600] = 300
+    #: Publication text face. Times New Roman is the scientific default.
     font: Literal["DejaVu Sans", "DejaVu Serif", "Arial", "Times New Roman"] = (
-        "DejaVu Sans"
+        "Times New Roman"
     )
     font_size: float = Field(10, ge=5, le=30)
     show_axes: bool = True
@@ -142,6 +143,9 @@ class SceneState(BaseModel):
     aspect_ratio: tuple[float, float, float] = (1, 1, 0.7)
     quality: Literal[128, 256, 512] = 256
     background: str = Field("#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
+    #: Plotly camera. The backend never renders it, but the export manifest must
+    #: be able to reproduce the exact viewpoint.
+    camera: dict | None = None
 
     @model_validator(mode="after")
     def valid_aspect(self):
@@ -168,4 +172,28 @@ class ViewState3D(BaseModel):
             raise ValueError("Slice IDs must be unique.")
         if len(ids) > 18:
             raise ValueError("A scene supports up to 18 slices.")
+        return self
+
+
+class Scene3DSettings(BaseModel):
+    """Publication settings for a WebGL scene; sizes use physical units."""
+
+    width: float = Field(180, ge=30, le=500)
+    height: float = Field(100, ge=20, le=500)
+    dpi: Literal[300, 600] = 300
+    #: Publication text face. Times New Roman is the scientific default.
+    font: Literal["DejaVu Sans", "DejaVu Serif", "Arial", "Times New Roman"] = (
+        "Times New Roman"
+    )
+    font_size: float = Field(10, ge=5, le=30)
+    background: str = Field("#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
+    show_axes: bool = True
+    show_axis_labels: bool = True
+    show_bounding_box: bool = True
+
+    @model_validator(mode="after")
+    def pixels(self):
+        # A WebGL figure is exported as a raster image, so cap the pixel budget.
+        if self.width * self.height * (self.dpi / 25.4) ** 2 > 24_000_000:
+            raise ValueError("3D export exceeds 24 megapixels. Reduce dimensions or DPI.")
         return self

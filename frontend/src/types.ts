@@ -85,13 +85,57 @@ export type Export3D = {
   format: "png" | "pdf" | "svg";
   font: string;
   font_size: number;
+  /** Physical page size in millimetres, like the 2D export. */
   width: number;
   height: number;
-  scale: number;
+  dpi: 300 | 600;
   background: string;
   show_axes: boolean;
   show_axis_labels: boolean;
   show_bounding_box: boolean;
+};
+/** A WebGL figure is rasterised: derive the layout pixels and the device scale. */
+export function exportPixels(settings: {
+  width: number;
+  height: number;
+  dpi: number;
+}) {
+  const scale = settings.dpi >= 600 ? 4 : 3;
+  const width = Math.max(
+    64,
+    Math.round(((settings.width / 25.4) * settings.dpi) / scale),
+  );
+  const height = Math.max(
+    64,
+    Math.round(((settings.height / 25.4) * settings.dpi) / scale),
+  );
+  return { width, height, scale, pixels: [width * scale, height * scale] as const };
+}
+export const MAX_SCENE_PIXELS = 24_000_000;
+
+/** An immutable figure already rendered and stored in the export session. */
+export type ExportItem = {
+  id: string;
+  index: number;
+  dataset: string;
+  view_type: string;
+  folder: string;
+  filename: string;
+  format: string;
+  width_mm: number | null;
+  height_mm: number | null;
+  dpi: number | null;
+  pixel_size: [number, number] | null;
+  scale: number | null;
+  size_bytes: number;
+  created_at: string;
+  detail: string;
+};
+export type ExportQueueState = {
+  session: string;
+  dataset: string | null;
+  count: number;
+  items: ExportItem[];
 };
 export const perspective: Camera = {
   eye: { x: 1.25, y: 1.25, z: 0.9 },

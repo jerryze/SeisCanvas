@@ -1,4 +1,5 @@
 import ExportDialog from "./components/ExportDialog";
+import ExportQueue from "./components/ExportQueue";
 import HorizonMap from "./components/HorizonMap";
 import { useState, useEffect, useRef, useMemo } from "react";
 import Plotly from "plotly.js-dist-min";
@@ -8,7 +9,6 @@ import {
   Plus,
   Trash2,
   ChevronRight,
-  Download,
   RotateCcw,
   Layers,
   SlidersHorizontal,
@@ -20,9 +20,10 @@ import {
   LoaderCircle,
   PanelLeftClose,
   PanelLeftOpen,
+  Package,
 } from "lucide-react";
 
-import { HS, SS, VS, Meta, Section, defaultScene, makeSlice } from "./types";
+import { HS, SS, VS, Meta, Section, ExportItem, defaultScene, makeSlice } from "./types";
 import { Toggle, Num, Group } from "./components/Controls";
 import Scene3D, {
   Scene3DHandle,
@@ -87,7 +88,7 @@ const initialExport = {
   height: 100,
   dpi: 300,
 
-  font: "DejaVu Sans",
+  font: "Times New Roman",
   font_size: 10,
 
   show_axes: true,
@@ -176,6 +177,11 @@ export default function App() {
   const [exportOpen, setExportOpen] = useState(false);
   const [settings, setSettings] = useState(initialExport);
 
+  const [queue, setQueue] = useState<ExportItem[]>([]);
+  const [queueSession, setQueueSession] = useState("");
+  const [queueOpen, setQueueOpen] = useState(false);
+  const [dataset, setDataset] = useState("");
+
   const [drag, setDrag] = useState<"zoom" | "pan">("zoom");
 
   const [sidebar, setSidebar] = useState(true);
@@ -238,7 +244,7 @@ export default function App() {
 
     setSection(null);
     setMeta(result.metadata);
-
+    setDataset("");
     setSelected(result.horizons[0]?.id || "");
 
     const centerInline =
@@ -274,6 +280,14 @@ export default function App() {
 
     setNotice("数据已加载");
   }
+
+  /* ------------------------------------------------------------------------ */
+  /* Dataset name                                                             */
+  /* ------------------------------------------------------------------------ */
+
+  const datasetPlaceholder = meta
+    ? meta.filename.replace(/\.[^.]+$/, "")
+    : "Dataset";
 
   /* ------------------------------------------------------------------------ */
   /* Load example                                                             */
@@ -909,47 +923,112 @@ export default function App() {
   );
 
   /* ------------------------------------------------------------------------ */
-  /* Export                                                                   */
+  /* Export queue                                                             */
   /* ------------------------------------------------------------------------ */
 
-  async function exportFigure() {
-    await task(
-      "导出图片…",
-      async () => {
-        const r = await api(
-          "/export",
-          json({
-            state: view,
-            settings,
-          }),
-        );
+  async function refreshQueue() {
+    try {
+      const r = await api("/export/queue");
+      const data = await r.json();
+      setQueue(data.items || []);
+      setQueueSession(data.session || "");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
 
-        const blob = await r.blob();
+  useEffect(() => {
+    refreshQueue();
+  }, []);
 
-        const url =
-          URL.createObjectURL(blob);
+  async function queueItem(body: Record<string, unknown>) {
+    const r = await api("/export/queue", json(body));
+    const item: ExportItem = await r.json();
+    await refreshQueue();
+    setNotice(`Added to Export Queue\n${item.filename}`);
+    return item;
+  }
 
-        const a =
-          document.createElement("a");
+  /* Render the current view at the publication settings and stash the result. */
 
-        a.href = url;
+  function add2DToQueue() {
+    setExportOpen(false);
+    task("正在渲染并加入导出队列…", async () => {
+      await queueItem({ kind: "2d", dataset, state: view, settings });
+    });
+  }
 
-        a.download =
-          `SeisCanvas_` +
-          `${view.view_type}_` +
-          `${view.section_number}.` +
-          `${settings.format}`;
+  async function add3DToQueue(settings3D: any) {
+    setExportOpen(false);
+    await task("正在渲染三维图片并加入导出队列…", async () => {
+      if (!sceneRef.current) throw new Error("三维场景未就绪");
+      const capture = await sceneRef.current.captureFigure(settings3D);
+      await queueItem({
+        kind: "3d",
+        dataset,
+        png: capture.png,
+        format: capture.format,
+        width_px: capture.width_px,
+        height_px: capture.height_px,
+        scale: capture.scale,
+        settings: settings3D,
+        state: view,
+      });
+    });
+  }
 
-        a.click();
+  async function addMapToQueue(payload: { state: unknown; settings: unknown }) {
+    await task("正在绘制层位地图并加入导出队列…", async () => {
+      await queueItem({ kind: "map", dataset, state: payload.state, settings: payload.settings });
+    });
+  }
 
-        setTimeout(() => {
-          URL.revokeObjectURL(url);
-        }, 1000);
+  function renameQueueItem(item: ExportItem, filename: string) {
+    return task("重命名导出文件…", async () => {
+      await api(`/export/queue/${item.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename }),
+      });
+      await refreshQueue();
+    });
+  }
 
-        setNotice("图片已导出");
-        setExportOpen(false);
-      },
-    );
+  function deleteQueueItem(item: ExportItem) {
+    task("删除暂存图片…", async () => {
+      await api(`/export/queue/${item.id}`, { method: "DELETE" });
+      await refreshQueue();
+    });
+  }
+
+  function clearQueue() {
+    task("清空导出队列…", async () => {
+      await api("/export/queue", { method: "DELETE" });
+      await refreshQueue();
+      setNotice("Export queue cleared");
+    });
+  }
+
+  function exportAll() {
+    task("正在打包 ZIP…", async () => {
+      const r = await api("/export/archive", { method: "POST" });
+      const header = r.headers.get("X-Export-Filename");
+      let name = "SeisCanvas_Export.zip";
+      if (header) {
+        try {
+          name = decodeURIComponent(header);
+        } catch {
+          name = header;
+        }
+      }
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setNotice(`ZIP 已导出\n${name}`);
+    });
   }
 
   /* ------------------------------------------------------------------------ */
@@ -993,8 +1072,17 @@ export default function App() {
             setExportOpen(true)
           }
         >
-          <Download size={15} />
-          导出
+          <Plus size={15} />
+          Add to Export
+        </button>
+
+        <button
+          className="secondary queue-button"
+          onClick={() => setQueueOpen(true)}
+          title="导出队列"
+        >
+          <Package size={15} />
+          Export Queue · {queue.length}
         </button>
       </header>
 
@@ -2032,7 +2120,9 @@ export default function App() {
 
           {view.view_mode === "map" ? (
             <HorizonMap horizons={view.horizons} exportOpen={exportOpen}
-              onCloseExport={() => setExportOpen(false)} onReady={setMapReady} />
+              onCloseExport={() => setExportOpen(false)} onReady={setMapReady}
+              dataset={dataset} datasetPlaceholder={datasetPlaceholder}
+              onDataset={setDataset} onAddToExport={addMapToQueue} />
           ) : view.view_mode === "3d" &&
           meta ? (
             <Scene3D
@@ -2342,35 +2432,13 @@ export default function App() {
             scene={view.scene}
             busy={busy}
             error={error}
+            dataset={dataset}
+            datasetPlaceholder={datasetPlaceholder}
+            onDataset={setDataset}
             onClose={() =>
               setExportOpen(false)
             }
-            onExport={(settings) =>
-              task(
-                "导出三维图片…",
-                async () => {
-                  if (
-                    !sceneRef.current
-                  ) {
-                    throw new Error(
-                      "三维场景未就绪",
-                    );
-                  }
-
-                  await sceneRef.current.exportFigure(
-                    settings,
-                  );
-
-                  setNotice(
-                    `三维 ${settings.format.toUpperCase()} 已导出`,
-                  );
-
-                  setExportOpen(
-                    false,
-                  );
-                },
-              )
-            }
+            onExport={add3DToQueue}
           />
         )}
 
@@ -2379,11 +2447,28 @@ export default function App() {
       {/* ------------------------------------------------------------------ */}
 
       {exportOpen && view.view_mode === "2d" && (
-        <ExportDialog title="导出二维剖面" settings={settings}
+        <ExportDialog title="二维剖面 · Add to Export" settings={settings}
           onChange={p => setSettings(s => ({...s, ...p}))}
-          onClose={() => setExportOpen(false)} onExport={exportFigure}
+          onClose={() => setExportOpen(false)} onExport={add2DToQueue}
+          dataset={dataset} datasetPlaceholder={datasetPlaceholder} onDataset={setDataset}
           busy={!!busy} disabled={loading} error={error} />
       )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Export queue                                                       */}
+      {/* ------------------------------------------------------------------ */}
+
+      <ExportQueue
+        open={queueOpen}
+        items={queue}
+        session={queueSession}
+        busy={!!busy}
+        onClose={() => setQueueOpen(false)}
+        onRename={renameQueueItem}
+        onDelete={deleteQueueItem}
+        onClear={clearQueue}
+        onExportAll={exportAll}
+      />
 
       {horizonImport && (
         <div

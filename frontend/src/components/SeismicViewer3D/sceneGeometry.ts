@@ -348,10 +348,14 @@ export function buildLayout(
   const fontSize = settings?.font_size
     ? (settings.font_size * 4) / 3
     : undefined;
+  // A publication figure prints in pure black; the on-screen viewer keeps the
+  // softer interface ink. Both titles and tick labels must be overridden
+  // explicitly, because Plotly resolves scene text from the axis definition.
+  const ink = settings ? "#000000" : "#425367";
   const axis = (title: string, range: number[]) => ({
     title: {
       text: labels ? title : "",
-      font: { family, size: fontSize ?? 12 },
+      font: { family, size: fontSize ?? 12, color: ink },
     },
     range,
     autorange: false,
@@ -362,14 +366,14 @@ export function buildLayout(
     zeroline: false,
     showline: axes,
     linecolor: "#c0cdd3",
-    tickfont: { family, size: fontSize ?? 10 },
+    tickfont: { family, size: fontSize ?? 10, color: ink },
     ticks: axes ? "outside" : "",
   });
   return {
     autosize: true,
     margin: { l: 12, r: 12, t: 12, b: 12 },
     paper_bgcolor: settings?.background || view.scene.background,
-    font: { family, size: fontSize ?? 12, color: "#425367" },
+    font: { family, size: fontSize ?? 12, color: ink },
     showlegend: false,
     scene: {
       xaxis: axis("Crossline", data.bounds.x),

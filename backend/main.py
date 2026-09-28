@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 from pydantic import BaseModel, Field
 from backend.file_picker import choose_segy
 from uuid import uuid4
@@ -25,6 +26,14 @@ from backend.models import ViewState, ExportRequest, Horizon3DStyle, ViewState3D
 from backend.scene import slice_data, horizon_mesh, horizon_intersection, scene_data, indices
 
 from backend.horizon_map import HorizonMapState, HorizonMapExport, map_data, render_map
+from backend import export_queue
+from backend.export_service import (
+    QueueAddRequest,
+    RenameRequest,
+    add_2d,
+    add_3d,
+    add_map,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 HORIZON_SUFFIXES = {".txt", ".dat"}
@@ -377,7 +386,11 @@ def export_scene(req: SceneExportRequest):
             output = package_scene(req)
         return Response(
             output,
-            media_type={"pdf": "application/pdf", "svg": "image/svg+xml"}[req.format],
+            media_type={
+                "png": "image/png",
+                "pdf": "application/pdf",
+                "svg": "image/svg+xml",
+            }[req.format],
             headers={
                 "Content-Disposition": f'attachment; filename="SeisCanvas_3D.{req.format}"'
             },
@@ -392,6 +405,85 @@ def export_font(family: str):
     if family not in fonts:
         raise HTTPException(404, "Font not found.")
     return FileResponse(font_manager.findfont(fonts[family]), media_type="font/ttf")
+
+
+# ---------------------------------------------------------------------------
+# Export queue: render once on Add to Export, then only reorganise files.
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/export/queue")
+def queue_add(req: QueueAddRequest):
+    try:
+        with lock:
+            if req.kind == "2d":
+                return add_2d(require_survey(), horizons, req)
+            if req.kind == "map":
+                return add_map(require_survey(), horizons, req)
+            return add_3d(require_survey(), req)
+    except KeyError:
+        raise HTTPException(404, "Export item not found.")
+    except (ValueError, OSError) as e:
+        raise error(e)
+
+
+@app.get("/api/export/queue")
+def queue_list():
+    return export_queue.session().snapshot()
+
+
+@app.patch("/api/export/queue/{item_id}")
+def queue_rename(item_id: str, req: RenameRequest):
+    try:
+        return export_queue.session().rename(item_id, req.filename)
+    except KeyError:
+        raise HTTPException(404, "Export item not found.")
+    except (ValueError, OSError) as e:
+        raise error(e)
+
+
+@app.get("/api/export/queue/{item_id}/file")
+def queue_file(item_id: str):
+    try:
+        path, media_type = export_queue.session().file(item_id)
+    except KeyError:
+        raise HTTPException(404, "Export file not found.")
+    # Inline so Preview shows exactly the bytes that go into the ZIP.
+    return FileResponse(path, media_type=media_type)
+
+
+@app.delete("/api/export/queue/{item_id}")
+def queue_delete(item_id: str):
+    try:
+        export_queue.session().delete(item_id)
+    except KeyError:
+        raise HTTPException(404, "Export item not found.")
+    return {"ok": True}
+
+
+@app.delete("/api/export/queue")
+def queue_clear():
+    export_queue.session().clear()
+    return {"ok": True}
+
+
+@app.post("/api/export/archive")
+def export_archive():
+    try:
+        path, filename, manifest = export_queue.session().archive()
+    except ValueError as e:
+        raise error(e)
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=filename,
+        headers={
+            # Percent-encoded so a non-ASCII dataset name is still header-safe.
+            "X-Export-Filename": quote(filename),
+            "X-Export-Figures": str(manifest["figure_count"]),
+        },
+    )
+
 
 
 @app.post("/api/scene")

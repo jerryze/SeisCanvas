@@ -37,11 +37,19 @@ export default function HorizonMap({
   exportOpen,
   onCloseExport,
   onReady,
+  dataset,
+  datasetPlaceholder,
+  onDataset,
+  onAddToExport,
 }: {
   horizons: HS[];
   exportOpen: boolean;
   onCloseExport: () => void;
   onReady: (v: boolean) => void;
+  dataset: string;
+  datasetPlaceholder?: string;
+  onDataset: (value: string) => void;
+  onAddToExport: (payload: { state: State; settings: Record<string, unknown> }) => Promise<void>;
 }) {
   const [state, setState] = useState<State>({
     horizon: horizons[0]?.id || "",
@@ -69,7 +77,7 @@ export default function HorizonMap({
     width: 180,
     height: 140,
     dpi: 300,
-    font: "DejaVu Sans",
+    font: "Times New Roman",
     font_size: 10,
     show_axes: true,
     show_labels: true,
@@ -288,24 +296,10 @@ export default function HorizonMap({
       ready.current(false);
     };
   }, []);
-  async function save() {
+  async function addToExport() {
     setSaving(true);
     try {
-      const res = await fetch("/api/horizon-map/export", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state, settings }),
-      });
-      if (!res.ok) {
-        const e = await res.json();
-        throw Error(typeof e.detail === "string" ? e.detail : "导出参数无效");
-      }
-      const url = URL.createObjectURL(await res.blob());
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `Horizon_Map.${settings.format}`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      await onAddToExport({ state, settings });
       setError("");
       onCloseExport();
     } catch (e) {
@@ -547,10 +541,11 @@ export default function HorizonMap({
           }}
         />
       </div>
-      {exportOpen && <ExportDialog title="导出层位地图" settings={settings}
+      {exportOpen && <ExportDialog title="层位地图 · Add to Export" settings={settings}
         onChange={p => setSettings(s => ({...s, ...p}))}
-        onClose={onCloseExport} onExport={save} busy={saving}
+        onClose={onCloseExport} onExport={addToExport} busy={saving}
         disabled={!data || loading} error={error}
+        dataset={dataset} onDataset={onDataset} datasetPlaceholder={datasetPlaceholder}
         colorbar={state.colorbar} onColorbar={colorbar => patch({colorbar})} />}
 
     </>
