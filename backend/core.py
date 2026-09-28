@@ -6,6 +6,7 @@ import numpy as np
 import segyio
 from backend.regular_geometry import RegularGeometry, probe_regular
 from backend.geometry import cache_key, load_geometry, save_geometry, build_geometry
+from backend import resample
 import matplotlib
 
 matplotlib.use("Agg")
@@ -15,23 +16,68 @@ from matplotlib.colors import LinearSegmentedColormap
 
 # A muted diverging ramp matching the supplied Pos / 0 / Neg reference:
 # positive amplitudes are red, zero is near-white, and negative amplitudes are blue.
+# The stops are sampled from that reference colorbar (every 5% of its length), so
+# the ramp reproduces its curved blue shoulder and dark, slightly desaturated ends.
 CUSTOM_CMAPS = {
     "red_white_blue": LinearSegmentedColormap.from_list(
         "red_white_blue",
         [
-            (0.00, "#2f3798"),
-            (0.10, "#454a9e"),
-            (0.20, "#6a74af"),
-            (0.30, "#8fa1c2"),
-            (0.40, "#b9d0d5"),
-            (0.50, "#fffafa"),
-            (0.60, "#f6d7d4"),
-            (0.70, "#dc9e9e"),
-            (0.80, "#c06b69"),
-            (0.90, "#a63335"),
-            (1.00, "#800000"),
+            (0.00, "#23238e"),
+            (0.05, "#2f3294"),
+            (0.10, "#444a9d"),
+            (0.15, "#575fa6"),
+            (0.20, "#6b75af"),
+            (0.25, "#7e8cb9"),
+            (0.30, "#91a1c3"),
+            (0.35, "#a4b9cb"),
+            (0.40, "#b7cfd3"),
+            (0.45, "#dbe8e9"),
+            (0.50, "#ffffff"),
+            (0.55, "#ffede9"),
+            (0.60, "#f7d7d3"),
+            (0.65, "#e8b8b7"),
+            (0.70, "#da9e9e"),
+            (0.75, "#cc7f7e"),
+            (0.80, "#be6868"),
+            (0.85, "#af4546"),
+            (0.90, "#a22e2e"),
+            (0.95, "#93100f"),
+            (1.00, "#8c0000"),
         ],
-    )
+    ),
+    # Schlumberger Petrel-style cyan-blue-white-red-yellow ramp (cigvis definition).
+    "petrel": LinearSegmentedColormap(
+        "petrel",
+        {
+            "red": [
+                (0.0, 0.6313725490196078, 0.6313725490196078),
+                (0.33, 0.0, 0.0),
+                (0.4, 0.30196078431372547, 0.30196078431372547),
+                (0.5, 0.8, 0.8),
+                (0.6, 0.3803921568627451, 0.3803921568627451),
+                (0.67, 0.7490196078431373, 0.7490196078431373),
+                (1.0, 1.0, 1.0),
+            ],
+            "green": [
+                (0.0, 1.0, 1.0),
+                (0.33, 0.0, 0.0),
+                (0.4, 0.30196078431372547, 0.30196078431372547),
+                (0.5, 0.8, 0.8),
+                (0.6, 0.27058823529411763, 0.27058823529411763),
+                (0.67, 0.0, 0.0),
+                (1.0, 1.0, 1.0),
+            ],
+            "blue": [
+                (0.0, 1.0, 1.0),
+                (0.33, 0.7490196078431373, 0.7490196078431373),
+                (0.4, 0.30196078431372547, 0.30196078431372547),
+                (0.5, 0.8, 0.8),
+                (0.6, 0.0, 0.0),
+                (0.67, 0.0, 0.0),
+                (1.0, 0.0, 0.0),
+            ],
+        },
+    ),
 }
 CMAPS = [
     "gray",
@@ -39,6 +85,7 @@ CMAPS = [
     "binary",
     "seismic",
     "red_white_blue",
+    "petrel",
     "RdBu",
     "coolwarm",
     "viridis",
@@ -65,6 +112,63 @@ def font_family(name):
         return ["DejaVu Sans"]
     serif = "Times" in name or "Serif" in name
     return [name, "DejaVu Serif" if serif else "DejaVu Sans"]
+
+
+#: A viewer-sized render grid, used when an export reuses the view resolution.
+VIEW_TARGET = (1600, 1000)
+#: Publication rasters may be upsampled far beyond the samples, but six real
+#: samples must not turn into ten million invented ones.
+EXPORT_MAX_UPSCALE = 32.0
+
+
+def window_indices(coordinates, span):
+    """Inclusive index window covering a world-coordinate span (one sample of slack)."""
+    if span is None:
+        return 0, len(coordinates) - 1
+    low, high = min(span), max(span)
+    start = int(np.searchsorted(coordinates, low, side="left")) - 1
+    stop = int(np.searchsorted(coordinates, high, side="right")) + 1
+    start = max(0, min(start, len(coordinates) - 1))
+    stop = max(start + 1, min(stop, len(coordinates)))
+    return start, stop - 1
+
+
+def display_raster(x, time, z, state, settings):
+    """Resample the visible part of a section for drawing.
+
+    Returns ``(raster, extent, source_shape)``.  The raster only exists for the
+    renderer: the returned extent still maps onto the original sample centres,
+    so horizons, axes and hover keep using real world coordinates.
+    """
+    x0, x1 = window_indices(x, state.x_range)
+    t0, t1 = window_indices(time, state.time_range)
+    window = np.ascontiguousarray(z[t0 : t1 + 1, x0 : x1 + 1])
+    native_height, native_width = window.shape
+    if settings.resolution == "view":
+        width, height = resample.fit_target(
+            native_width,
+            native_height,
+            *VIEW_TARGET,
+            budget=resample.INTERACTIVE_BUDGET,
+        )
+    else:
+        width, height = settings.canvas_pixels()
+        width, height = resample.fit_target(
+            native_width,
+            native_height,
+            width,
+            height,
+            budget=resample.MAX_RENDER_PIXELS,
+            max_upscale=EXPORT_MAX_UPSCALE,
+        )
+    raster = resample.resample(window, width, height, settings.interpolation)
+    extent = (
+        float(x[x0]) - 0.5,
+        float(x[x1]) + 0.5,
+        float(time[t0]) - 0.5,
+        float(time[t1]) + 0.5,
+    )
+    return raster, extent, (native_width, native_height)
 
 
 class ArrayCache(OrderedDict):
@@ -98,6 +202,8 @@ class Survey:
         report(2, "打开 SEG-Y")
         self.path = Path(path)
         self.cache = ArrayCache()
+        # Rendering-layer resampling results; kept apart from the native cache.
+        self.render_cache = ArrayCache(max_bytes=96 * 1024 * 1024)
         self.regular = None
         if geometry_mode == "regular":
             key = cache_key(self.path, ilbyte, xlbyte, "regular-formula-v1")
@@ -345,7 +451,10 @@ def amplitude(z, s):
 
 def render(survey, horizons, state, settings):
     x, t, z = survey.section(state.view_type, state.section_number)
+    # Amplitude clipping always comes from the original section: the colour
+    # range must not change with the interpolation mode or the zoom window.
     z, lo, hi = amplitude(z, state.seismic)
+    raster, extent, source_shape = display_raster(x, t, z, state, settings)
     fig = Figure(
         figsize=(settings.width / 25.4, settings.height / 25.4),
         dpi=settings.dpi,
@@ -356,8 +465,26 @@ def render(survey, horizons, state, settings):
         horizontal, vertical = state.aspect_ratio_2d
         ax.set_box_aspect(vertical / horizontal)
     cmap = get_cmap(state.seismic.colormap, state.seismic.reverse_colormap)
-    ax.pcolormesh(
-        x, t, z, cmap=cmap, vmin=lo, vmax=hi, shading="nearest", rasterized=True
+    canvas_width, canvas_height = settings.canvas_pixels()
+    # The raster is normally already at the output resolution, so let Agg blit
+    # it 1:1; only a coarser (view-resolution) raster is filtered on the way up.
+    blend = (
+        "nearest"
+        if raster.size >= canvas_width * canvas_height
+        else "bilinear"
+    )
+    ax.imshow(
+        raster,
+        cmap=cmap,
+        vmin=lo,
+        vmax=hi,
+        extent=extent,
+        # Row 0 is the smallest TWT; the time axis is inverted below, so the
+        # array origin belongs at the bottom of the extent.
+        origin="lower",
+        aspect="auto",
+        interpolation=blend,
+        rasterized=True,
     )
     dash = {"solid": "-", "dashed": "--", "dotted": ":", "dashdot": "-."}
     markers = {

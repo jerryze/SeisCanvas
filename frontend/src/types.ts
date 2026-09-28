@@ -6,8 +6,6 @@ export type HS = {
   twt_range: [number, number] | null;
   display_mode: "full_surface" | "slice_intersections";
   opacity: number;
-  surface_mode: "surface" | "wireframe" | "surface_wireframe";
-  wireframe_width: number;
   time_slice_tolerance: number;
   id: string;
   name: string;
@@ -17,6 +15,8 @@ export type HS = {
   marker: { visible: boolean; shape: string; size: number };
   outline: { enabled: boolean; width: number };
 };
+export type Interpolation = "nearest" | "bilinear" | "bicubic";
+export type ResolutionMode = "export" | "view";
 export type SS = {
   colormap: string;
   reverse_colormap: boolean;
@@ -26,6 +26,10 @@ export type SS = {
   vmin: number | null;
   vmax: number | null;
   reverse_polarity: boolean;
+  /** Display interpolation: bilinear while browsing, bicubic for figures. */
+  interpolation: Interpolation;
+  /** Match the render grid to the viewport pixels instead of a fixed grid. */
+  adaptive_resolution: boolean;
 };
 export type VS = {
   view_mode: "2d" | "3d" | "map";
@@ -55,6 +59,13 @@ export type Section = {
   vmin: number;
   vmax: number;
   horizons: Record<string, number[][]>;
+  /** Display raster bookkeeping: the source window and the render grid. */
+  native_shape?: number[];
+  render_shape?: number[];
+  preview_shape?: number[];
+  interpolation?: Interpolation;
+  adaptive?: boolean;
+  window?: { x_range: [number, number]; time_range: [number, number] };
 };
 
 export type SliceKind = "inline" | "crossline" | "time";
@@ -93,6 +104,8 @@ export type Export3D = {
   show_axes: boolean;
   show_axis_labels: boolean;
   show_bounding_box: boolean;
+  /** Publication texture resampling; bicubic by default. */
+  interpolation: Interpolation;
 };
 /** A WebGL figure is rasterised: derive the layout pixels and the device scale. */
 export function exportPixels(settings: {

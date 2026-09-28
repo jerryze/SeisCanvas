@@ -6,6 +6,13 @@ import segyio
 from backend.core import amplitude
 
 
+#: Above this many samples a slice is never read at native resolution; the
+#: renderer reads a bounded supersample instead (4 million float32, ~16 MB).
+SLICE_NATIVE_BUDGET = 4_000_000
+#: Upper bound for the supersampled preview read used when downsampling.
+SLICE_SUPERSAMPLE_BUDGET = 1_000_000
+
+
 def indices(length, maximum):
     """Endpoint-preserving preview sampling; coordinates are never renumbered."""
     return np.unique(np.linspace(0, length - 1, min(length, maximum), dtype=int))
@@ -47,8 +54,9 @@ def timeslice(survey, time):
     return actual, grid
 
 
-def slice_data(survey, kind, position, maximum=256):
+def slice_data(survey, kind, position, maximum=256, interpolation="bilinear"):
     from backend.preview import read_samples, preview_ids
+    from backend import resample
     if kind not in ("time", "inline", "crossline"):
         raise ValueError("Unknown slice kind.")
     if kind == "time":
@@ -64,22 +72,38 @@ def slice_data(survey, kind, position, maximum=256):
         actual = int(position)
         a = survey.crosslines if kind == "inline" else survey.inlines
         b = survey.times
-    rows, cols = indices(len(b), maximum), indices(len(a), maximum)
-    key = ("preview", kind, actual, maximum)
+    # Texture grid: bounded by the requested maximum and by the real samples.
+    cols, rows = indices(len(a), maximum), indices(len(b), maximum)
+    target = (len(rows), len(cols))
+    # Anti-aliasing needs samples below the texture resolution. Read the native
+    # slice while it is affordable, otherwise a 2x supersample of the texture.
+    native_cells, target_cells = len(a) * len(b), len(rows) * len(cols)
+    if native_cells <= SLICE_NATIVE_BUDGET:
+        read_cols, read_rows = np.arange(len(a)), np.arange(len(b))
+    elif target_cells * 4 <= SLICE_SUPERSAMPLE_BUDGET:
+        read_cols = indices(len(a), len(cols) * 2)
+        read_rows = indices(len(b), len(rows) * 2)
+    else:
+        read_cols, read_rows = cols, rows
+    method = resample.method(interpolation)
+    key = ("preview", kind, actual, maximum, method)
     if key in survey.cache:
         sampled = survey.cache[key]
         survey.cache.move_to_end(key)
     else:
         if kind == "time":
-            ids = preview_ids(survey, b[rows], a[cols])
+            ids = preview_ids(survey, b[read_rows], a[read_cols])
             sampled = read_samples(survey, ids, [sample])[..., 0]
         else:
-            ids = preview_ids(survey, [actual], a[cols])[0] if kind == "inline" else preview_ids(survey, a[cols], [actual])[:, 0]
-            sampled = read_samples(survey, ids, rows).T
+            ids = preview_ids(survey, [actual], a[read_cols])[0] if kind == "inline" else preview_ids(survey, a[read_cols], [actual])[:, 0]
+            sampled = read_samples(survey, ids, read_rows).T
+        if sampled.shape != target:
+            sampled = resample.resample(sampled, target[1], target[0], method)
         survey.cache[key] = sampled
     return dict(kind=kind, position=actual, requested_position=position,
                 a=a[cols].tolist(), b=b[rows].tolist(), amplitude=serial(sampled),
-                native_shape=[len(b), len(a)]), sampled
+                native_shape=[len(b), len(a)], render_shape=[len(read_rows), len(read_cols)],
+                interpolation=method), sampled
 
 
 def regular_axis(values):
@@ -162,16 +186,6 @@ def horizon_mesh(horizon, maximum=256):
     c = a + width
     d = c + 1
     faces = np.concatenate([np.stack([a, b, d], axis=1), np.stack([a, d, c], axis=1)])
-    # Deduplicated grid edges, no diagonal edges in the wireframe.
-    edges = np.concatenate(
-        [
-            np.stack([a, b], axis=1),
-            np.stack([b, d], axis=1),
-            np.stack([c, d], axis=1),
-            np.stack([a, c], axis=1),
-        ]
-    )
-    edges = np.unique(np.sort(edges, axis=1), axis=0)
     result = dict(
         x=xx.ravel().tolist(),
         y=yy.ravel().tolist(),
@@ -182,7 +196,6 @@ def horizon_mesh(horizon, maximum=256):
         i=faces[:, 0].tolist(),
         j=faces[:, 1].tolist(),
         k=faces[:, 2].tolist(),
-        edges=edges.tolist(),
         native_shape=[len(y), len(x)],
         preview_shape=list(zz.shape),
     )
@@ -239,7 +252,15 @@ def scene_data(survey, horizons, state):
         for sl in getattr(state.slices, kind):
             if not sl.visible:
                 continue
-            data, values = slice_data(survey, kind, sl.position, state.scene.quality)
+            # The texture is display data: bilinear while browsing, bicubic for
+            # a publication capture. Slices share one amplitude window.
+            data, values = slice_data(
+                survey,
+                kind,
+                sl.position,
+                state.scene.quality,
+                state.seismic.interpolation,
+            )
             data["id"] = sl.id
             result["slices"].append(data)
             finite = values[np.isfinite(values)]

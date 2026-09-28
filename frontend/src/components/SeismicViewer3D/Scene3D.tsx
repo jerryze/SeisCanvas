@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { VS, Meta, Camera, Export3D, perspective, exportPixels, MAX_SCENE_PIXELS } from "../../types";
 import { SceneData, buildTraces, buildLayout } from "./sceneGeometry";
+import { useOriginalProbe, ProbeReadout } from "../Probe";
 /** A finalised WebGL capture, ready to be stored in the export session. */
 export type Scene3DCapture = {
   png: string;
@@ -67,6 +68,9 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
     [loading, setLoading] = useState(true),
     [rendering, setRendering] = useState(true),
     [drag, setDrag] = useState<"orbit" | "pan">("orbit");
+  const { reading: probe, probe: runProbe, reset: resetProbe } = useOriginalProbe();
+  const probeRef = useRef(runProbe);
+  probeRef.current = runProbe;
   const loadingRef = useRef(loading);
   loadingRef.current = loading;
   const latest = useRef({ view, onCamera, onError, onReady });
@@ -162,6 +166,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
         if (version !== renderVersion.current) return;
         el.removeAllListeners?.("plotly_relayout");
         el.removeAllListeners?.("plotly_webglcontextlost");
+        el.removeAllListeners?.("plotly_hover");
         await Plotly.react(
           el,
           buildTraces(data, latest.current.view, maps),
@@ -180,6 +185,21 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
           if (event["scene.camera"]) {
             displayedCamera.current = JSON.stringify(event["scene.camera"]);
             latest.current.onCamera(event["scene.camera"]);
+          }
+        });
+        // Slice textures are resampled for display, so the amplitude readout
+        // asks the backend for the original sample under the cursor.
+        el.on("plotly_hover", (event: any) => {
+          const point = event?.points?.[0];
+          const info = point?.data?.meta?.probe;
+          if (!info) return;
+          const { kind, position } = info;
+          if (kind === "time") {
+            probeRef.current({ kind, position, crossline: point.x, inline: point.y });
+          } else if (kind === "inline") {
+            probeRef.current({ kind, position, crossline: point.x, time: point.z });
+          } else {
+            probeRef.current({ kind, position, inline: point.y, time: point.z });
           }
         });
         el.on("plotly_webglcontextlost", () => {
@@ -224,6 +244,9 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
       .catch((e) => latest.current.onError(String(e)));
   }, [cameraKey, loading, rendering, data, maps, drag]);
   useEffect(() => {
+    resetProbe();
+  }, [data]);
+  useEffect(() => {
     const el = plot.current;
     if (!el) return;
     const observer = new ResizeObserver(() => {
@@ -255,11 +278,35 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
             `${(settings.font_size * 4) / 3}px "${settings.font}"`,
           );
           const current = latest.current.view;
+          // Publication capture re-reads the slices at the best texture quality
+          // and with the requested interpolation instead of reusing the
+          // interactive texture. Falls back to the browsed scene on failure.
+          let scene = dataRef.current;
+          const publication = {
+            ...current,
+            scene: { ...current.scene, quality: 512 as const },
+            seismic: { ...current.seismic, interpolation: settings.interpolation },
+          };
+          if (
+            current.scene.quality < 512 ||
+            current.seismic.interpolation !== settings.interpolation
+          ) {
+            try {
+              const response = await fetch("/api/scene", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(publication),
+              });
+              if (response.ok) scene = await response.json();
+            } catch {
+              /* Keep the browsed texture when the extra read fails. */
+            }
+          }
           await Plotly.newPlot(
             el,
-            buildTraces(dataRef.current, current, maps, settings),
+            buildTraces(scene, current, maps, settings),
             {
-              ...buildLayout(dataRef.current, current, drag, settings),
+              ...buildLayout(scene, current, drag, settings),
               width,
               height,
               autosize: false,
@@ -361,6 +408,8 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
             )}
         </div>
         <div className="viewer-bottom">
+          <ProbeReadout reading={probe} />
+
           <div className="legend">
             {view.horizons
               .filter((h) => h.visible)
@@ -384,7 +433,6 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
       </div>
       <div className="canvas-footer">
         <span>拖动旋转 · 滚轮缩放 · 平移工具移动场景</span>
-        <span>坐标使用真实数值 · TWT 向下 · 相机自动保留</span>
       </div>
     </>
   );

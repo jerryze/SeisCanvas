@@ -1,5 +1,7 @@
 from typing import Literal
-from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, model_validator, field_validator
+
+from backend.core import CMAPS
 
 
 class BaseModel(PydanticBaseModel):
@@ -7,17 +9,15 @@ class BaseModel(PydanticBaseModel):
 
 
 class Seismic(BaseModel):
-    colormap: Literal[
-        "gray",
-        "Greys",
-        "binary",
-        "seismic",
-        "red_white_blue",
-        "RdBu",
-        "coolwarm",
-        "viridis",
-        "turbo",
-    ] = "seismic"
+    #: Single source of truth is core.CMAPS; validated, not a frozen Literal.
+    colormap: str = "seismic"
+
+    @field_validator("colormap")
+    @classmethod
+    def known_colormap(cls, value):
+        if value not in CMAPS:
+            raise ValueError(f"Unknown colormap {value!r}; expected one of {CMAPS}.")
+        return value
     reverse_colormap: bool = False
     clip_mode: Literal["percentile", "manual"] = "percentile"
     clip_percentile: float = Field(99.5, gt=0, le=100)
@@ -25,6 +25,10 @@ class Seismic(BaseModel):
     vmin: float | None = None
     vmax: float | None = None
     reverse_polarity: bool = False
+    #: Display resampling only. Bilinear while browsing, bicubic for figures.
+    interpolation: Literal["nearest", "bilinear", "bicubic"] = "bilinear"
+    #: Match the render grid to the viewport pixels instead of a fixed grid.
+    adaptive_resolution: bool = True
 
 
 class Line(BaseModel):
@@ -90,12 +94,24 @@ class Settings(BaseModel):
     show_labels: bool = True
     show_title: bool = True
     format: Literal["png", "pdf", "svg"] = "png"
+    #: Publication rendering: bicubic at the final output resolution.
+    interpolation: Literal["nearest", "bilinear", "bicubic"] = "bicubic"
+    #: ``export`` re-renders the raster at the output pixels, ``view`` reuses
+    #: the interactive (viewport matched) render grid.
+    resolution: Literal["export", "view"] = "export"
 
     @model_validator(mode="after")
     def pixels(self):
         if self.width * self.height * (self.dpi / 25.4) ** 2 > 40_000_000:
             raise ValueError("Export exceeds 40 megapixels. Reduce dimensions or DPI.")
         return self
+
+    def canvas_pixels(self) -> tuple[int, int]:
+        """Final output pixels for the requested physical size and DPI."""
+        return (
+            max(1, int(round(self.width / 25.4 * self.dpi))),
+            max(1, int(round(self.height / 25.4 * self.dpi))),
+        )
 
 
 class ExportRequest(BaseModel):
@@ -131,8 +147,6 @@ class Horizon3DStyle(HorizonStyle):
     smooth_shading: bool = True
     lighting: bool = True
     twt_range: tuple[float, float] | None = None
-    surface_mode: Literal["surface", "wireframe", "surface_wireframe"] = "surface"
-    wireframe_width: float = Field(1, ge=0.2, le=6)
     time_slice_tolerance: float = Field(4, ge=0, le=1000)
 
 

@@ -245,6 +245,7 @@ def add_3d(survey, req: Queue3DRequest) -> dict:
     data = encode_scene(request, raw, pixels, size)
     summary = {
         "slices": slice_positions,
+        "interpolation": state.seismic.interpolation,
         "horizons": [h.model_dump() for h in state.horizons],
         "horizon_names": [h.name for h in state.horizons],
         "surface_horizons": [h.name for h in surfaces],

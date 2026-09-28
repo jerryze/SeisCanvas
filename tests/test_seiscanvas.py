@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import segyio
 from fastapi.testclient import TestClient
-from backend.core import Survey, Horizon, amplitude, horizon_preview, render
+from backend.core import Survey, Horizon, amplitude, get_cmap, horizon_preview, render
 from backend.models import ViewState, Seismic, Settings, HorizonStyle
 import backend.main as server
 
@@ -98,6 +98,40 @@ def test_custom_red_white_blue_colormap(cube):
         seismic={"colormap": "red_white_blue"},
     )
     assert render(cube, {}, state, Settings(format="png")).startswith(b"\x89PNG")
+
+
+def test_red_white_blue_matches_the_pos_zero_neg_reference():
+    """Anchor stops sampled from the supplied Pos / 0 / Neg colorbar."""
+    cmap = get_cmap("red_white_blue")
+    rgb = lambda t: tuple(round(c * 255) for c in cmap(t)[:3])
+    # Sampling goes through a 256 entry lookup table, so allow one level of
+    # quantization on the anchors.
+    close = lambda a, b: all(abs(x - y) <= 2 for x, y in zip(a, b))
+
+    # Negative end is a deep, slightly desaturated blue; positive end a dark red.
+    assert close(rgb(0.00), (0x23, 0x23, 0x8E))
+    assert close(rgb(1.00), (0x8C, 0x00, 0x00))
+    # Zero is white, with the curved shoulder on the way to blue.
+    assert close(rgb(0.50), (0xFF, 0xFF, 0xFF))
+    assert close(rgb(0.40), (0xB7, 0xCF, 0xD3))
+    assert close(rgb(0.25), (0x7E, 0x8C, 0xB9))
+    assert close(rgb(0.75), (0xCC, 0x7F, 0x7E))
+    assert rgb(0.25)[2] > rgb(0.25)[0]  # blue side
+    assert rgb(0.75)[0] > rgb(0.75)[2]  # red side
+    # Diverging and monotone in luminance on both halves.
+    for t in (0.00, 0.05, 0.10, 0.20, 0.30, 0.40):
+        assert sum(rgb(t)) < sum(rgb(t + 0.05))
+    for t in (0.55, 0.65, 0.75, 0.85, 0.90):
+        assert sum(rgb(t)) > sum(rgb(t + 0.05))
+
+
+def test_seismic_model_accepts_every_catalog_colormap():
+    """models.Seismic must track core.CMAPS, or saved views stop loading."""
+    from backend.core import CMAPS
+    for name in CMAPS:
+        assert Seismic(colormap=name).colormap == name
+    with pytest.raises(ValueError):
+        Seismic(colormap="not-a-colormap")
 
 
 @pytest.mark.parametrize(

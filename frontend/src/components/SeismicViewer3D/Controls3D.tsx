@@ -365,33 +365,6 @@ export function Horizon3DControls({
               checked={h.lighting !== false}
               onChange={(lighting) => onChange({ lighting })} />
           </div>
-          <div className="field-row">
-            <label className="field">
-              曲面样式
-              <select
-                value={h.surface_mode}
-                onChange={(e) =>
-                  onChange({ surface_mode: e.target.value as HS["surface_mode"] })
-                }
-              >
-                <option value="surface">曲面</option>
-                <option value="wireframe">网格</option>
-                <option value="surface_wireframe">曲面与网格</option>
-              </select>
-            </label>
-            {h.surface_mode !== "surface" && (
-              <label className="field">
-                网格线宽
-                <Num
-                  value={h.wireframe_width}
-                  min={0.2}
-                  max={6}
-                  step={0.1}
-                  onChange={(wireframe_width) => onChange({ wireframe_width })}
-                />
-              </label>
-            )}
-          </div>
         </>
       ) : (
         <label className="field">
@@ -440,6 +413,7 @@ export function Export3DDialog({
     show_axes: scene.show_axes,
     show_axis_labels: scene.show_axis_labels,
     show_bounding_box: scene.show_bounding_box,
+    interpolation: "bicubic",
   });
   const patch = (p: Partial<Export3D>) => setSettings((s) => ({ ...s, ...p }));
   return <ExportDialog title="三维场景 · Add to Export" scene settings={settings}

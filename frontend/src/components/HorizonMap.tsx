@@ -544,7 +544,7 @@ export default function HorizonMap({
       {exportOpen && <ExportDialog title="层位地图 · Add to Export" settings={settings}
         onChange={p => setSettings(s => ({...s, ...p}))}
         onClose={onCloseExport} onExport={addToExport} busy={saving}
-        disabled={!data || loading} error={error}
+        disabled={!data || loading} error={error} rendering={false}
         dataset={dataset} onDataset={onDataset} datasetPlaceholder={datasetPlaceholder}
         colorbar={state.colorbar} onColorbar={colorbar => patch({colorbar})} />}
 

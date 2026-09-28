@@ -25,6 +25,7 @@ import {
 
 import { HS, SS, VS, Meta, Section, ExportItem, defaultScene, makeSlice } from "./types";
 import { Toggle, Num, Group } from "./components/Controls";
+import { useOriginalProbe, ProbeReadout } from "./components/Probe";
 import Scene3D, {
   Scene3DHandle,
 } from "./components/SeismicViewer3D/Scene3D";
@@ -78,6 +79,10 @@ const initial: VS = {
     vmax: 10000,
 
     reverse_polarity: false,
+
+    // Interactive browsing defaults: bilinear at viewport resolution.
+    interpolation: "bilinear",
+    adaptive_resolution: true,
   },
 
   horizons: [],
@@ -96,6 +101,10 @@ const initialExport = {
   show_title: true,
 
   format: "png",
+
+  // Publication defaults: bicubic at the export resolution.
+  interpolation: "bicubic",
+  resolution: "export",
 };
 
 /* -------------------------------------------------------------------------- */
@@ -137,6 +146,7 @@ export default function App() {
 
   const sceneRef = useRef<Scene3DHandle>(null);
   const plot = useRef<HTMLDivElement>(null);
+  const plotWrap = useRef<HTMLDivElement>(null);
 
 
   const requestId = useRef(0);
@@ -183,6 +193,8 @@ export default function App() {
   const [dataset, setDataset] = useState("");
 
   const [drag, setDrag] = useState<"zoom" | "pan">("zoom");
+
+  const { reading: probe, probe: runProbe, reset: resetProbe } = useOriginalProbe();
 
   const [sidebar, setSidebar] = useState(true);
 
@@ -404,10 +416,22 @@ export default function App() {
 
     setLoading(true);
 
+    // Adaptive resolution: ask for the pixels the plot area really shows, so a
+    // zoom can pull finer data out of the SEG-Y instead of magnifying a raster.
+    const box = plotWrap.current;
+    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+
+    // Two-stage refresh: the current raster stays visible until the debounce
+    // expires and the viewport-matched window arrives.
     const timer = setTimeout(async () => {
       try {
         const r = await api("/section", {
-          ...json(viewRef.current),
+          ...json({
+            ...viewRef.current,
+            quality: "interactive",
+            target_width: box ? Math.round(box.clientWidth * ratio) : null,
+            target_height: box ? Math.round(box.clientHeight * ratio) : null,
+          }),
           signal: abort.signal,
         });
 
@@ -429,7 +453,7 @@ export default function App() {
           setLoading(false);
         }
       }
-    }, 120);
+    }, 200);
 
     return () => {
       clearTimeout(timer);
@@ -446,12 +470,20 @@ export default function App() {
     view.seismic.vmin,
     view.seismic.vmax,
     view.seismic.reverse_polarity,
+    view.seismic.interpolation,
+    view.seismic.adaptive_resolution,
+    view.x_range,
+    view.time_range,
     revision,
   ]);
 
   /* ------------------------------------------------------------------------ */
   /* Sections                                                                 */
   /* ------------------------------------------------------------------------ */
+
+  useEffect(() => {
+    resetProbe();
+  }, [view.view_type, view.section_number]);
 
   const sections = meta
     ? view.view_type === "inline"
@@ -585,11 +617,12 @@ export default function App() {
         showscale: false,
         zsmooth: false,
 
+        // Only real coordinates here: the displayed amplitude may be an
+        // interpolated render pixel, so the readout below probes the SEG-Y.
         hovertemplate:
           `Inline: ${inline ? view.section_number : "%{x}"}` +
           `<br>Crossline: ${inline ? "%{x}" : view.section_number}` +
           `<br>TWT: %{y:.1f} ms` +
-          `<br>Amplitude: %{z:.3f}` +
           `<extra></extra>`,
       },
     ];
@@ -804,6 +837,29 @@ export default function App() {
         el.removeAllListeners?.(
           "plotly_relayout",
         );
+        el.removeAllListeners?.("plotly_hover");
+
+        // The cursor readout asks the backend for the original sample; the
+        // heatmap may be an interpolated render grid.
+        el.on("plotly_hover", (event: any) => {
+          const point = event?.points?.[0];
+          if (!point) return;
+          const request =
+            viewRef.current.view_type === "inline"
+              ? {
+                  kind: "inline" as const,
+                  position: viewRef.current.section_number,
+                  crossline: point.x,
+                  time: point.y,
+                }
+              : {
+                  kind: "crossline" as const,
+                  position: viewRef.current.section_number,
+                  inline: point.x,
+                  time: point.y,
+                };
+          runProbe(request);
+        });
 
         el.on(
           "plotly_relayout",
@@ -972,7 +1028,12 @@ export default function App() {
         height_px: capture.height_px,
         scale: capture.scale,
         settings: settings3D,
-        state: view,
+        // The captured texture was resampled with the export interpolation, so
+        // the recorded state must match what was actually drawn.
+        state: {
+          ...view,
+          seismic: { ...view.seismic, interpolation: settings3D.interpolation },
+        },
       });
     });
   }
@@ -1624,6 +1685,60 @@ export default function App() {
                   </label>
                 </div>
               )}
+
+              <div
+                className="segmented"
+                role="group"
+                aria-label="插值方式"
+              >
+                {(
+                  [
+                    ["nearest", "Nearest"],
+                    ["bilinear", "Bilinear"],
+                    ["bicubic", "Bicubic"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    className={
+                      view.seismic.interpolation ===
+                      value
+                        ? "active"
+                        : ""
+                    }
+                    aria-pressed={
+                      view.seismic.interpolation ===
+                      value
+                    }
+                    onClick={() =>
+                      seismic({
+                        interpolation:
+                          value,
+                      })
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {view.view_mode ===
+                "2d" && (
+                <Toggle
+                  label="自适应分辨率"
+                  checked={
+                    view.seismic
+                      .adaptive_resolution
+                  }
+                  onChange={(
+                    adaptive_resolution,
+                  ) =>
+                    seismic({
+                      adaptive_resolution,
+                    })
+                  }
+                />
+              )}
             </Group>
 
             {/* ------------------------------------------------------------ */}
@@ -2041,55 +2156,6 @@ export default function App() {
                 />
               )}
             </button>
-
-            <b>
-              {meta
-                ? meta.filename
-                : "未加载数据"}
-            </b>
-          </div>
-
-          {/* -------------------------------------------------------------- */}
-          {/* Heading                                                        */}
-          {/* -------------------------------------------------------------- */}
-
-          <div className="viewer-heading">
-            <div>
-              <h1>
-                {view.view_mode === "map" ? "Horizon Map" : meta
-                  ? view.view_mode ===
-                    "3d"
-                    ? "3D 视图"
-                    : `${
-                        view.view_type ===
-                        "inline"
-                          ? "Inline"
-                          : "Crossline"
-                      } ${
-                        view.section_number
-                      }`
-                  : "地震剖面"}
-              </h1>
-
-              {meta && (
-                <p>
-                  {
-                    meta.inlines
-                      .length
-                  }{" "}
-                  Inlines ·{" "}
-                  {
-                    meta.crosslines
-                      .length
-                  }{" "}
-                  Crosslines ·{" "}
-                  {
-                    meta.sample_interval
-                  }{" "}
-                  ms
-                </p>
-              )}
-            </div>
           </div>
 
           {/* -------------------------------------------------------------- */}
@@ -2221,7 +2287,7 @@ export default function App() {
                 {/* Plot                                                     */}
                 {/* -------------------------------------------------------- */}
 
-                <div className="plot-wrap">
+                <div className="plot-wrap" ref={plotWrap}>
                   {section ? (
                     <div
                       ref={plot}
@@ -2302,7 +2368,13 @@ export default function App() {
                 {/* Viewer bottom                                            */}
                 {/* -------------------------------------------------------- */}
 
+                {/* -------------------------------------------------------- */}
+                {/* Viewer bottom                                            */}
+                {/* -------------------------------------------------------- */}
+
                 <div className="viewer-bottom">
+                  <ProbeReadout reading={probe} />
+
                   <div className="legend">
                     {view.horizons
                       .filter(

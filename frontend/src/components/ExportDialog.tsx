@@ -6,9 +6,10 @@ type Props = {
   title:string; settings:any; onChange:(patch:any)=>void; onClose:()=>void;
   onExport:()=>void; busy:boolean; disabled?:boolean; error?:string;
   scene?:boolean; colorbar?:boolean; onColorbar?:(value:boolean)=>void;
+  rendering?:boolean;
   dataset:string; onDataset:(value:string)=>void; datasetPlaceholder?:string;
 };
-export default function ExportDialog({title,settings:s,onChange:patch,onClose,onExport,busy,disabled,error,scene=false,colorbar,onColorbar,dataset,onDataset,datasetPlaceholder}:Props) {
+export default function ExportDialog({title,settings:s,onChange:patch,onClose,onExport,busy,disabled,error,scene=false,colorbar,onColorbar,rendering=true,dataset,onDataset,datasetPlaceholder}:Props) {
   const axes=s.show_axes!==false;
   const pixels=scene?exportPixels(s):null;
   const overBudget=!!pixels&&pixels.pixels[0]*pixels.pixels[1]>MAX_SCENE_PIXELS;
@@ -26,11 +27,23 @@ export default function ExportDialog({title,settings:s,onChange:patch,onClose,on
           ? `三维栅格渲染上限为 ${MAX_SCENE_PIXELS/1_000_000} 百万像素（当前约 ${(pixels.pixels[0]*pixels.pixels[1]/1_000_000).toFixed(1)} 百万），请减小尺寸或降低 DPI。`
           : `输出光栅 ${pixels.pixels[0]} × ${pixels.pixels[1]} px（${pixels.scale}× 采样）。`}</p>}
         </section>
+        {rendering&&<section><h3>渲染质量 · Rendering Quality</h3>
+          <label className="field">插值方式 · Interpolation
+            <select value={s.interpolation} onChange={e=>patch({interpolation:e.target.value})}>
+              {[["bilinear","Bilinear"],["bicubic","Bicubic"],["nearest","Nearest"]].map(([v,l])=><option key={v} value={v}>{l}</option>)}
+            </select>
+          </label>
+          {!scene&&<label className="field">分辨率 · Resolution
+            <select value={s.resolution} onChange={e=>patch({resolution:e.target.value})}>
+              <option value="export">Match Export Resolution</option>
+              <option value="view">Use View Resolution</option>
+            </select>
+          </label>}
+        </section>}
         <section><h3>数据集 · Dataset</h3>
           <label className="field">项目 / 数据集名称
             <input aria-label="项目或数据集名称" type="text" value={dataset} placeholder={datasetPlaceholder} onChange={e=>onDataset(e.target.value)}/>
           </label>
-          <p className="export-note">用于文件名与 ZIP 名称；留空时使用 SEG-Y 文件名。</p>
         </section>
         <section><h3>文字样式</h3><div className="field-row"><label>字体<select value={s.font} onChange={e=>patch({font:e.target.value})}>{['Times New Roman','Arial','DejaVu Sans','DejaVu Serif'].map(f=><option key={f}>{f}</option>)}</select></label><label>字号 · pt<Num value={s.font_size} min={5} max={30} onChange={font_size=>patch({font_size})}/></label></div></section>
         <section><h3>图面元素</h3><div className="export-toggles">

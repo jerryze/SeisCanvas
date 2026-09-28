@@ -42,3 +42,23 @@ def clean_export_session():
     export_queue.reset()
     yield
     export_queue.reset()
+
+@pytest.fixture
+def wide_cube(tmp_path):
+    """A 5 inline x 20 crossline x 20 sample cube for windowing tests."""
+    path = tmp_path / "wide.segy"
+    spec = segyio.spec()
+    spec.sorting = 2
+    spec.format = 5
+    spec.samples = list(range(200, 200 + 4 * 20, 4))
+    spec.ilines = list(range(10, 10 + 2 * 5, 2))
+    spec.xlines = list(range(30, 30 + 3 * 20, 3))
+    with segyio.create(str(path), spec) as f:
+        k = 0
+        for il in spec.ilines:
+            for xl in spec.xlines:
+                f.header[k] = {189: il, 21: xl, 193: xl, 109: 200, 117: 4000}
+                f.trace[k] = np.arange(len(spec.samples), dtype=np.float32) + il * 100 + xl
+                k += 1
+        f.bin[segyio.BinField.Interval] = 4000
+    return Survey(path)

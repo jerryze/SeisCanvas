@@ -180,7 +180,7 @@ def test_surface_defaults_and_import_range(tmp_path):
     style = Horizon3DStyle(id="test", name="test")
     assert style.color_by == "twt" and style.horizon_colormap == "petrel"
     assert style.smooth_shading and style.lighting
-    assert style.opacity == 1 and style.surface_mode == "surface"
+    assert style.opacity == 1
     h = make_horizon(tmp_path)
     imported = server.add_horizon(h)
     try:
@@ -189,7 +189,7 @@ def test_surface_defaults_and_import_range(tmp_path):
         server.horizons.pop(imported["id"])
 
 
-def test_preview_reads_only_selected_samples(cube, monkeypatch):
+def test_slice_reads_stay_bounded_and_never_load_the_native_grid(cube, monkeypatch):
     import backend.preview as preview
     real_read = preview.read_samples
     calls = []
@@ -198,14 +198,44 @@ def test_preview_reads_only_selected_samples(cube, monkeypatch):
         return real_read(survey, ids, samples)
     monkeypatch.setattr(preview, 'read_samples', read)
     monkeypatch.setattr(cube, 'section', lambda *a: pytest.fail('full section read'))
-    plane, values = slice_data(cube, 'time', 204, 2)
-    assert calls == [(4, 1)]
+    # The native slice is small, so it is read once and area-averaged down.
+    plane, values = slice_data(cube, 'time', 204, 2, 'bilinear')
+    assert calls == [(6, 1)]
     assert values.shape == (2, 2)
-    assert plane['amplitude'] == [[1031, 1039], [1231, 1239]]
-    slice_data(cube, 'time', 204, 2)
-    assert len(calls) == 1
-    slice_data(cube, 'inline', 12, 2)
-    assert calls[-1] == (2, 2)
+    assert plane['native_shape'] == [2, 3] and plane['render_shape'] == [2, 3]
+    assert plane['interpolation'] == 'bilinear'
+    slice_data(cube, 'time', 204, 2, 'bilinear')
+    assert len(calls) == 1  # cached per method
+    slice_data(cube, 'inline', 12, 2, 'bilinear')
+    assert calls[-1] == (3, 4)  # 3 traces x 4 samples of the native inline slice
+
+
+def test_slice_downsampling_is_antialiased_and_nearest_keeps_real_samples(cube):
+    exact, nearest = slice_data(cube, 'time', 204, 2, 'nearest')
+    assert nearest.shape == (2, 2)
+    assert exact['amplitude'] == [[1031, 1039], [1231, 1239]]
+    assert set(np.unique(nearest)).issubset({1031.0, 1039.0, 1231.0, 1239.0})
+    smooth, bilinear = slice_data(cube, 'time', 204, 2, 'bilinear')
+    assert bilinear.shape == (2, 2)
+    assert not np.array_equal(bilinear, nearest)
+    assert bilinear.min() >= nearest.min() and bilinear.max() <= nearest.max()
+
+
+def test_slice_read_falls_back_to_the_texture_grid_when_budget_is_tight(cube, monkeypatch):
+    import backend.preview as preview
+    import backend.scene as scene
+    calls = []
+    real_read = preview.read_samples
+    def read(survey, ids, samples):
+        calls.append(np.asarray(ids).size)
+        return real_read(survey, ids, samples)
+    monkeypatch.setattr(preview, 'read_samples', read)
+    monkeypatch.setattr(scene, 'SLICE_NATIVE_BUDGET', 2)
+    monkeypatch.setattr(scene, 'SLICE_SUPERSAMPLE_BUDGET', 4)
+    plane, values = slice_data(cube, 'time', 204, 2, 'bilinear')
+    assert calls == [4]  # exactly the texture cells, no supersample
+    assert values.shape == (2, 2)
+    assert plane['interpolation'] == 'bilinear'
 
 
 def test_horizon_geometry_is_lazy(tmp_path):

@@ -27,7 +27,6 @@ export type Mesh = {
   i: number[];
   j: number[];
   k: number[];
-  edges: number[][];
   native_shape: number[];
   preview_shape: number[];
 };
@@ -90,9 +89,10 @@ export function buildTraces(
   const traces: any[] = [];
   const s = view.seismic;
   const colors = maps[s.colormap] || [
-    [0, "#000080"],
+    // Fallback until the catalog arrives: the Pos / 0 / Neg reference ramp.
+    [0, "#23238e"],
     [0.5, "#ffffff"],
-    [1, "#800000"],
+    [1, "#8c0000"],
   ];
   const colorscale = s.reverse_colormap
     ? colors.map((c, i) => [c[0], colors[colors.length - 1 - i][1]])
@@ -142,6 +142,9 @@ export function buildTraces(
       opacity: state.opacity,
       connectgaps: false,
       name: `${plane.kind} ${plane.position}`,
+      // The texture may be resampled, so hover coordinates are resolved back
+      // to the original SEG-Y sample by the probe readout.
+      meta: { probe: { kind: plane.kind, position: plane.position } },
       lighting: {
         ambient: 1,
         diffuse: 0,
@@ -150,7 +153,7 @@ export function buildTraces(
         fresnel: 0,
       },
       hovertemplate:
-        "Inline: %{y}<br>Crossline: %{x}<br>TWT: %{z:.1f} ms<br>Amplitude: %{surfacecolor:.3f}<extra>" +
+        "Inline: %{y}<br>Crossline: %{x}<br>TWT: %{z:.1f} ms<extra>" +
         plane.kind +
         " " +
         plane.position +
@@ -191,9 +194,7 @@ export function buildTraces(
       const twtColor = h.color_by !== "solid";
       // A constant-time horizon uses the middle color, with a nonzero scale.
       const padding = tmin === tmax ? Math.max(0.5, Math.abs(tmin) * 1e-6) : 0;
-      if (h.surface_mode !== "wireframe")
-        traces.push({
-          type: "mesh3d",
+      traces.push({          type: "mesh3d",
           x: mesh.x,
           y: mesh.y,
           z: mesh.z,
@@ -228,26 +229,6 @@ export function buildTraces(
           showlegend: false,
           hovertemplate: `${safe(h.name)}<br>Inline: %{y}<br>Crossline: %{x}<br>TWT: %{z:.1f} ms<extra></extra>`,
         });
-      if (h.surface_mode !== "surface") {
-        const x: (number | null)[] = [],
-          y: (number | null)[] = [],
-          z: (number | null)[] = [];
-        for (const [a, b] of mesh.edges) {
-          x.push(mesh.x[a], mesh.x[b], null);
-          y.push(mesh.y[a], mesh.y[b], null);
-          z.push(mesh.z[a], mesh.z[b], null);
-        }
-        traces.push(
-          line(
-            x,
-            y,
-            z,
-            h.surface_mode === "wireframe" ? h.color : "#233840",
-            (h.wireframe_width * 4) / 3,
-            { opacity: h.opacity, meta: { depthLayer: 1 } },
-          ),
-        );
-      }
     }
     if (h.display_mode === "slice_intersections")
       for (const pts of hd.intersections || []) {

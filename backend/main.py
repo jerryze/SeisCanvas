@@ -1,6 +1,8 @@
 from pathlib import Path
+from contextlib import asynccontextmanager
 from typing import Literal
 from urllib.parse import quote
+import numpy as np
 from pydantic import BaseModel, Field
 from backend.file_picker import choose_segy
 from uuid import uuid4
@@ -21,9 +23,12 @@ from backend.core import (
     CMAPS,
     get_cmap,
     horizon_preview,
+    window_indices,
 )
 from backend.models import ViewState, ExportRequest, Horizon3DStyle, ViewState3D
 from backend.scene import slice_data, horizon_mesh, horizon_intersection, scene_data, indices
+from backend import resample
+from backend.preview import preview_ids, read_samples
 
 from backend.horizon_map import HorizonMapState, HorizonMapExport, map_data, render_map
 from backend import export_queue
@@ -37,7 +42,16 @@ from backend.export_service import (
 
 ROOT = Path(__file__).resolve().parents[1]
 HORIZON_SUFFIXES = {".txt", ".dat"}
-app = FastAPI(title="SeisCanvas")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Drop the temporary export session on any graceful shutdown."""
+    yield
+    export_queue.shutdown()
+
+
+app = FastAPI(title="SeisCanvas", lifespan=lifespan)
 # Local single-user application. Serialize mutations and section/export reads.
 lock = RLock()
 workspace = tempfile.TemporaryDirectory(prefix="seiscanvas-")
@@ -333,27 +347,144 @@ def delete_horizon(key: str):
     return {"ok": True}
 
 
+class SectionRequest(ViewState):
+    """A viewer request: the visible range comes from ``x_range``/``time_range``."""
+
+    quality: Literal["preview", "interactive", "publication"] = "interactive"
+    interpolation: Literal["nearest", "bilinear", "bicubic"] | None = None
+    target_width: int | None = Field(None, ge=8, le=8000)
+    target_height: int | None = Field(None, ge=8, le=8000)
+
+
+class SampleRequest(BaseModel):
+    """Probe the original SEG-Y for the sample under the cursor."""
+
+    kind: Literal["inline", "crossline", "time"]
+    position: float
+    inline: float | None = None
+    crossline: float | None = None
+    time: float | None = None
+
+
+def nearest_index(coordinates, value):
+    return int(np.argmin(np.abs(np.asarray(coordinates, dtype=float) - float(value))))
+
+
 @app.post("/api/section")
-def section(state: ViewState):
+def section(req: SectionRequest):
     try:
         with lock:
             s = require_survey()
-            x, t, z = s.section(state.view_type, state.section_number)
-            _, lo, hi = amplitude(z, state.seismic)
-            # Bound browser JSON and heatmap memory; export still uses native data.
-            rows, cols = indices(len(t), 1200), indices(len(x), 1600)
+            x, t, z = s.section(req.view_type, req.section_number)
+            # Amplitude clipping, hover and picking always use the original
+            # section; only the raster below is a rendering artefact.
+            _, lo, hi = amplitude(z, req.seismic)
+            x0, x1 = window_indices(x, req.x_range)
+            t0, t1 = window_indices(t, req.time_range)
+            window = np.ascontiguousarray(z[t0 : t1 + 1, x0 : x1 + 1])
+            native_height, native_width = window.shape
+            budget = resample.QUALITY_BUDGETS[req.quality]
+            method = resample.method(
+                req.interpolation
+                if req.interpolation is not None
+                else req.seismic.interpolation,
+                resample.QUALITY_INTERPOLATION[req.quality],
+            )
+            adaptive = req.seismic.adaptive_resolution or req.quality != "interactive"
+            if adaptive:
+                width, height = resample.fit_target(
+                    native_width,
+                    native_height,
+                    req.target_width,
+                    req.target_height,
+                    budget=budget,
+                )
+            else:
+                width, height = resample.fit_target(
+                    native_width, native_height, budget=budget, max_upscale=1.0
+                )
+            key = (
+                "render", req.view_type, req.section_number, x0, x1, t0, t1,
+                width, height, method, req.seismic.reverse_polarity,
+            )
+            raster = s.render_cache.get(key)
+            if raster is None:
+                raster = resample.resample(window, width, height, method)
+                s.render_cache[key] = raster
+            else:
+                s.render_cache.move_to_end(key)
             return {
-                "x": x[cols].tolist(),
-                "time": t[rows].tolist(),
-                "z": z[rows[:, None], cols[None, :]].tolist(),
-                "preview_shape": [len(rows), len(cols)],
-                "native_shape": list(z.shape),
+                "x": np.linspace(float(x[x0]), float(x[x1]), width).tolist(),
+                "time": np.linspace(float(t[t0]), float(t[t1]), height).tolist(),
+                # Display pixels only; hover, picking and clipping read the
+                # original amplitudes (see /api/sample).
+                "z": resample.display_values(
+                    raster,
+                    min(lo, hi),
+                    max(lo, hi),
+                    method,
+                    resampled=(width, height) != (native_width, native_height),
+                ),
                 "vmin": lo,
                 "vmax": hi,
+                "native_shape": [len(t), len(x)],
+                "render_shape": [native_height, native_width],
+                "preview_shape": [height, width],
+                "interpolation": method,
+                "adaptive": adaptive,
+                "quality": req.quality,
+                "window": {
+                    "x_range": [float(x[x0]), float(x[x1])],
+                    "time_range": [float(t[t0]), float(t[t1])],
+                },
                 "horizons": {
-                    key: h.section(state.view_type, state.section_number)
+                    key: h.section(req.view_type, req.section_number)
                     for key, h in horizons.items()
                 },
+            }
+    except ValueError as e:
+        raise error(e)
+
+
+@app.post("/api/sample")
+def sample(req: SampleRequest):
+    """Return the original amplitude nearest to a cursor position."""
+    try:
+        with lock:
+            s = require_survey()
+            if req.kind == "time":
+                if req.inline is None or req.crossline is None:
+                    raise ValueError("A time slice needs inline and crossline.")
+                row = nearest_index(s.times, req.position)
+                snapped_time = float(s.times[row])
+                snapped_inline = float(s.inlines[nearest_index(s.inlines, req.inline)])
+                snapped_crossline = float(
+                    s.crosslines[nearest_index(s.crosslines, req.crossline)]
+                )
+                trace = preview_ids(s, [snapped_inline], [snapped_crossline])
+                value = read_samples(s, trace, [row]).reshape(-1)[0]
+                position = snapped_time
+            else:
+                axis = s.inlines if req.kind == "inline" else s.crosslines
+                position = float(axis[nearest_index(axis, req.position)])
+                horizontal = req.crossline if req.kind == "inline" else req.inline
+                if horizontal is None or req.time is None:
+                    raise ValueError("A section needs a trace and a time value.")
+                x, t, z = s.section(req.kind, int(position))
+                column = nearest_index(x, horizontal)
+                row = nearest_index(t, req.time)
+                value = z[row, column]
+                snapped_time = float(t[row])
+                snapped_inline = float(position) if req.kind == "inline" else float(x[column])
+                snapped_crossline = float(x[column]) if req.kind == "inline" else float(position)
+            return {
+                "kind": req.kind,
+                "position": position,
+                "inline": snapped_inline,
+                "crossline": snapped_crossline,
+                "time": snapped_time,
+                "amplitude": float(value) if np.isfinite(value) else None,
+                "source": "original",
             }
     except ValueError as e:
         raise error(e)

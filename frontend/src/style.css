@@ -759,7 +759,7 @@ main {
    ========================================================================== */
 
 .breadcrumb {
-  height: 49px;
+  height: 40px;
 
   display: flex;
   align-items: center;
@@ -772,58 +772,8 @@ main {
   font-size: 9.5px;
 }
 
-.breadcrumb b {
-  max-width: 500px;
-
-  overflow: hidden;
-
-  color: #667589;
-
-  font-weight: 500;
-
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .breadcrumb .icon {
   margin-left: -5px;
-}
-
-/* ==========================================================================
-   Viewer heading
-   ========================================================================== */
-
-.viewer-heading {
-  min-height: 54px;
-
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-
-  flex-shrink: 0;
-
-  margin: 1px 0 14px;
-}
-
-.viewer-heading h1 {
-  margin: 0;
-
-  color: #1d2a3b;
-
-  font:
-    600 21px "Manrope",
-    "PingFang SC",
-    sans-serif;
-
-  letter-spacing: -0.35px;
-}
-
-.viewer-heading p {
-  margin-top: 6px;
-
-  color: var(--text-muted);
-
-  font-size: 9.5px;
 }
 
 /* ==========================================================================
@@ -1528,12 +1478,13 @@ main {
 }
 
 .horizon-3d-controls .field-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
+  align-items: start;
 }
 
 .horizon-3d-controls .field-row > .field {
-  flex: 1;
   min-width: 0;
 }
 
@@ -1774,16 +1725,7 @@ main {
   }
 
   .breadcrumb {
-    height: 42px;
-  }
-
-  .viewer-heading {
-    min-height: 48px;
-    margin-bottom: 10px;
-  }
-
-  .viewer-heading h1 {
-    font-size: 19px;
+    height: 38px;
   }
 
   .viewer-toolbar {
@@ -1904,8 +1846,7 @@ main {
 .horizon-3d-controls { gap: 9px; padding-bottom: 12px; }
 .horizon-3d-controls small { font-size: 10px; line-height: 1.6; color: #78889d; }
 .horizon-3d-controls .control-note:first-child { padding: 9px 10px; background: #edf2f8; border-radius: 6px; color: #526a88; font-variant-numeric: tabular-nums; }
-.viewer-heading p { color: #7b899b; font-size: 11px; line-height: 1.6; }
-.breadcrumb { font-size: 11px; color: #7b899b; }
+.breadcrumb { font-size: 11px; }
 .viewer-toolbar { gap: 10px; flex-wrap: wrap; min-height: 46px; padding-block: 8px; }
 .viewer-toolbar > b { font-size: 12px; color: #405875; font-weight: 600; }
 .tools > button { min-height: 30px; padding: 6px 9px; border-radius: 6px; background: #f2f5f9; color: #60758f; font-size: 11px; }
@@ -2287,4 +2228,49 @@ main {
   white-space: pre-line;
   text-align: left;
   line-height: 1.6;
+}
+
+/* ==========================================================================
+   Cursor probe (original SEG-Y readout)
+   ========================================================================== */
+
+.probe-readout {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  padding: 5px 9px;
+
+  border-radius: 6px;
+  background: #f0f4f9;
+  color: #52667f;
+
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.probe-readout.idle {
+  color: #9aa6b5;
+}
+
+.probe-readout b {
+  color: #2b3a4d;
+  font-weight: 600;
+}
+
+.probe-readout .probe-amplitude {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+
+  padding-left: 12px;
+
+  border-left: 1px solid #dbe3ec;
+}
+
+.probe-readout em {
+  font-style: normal;
+  font-size: 9px;
+  color: #8b98a8;
 }

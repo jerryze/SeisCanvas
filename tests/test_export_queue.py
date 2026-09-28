@@ -401,6 +401,9 @@ def test_export_all_builds_a_categorised_zip_with_a_manifest(client):
         assert figures[0]["width_mm"] == 180 and figures[0]["dpi"] == 600
         assert figures[0]["colorbar_range"][0] < figures[0]["colorbar_range"][1]
         assert figures[0]["render"]["font"] == "Times New Roman"
+        # Publication rendering defaults travel with the queued figure.
+        assert figures[0]["render"]["interpolation"] == "bicubic"
+        assert figures[0]["render"]["resolution"] == "export"
         assert figures[1]["crossline"] == 30
         assert figures[2]["contour_interval"] == 10 and figures[2]["colorbar"] is True
         assert figures[3]["slices"]["time"] == [204]

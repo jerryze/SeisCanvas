@@ -84,7 +84,6 @@ export default function ExportQueue({
             <div className="queue-empty">
               <Package size={26} strokeWidth={1.5} />
               <p>队列为空</p>
-              <span>调整视图后点击 Add to Export，渲染结果会暂存在这里。</span>
             </div>
           )}
           {items.map((item) => (
@@ -191,7 +190,7 @@ export default function ExportQueue({
                 <X size={20} />
               </button>
             </div>
-            <p className="export-note">{preview.detail} · 与 ZIP 内文件完全一致</p>
+            <p className="export-note">{preview.detail}</p>
             {preview.format === "pdf" ? (
               <iframe className="queue-preview-frame" src={previewUrl(preview)} title={preview.filename} />
             ) : (
