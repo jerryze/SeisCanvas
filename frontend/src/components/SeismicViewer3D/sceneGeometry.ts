@@ -1,4 +1,5 @@
 import type { VS, Export3D } from "../../types";
+import { PLOT_DASH } from "../plotStyle";
 export type SliceData = {
   id: string;
   kind: "inline" | "crossline" | "time";
@@ -43,12 +44,7 @@ export const PETREL_COLORMAP = [
   [3 / 7, "#00c040"], [4 / 7, "#00ffff"], [5 / 7, "#0000ff"],
   [6 / 7, "#8000c0"], [1, "#ff00ff"],
 ];
-const dash: Record<string, string> = {
-  solid: "solid",
-  dashed: "dash",
-  dotted: "dot",
-  dashdot: "dashdot",
-};
+// scatter3d supports a reduced marker set (no triangle); keep 3D-specific symbols here.
 const symbols: Record<string, string> = {
   circle: "circle",
   square: "square",
@@ -261,7 +257,7 @@ export function buildTraces(
             line: {
               color: "#000",
               width: ((h.line.width + 2 * h.outline.width) * 4) / 3,
-              dash: dash[h.line.style],
+              dash: PLOT_DASH[h.line.style],
             },
             hoverinfo: "skip",
           });
@@ -277,7 +273,7 @@ export function buildTraces(
           line: {
             color: h.color,
             width: (h.line.width * 4) / 3,
-            dash: dash[h.line.style],
+            dash: PLOT_DASH[h.line.style],
           },
           marker: {
             color: h.color,

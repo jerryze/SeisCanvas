@@ -1,9 +1,7 @@
 from pathlib import Path
 from contextlib import asynccontextmanager
-from typing import Literal
 from urllib.parse import quote
 import numpy as np
-from pydantic import BaseModel, Field
 from backend.file_picker import choose_segy
 from uuid import uuid4
 import shutil
@@ -14,27 +12,33 @@ from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from matplotlib.colors import to_hex
 from matplotlib import font_manager
-from backend.export3d import SceneExportRequest, package_scene
-from backend.core import (
-    Survey,
-    Horizon,
-    amplitude,
-    render,
-    CMAPS,
-    get_cmap,
-    horizon_preview,
-    window_indices,
-)
-from backend.models import ViewState, ExportRequest, Horizon3DStyle, ViewState3D
-from backend.scene import slice_data, horizon_mesh, horizon_intersection, scene_data, indices
-from backend import resample
-from backend.preview import preview_ids, read_samples
-
-from backend.horizon_map import HorizonMapState, HorizonMapExport, map_data, render_map
-from backend import export_queue
-from backend.export_service import (
+from backend.export3d import package_scene
+from backend.segy import Survey
+from backend.horizon import Horizon, horizon_preview
+from backend.rendering import render
+from backend.style import CMAPS, get_cmap
+from backend.models import (
+    ExportRequest,
+    Horizon3DStyle,
+    HorizonMapExport,
+    HorizonMapState,
+    LocalHorizonRequest,
+    LocalSegyRequest,
+    PickSegyRequest,
     QueueAddRequest,
     RenameRequest,
+    SampleRequest,
+    SceneExportRequest,
+    SectionRequest,
+    ViewState3D,
+)
+from backend.scene import slice_data, horizon_mesh, horizon_intersection, scene_data
+from backend.section_service import interactive_section
+from backend.preview import preview_ids, read_samples
+
+from backend.horizon_map import map_data, render_map
+from backend import export_queue
+from backend.export_service import (
     add_2d,
     add_3d,
     add_map,
@@ -97,7 +101,7 @@ def horizon_map_export(req: HorizonMapExport):
             raise HTTPException(404, "Horizon not found.")
         try:
             content = render_map(horizons[req.state.horizon], req.state, req.settings)
-            return Response(content, media_type={"png": "image/png", "pdf": "application/pdf", "svg": "image/svg+xml"}[req.settings.format])
+            return Response(content, media_type=export_queue.MIME[req.settings.format])
         except ValueError as e:
             raise error(e)
 
@@ -140,13 +144,6 @@ def example(ilbyte: int = 189, xlbyte: int = 21):
         raise error(e)
 
 
-class LocalSegyRequest(BaseModel):
-    geometry_mode: Literal["auto", "regular"] = "auto"
-    path: str = Field(min_length=1)
-    ilbyte: int = Field(189, ge=1, le=237)
-    xlbyte: int = Field(21, ge=1, le=237)
-
-
 import_progress = {}
 progress_lock = RLock()
 
@@ -155,13 +152,6 @@ progress_lock = RLock()
 def segy_progress(job_id: str):
     with progress_lock:
         return import_progress.get(job_id, {"percent": 0, "stage": "等待文件选择", "status": "waiting"})
-
-
-class PickSegyRequest(BaseModel):
-    geometry_mode: Literal["auto", "regular"] = "auto"
-    job_id: str | None = Field(None, pattern=r"^[a-zA-Z0-9-]{1,64}$")
-    ilbyte: int = Field(189, ge=1, le=237)
-    xlbyte: int = Field(21, ge=1, le=237)
 
 
 @app.post("/api/segy/pick")
@@ -249,13 +239,6 @@ def upload_segy(
 
 # Only paths selected in the native dialog can be imported through this route.
 horizon_selections = {}
-
-
-class LocalHorizonRequest(BaseModel):
-    token: str
-    inline_column: int = Field(default=0, ge=0)
-    xline_column: int = Field(default=1, ge=0)
-    time_column: int = Field(default=2, ge=0)
 
 
 @app.post("/api/horizons/pick")
@@ -347,25 +330,6 @@ def delete_horizon(key: str):
     return {"ok": True}
 
 
-class SectionRequest(ViewState):
-    """A viewer request: the visible range comes from ``x_range``/``time_range``."""
-
-    quality: Literal["preview", "interactive", "publication"] = "interactive"
-    interpolation: Literal["nearest", "bilinear", "bicubic"] | None = None
-    target_width: int | None = Field(None, ge=8, le=8000)
-    target_height: int | None = Field(None, ge=8, le=8000)
-
-
-class SampleRequest(BaseModel):
-    """Probe the original SEG-Y for the sample under the cursor."""
-
-    kind: Literal["inline", "crossline", "time"]
-    position: float
-    inline: float | None = None
-    crossline: float | None = None
-    time: float | None = None
-
-
 def nearest_index(coordinates, value):
     return int(np.argmin(np.abs(np.asarray(coordinates, dtype=float) - float(value))))
 
@@ -374,74 +338,7 @@ def nearest_index(coordinates, value):
 def section(req: SectionRequest):
     try:
         with lock:
-            s = require_survey()
-            x, t, z = s.section(req.view_type, req.section_number)
-            # Amplitude clipping, hover and picking always use the original
-            # section; only the raster below is a rendering artefact.
-            _, lo, hi = amplitude(z, req.seismic)
-            x0, x1 = window_indices(x, req.x_range)
-            t0, t1 = window_indices(t, req.time_range)
-            window = np.ascontiguousarray(z[t0 : t1 + 1, x0 : x1 + 1])
-            native_height, native_width = window.shape
-            budget = resample.QUALITY_BUDGETS[req.quality]
-            method = resample.method(
-                req.interpolation
-                if req.interpolation is not None
-                else req.seismic.interpolation,
-                resample.QUALITY_INTERPOLATION[req.quality],
-            )
-            adaptive = req.seismic.adaptive_resolution or req.quality != "interactive"
-            if adaptive:
-                width, height = resample.fit_target(
-                    native_width,
-                    native_height,
-                    req.target_width,
-                    req.target_height,
-                    budget=budget,
-                )
-            else:
-                width, height = resample.fit_target(
-                    native_width, native_height, budget=budget, max_upscale=1.0
-                )
-            key = (
-                "render", req.view_type, req.section_number, x0, x1, t0, t1,
-                width, height, method, req.seismic.reverse_polarity,
-            )
-            raster = s.render_cache.get(key)
-            if raster is None:
-                raster = resample.resample(window, width, height, method)
-                s.render_cache[key] = raster
-            else:
-                s.render_cache.move_to_end(key)
-            return {
-                "x": np.linspace(float(x[x0]), float(x[x1]), width).tolist(),
-                "time": np.linspace(float(t[t0]), float(t[t1]), height).tolist(),
-                # Display pixels only; hover, picking and clipping read the
-                # original amplitudes (see /api/sample).
-                "z": resample.display_values(
-                    raster,
-                    min(lo, hi),
-                    max(lo, hi),
-                    method,
-                    resampled=(width, height) != (native_width, native_height),
-                ),
-                "vmin": lo,
-                "vmax": hi,
-                "native_shape": [len(t), len(x)],
-                "render_shape": [native_height, native_width],
-                "preview_shape": [height, width],
-                "interpolation": method,
-                "adaptive": adaptive,
-                "quality": req.quality,
-                "window": {
-                    "x_range": [float(x[x0]), float(x[x1])],
-                    "time_range": [float(t[t0]), float(t[t1])],
-                },
-                "horizons": {
-                    key: h.section(req.view_type, req.section_number)
-                    for key, h in horizons.items()
-                },
-            }
+            return interactive_section(require_survey(), horizons, req)
     except ValueError as e:
         raise error(e)
 
@@ -496,9 +393,7 @@ def export(req: ExportRequest):
         with lock:
             data = render(require_survey(), horizons, req.state, req.settings)
         fmt = req.settings.format
-        mime = {"png": "image/png", "pdf": "application/pdf", "svg": "image/svg+xml"}[
-            fmt
-        ]
+        mime = export_queue.MIME[fmt]
         return Response(
             data,
             media_type=mime,
@@ -517,11 +412,7 @@ def export_scene(req: SceneExportRequest):
             output = package_scene(req)
         return Response(
             output,
-            media_type={
-                "png": "image/png",
-                "pdf": "application/pdf",
-                "svg": "image/svg+xml",
-            }[req.format],
+            media_type=export_queue.MIME[req.format],
             headers={
                 "Content-Disposition": f'attachment; filename="SeisCanvas_3D.{req.format}"'
             },

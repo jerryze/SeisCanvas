@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Plotly from "plotly.js-dist-min";
 import type { HS } from "../types";
+import type { ExportDialogSettings } from "../types";
+import { api } from "../api/client";
 import { Num, Toggle } from "./Controls";
 
 type State = {
@@ -72,7 +74,7 @@ export default function HorizonMap({
     [loading, setLoading] = useState(false),
     [saving, setSaving] = useState(false),
     [drag, setDrag] = useState<"zoom" | "pan">("zoom");
-  const [settings, setSettings] = useState({
+  const [settings, setSettings] = useState<ExportDialogSettings>({
     format: "png",
     width: 180,
     height: 140,
@@ -115,19 +117,17 @@ export default function HorizonMap({
     if (!state.horizon) return;
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch("/api/horizon-map", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: query,
-          signal: abort.signal,
-        });
+        const res = await api(
+          "/horizon-map",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: query,
+            signal: abort.signal,
+          },
+          "请检查色彩范围与等值线间隔。",
+        );
         const result = await res.json();
-        if (!res.ok)
-          throw Error(
-            typeof result.detail === "string"
-              ? result.detail
-              : "请检查色彩范围与等值线间隔。",
-          );
         if (active) {
           setData(result);
           setError("");

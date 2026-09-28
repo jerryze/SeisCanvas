@@ -9,26 +9,6 @@ from backend.models import ViewState, Seismic, Settings, HorizonStyle
 import backend.main as server
 
 
-@pytest.fixture
-def cube(tmp_path):
-    path = tmp_path / "tiny.segy"
-    spec = segyio.spec()
-    spec.sorting = 2
-    spec.format = 5
-    spec.samples = [200, 204, 208, 212]
-    spec.ilines = [10, 12]
-    spec.xlines = [30, 33, 38]
-    with segyio.create(str(path), spec) as f:
-        k = 0
-        for il in spec.ilines:
-            for xl in spec.xlines:
-                f.header[k] = {189: il, 21: xl, 193: xl, 109: 200, 117: 4000}
-                f.trace[k] = np.arange(4, dtype=np.float32) + il * 100 + xl
-                k += 1
-        f.bin[segyio.BinField.Interval] = 4000
-    return Survey(path)
-
-
 def test_geometry_and_samples(cube):
     assert cube.inlines.tolist() == [10, 12]
     x, t, z = cube.section("inline", 12)
@@ -211,7 +191,7 @@ def test_2d_export_box_ratio(cube, monkeypatch, ratio):
         fig = Figure(*args, **kwargs)
         figures.append(fig)
         return fig
-    monkeypatch.setattr("backend.core.Figure", capture)
+    monkeypatch.setattr("backend.rendering.Figure", capture)
     state = ViewState(section_number=12, aspect_ratio_2d=ratio)
     assert render(cube, {}, state, Settings()).startswith(b"\x89PNG")
     fig = figures[0]
@@ -247,7 +227,7 @@ def test_publication_font_defaults_and_fallback(cube, monkeypatch):
         figures.append(figure)
         return figure
 
-    monkeypatch.setattr("backend.core.Figure", capture)
+    monkeypatch.setattr("backend.rendering.Figure", capture)
     with warnings.catch_warnings():
         warnings.filterwarnings("error", message=".*findfont.*")
         data = render(cube, {}, ViewState(section_number=12), Settings())
@@ -264,7 +244,7 @@ def test_section_export_without_axes(cube, monkeypatch):
         fig = Figure(*args, **kwargs)
         figures.append(fig)
         return fig
-    monkeypatch.setattr('backend.core.Figure', capture)
+    monkeypatch.setattr('backend.rendering.Figure', capture)
     render(cube, {}, ViewState(section_number=12), Settings(show_axes=False, show_title=True))
     assert not figures[0].axes[0].axison
     assert figures[0].axes[0].get_title() == 'Inline 12'
@@ -329,20 +309,20 @@ def test_segy_progress_reports_ordered_stages(cube):
 
 def test_geometry_cache_hit_and_invalidation(cube, tmp_path, monkeypatch):
     import backend.geometry as geometry
-    import backend.core as core
+    import backend.segy as segy
     import os
     monkeypatch.setattr(geometry, 'CACHE_DIR', tmp_path / 'cache')
     first = Survey(cube.path)
     assert not first.geometry_cached and first.geometry_cache_saved
     assert first.trace_lookup.shape == (2, 3)
-    original = core.build_geometry
+    original = segy.build_geometry
     def no_scan(*args):
         raise AssertionError('Cache hit must not scan headers')
-    monkeypatch.setattr(core, 'build_geometry', no_scan)
+    monkeypatch.setattr(segy, 'build_geometry', no_scan)
     second = Survey(cube.path)
     assert second.geometry_cached
     np.testing.assert_array_equal(second.section('inline', 12)[2], first.section('inline', 12)[2])
-    monkeypatch.setattr(core, 'build_geometry', original)
+    monkeypatch.setattr(segy, 'build_geometry', original)
     stat = cube.path.stat()
     os.utime(cube.path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1000000))
     assert not Survey(cube.path).geometry_cached
@@ -396,7 +376,7 @@ def test_regular_geometry_rejects_inconsistent_boundary():
 
 def test_formula_geometry_reads_and_small_cache(cube, tmp_path, monkeypatch):
     import backend.geometry as geometry
-    import backend.core as core
+    import backend.segy as segy
     from backend.scene import timeslice
     monkeypatch.setattr(geometry, 'CACHE_DIR', tmp_path/'formula-cache')
     with segyio.open(str(cube.path), 'r+', ignore_geometry=True) as f:
@@ -416,5 +396,5 @@ def test_formula_geometry_reads_and_small_cache(cube, tmp_path, monkeypatch):
     assert all(a.ndim == 0 for a in fast.regular.parameters().values())
     def no_probe(*args):
         raise AssertionError('Cached formula must skip probing')
-    monkeypatch.setattr(core, 'probe_regular', no_probe)
+    monkeypatch.setattr(segy, 'probe_regular', no_probe)
     assert Survey(cube.path, geometry_mode='regular').geometry_cached

@@ -11,7 +11,7 @@ from backend.scene import (
 )
 from backend.models import ViewState3D, Seismic
 import backend.main as server
-from test_seiscanvas import cube
+from conftest import make_horizon
 
 
 def test_three_planes_use_same_samples(cube):
@@ -32,19 +32,6 @@ def test_three_planes_use_same_samples(cube):
         timeslice(cube, 100)
     with pytest.raises(ValueError):
         slice_data(cube, "inline", 10.5)
-
-
-def make_horizon(tmp_path, hole=False):
-    p = tmp_path / "h.txt"
-    p.write_text(
-        "\n".join(
-            f"{y} {x} {200+2*y+x}"
-            for y in range(5)
-            for x in range(5)
-            if not (hole and (y, x) == (1, 1))
-        )
-    )
-    return Horizon(p)
 
 
 def test_surface_orientation_and_mask(tmp_path):

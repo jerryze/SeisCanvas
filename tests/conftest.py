@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import segyio
+from fastapi.testclient import TestClient
 
 from backend.core import Horizon, Survey
 from backend import export_queue
@@ -42,6 +43,31 @@ def clean_export_session():
     export_queue.reset()
     yield
     export_queue.reset()
+
+def make_horizon(tmp_path, hole=False):
+    """A 5x5 regular horizon file; ``hole`` drops one pick to test gaps."""
+    p = tmp_path / "h.txt"
+    p.write_text(
+        "\n".join(
+            f"{y} {x} {200+2*y+x}"
+            for y in range(5)
+            for x in range(5)
+            if not (hole and (y, x) == (1, 1))
+        )
+    )
+    return Horizon(p)
+
+
+@pytest.fixture
+def client(cube, horizon):
+    """TestClient against the shared module state, with one horizon loaded."""
+    import backend.main as server
+
+    server.survey = cube
+    server.horizons.clear()
+    server.horizons["h"] = horizon
+    return TestClient(server.app)
+
 
 @pytest.fixture
 def wide_cube(tmp_path):

@@ -140,14 +140,6 @@ def test_export_raster_resolution_modes(resolution, expected):
 # ------------------------------------------------------------------ /api/section
 
 
-@pytest.fixture
-def client(cube, horizon):
-    server.survey = cube
-    server.horizons.clear()
-    server.horizons["h"] = horizon
-    return TestClient(server.app)
-
-
 def post_section(client, **body):
     response = client.post("/api/section", json={"section_number": 12, **body})
     assert response.status_code == 200, response.text
@@ -320,7 +312,7 @@ def test_publication_export_renders_the_raster_at_the_output_resolution(cube, mo
         figures.append(figure)
         return figure
 
-    monkeypatch.setattr("backend.core.Figure", capture)
+    monkeypatch.setattr("backend.rendering.Figure", capture)
     state = ViewState(section_number=12)
     render(cube, {}, state, Settings(format="png", width=180, height=100, dpi=600))
     image = figures[0].axes[0].images[0]
@@ -343,7 +335,7 @@ def test_view_resolution_export_reuses_the_interactive_grid(cube, monkeypatch):
         figures.append(figure)
         return figure
 
-    monkeypatch.setattr("backend.core.Figure", capture)
+    monkeypatch.setattr("backend.rendering.Figure", capture)
     render(
         cube,
         {},
@@ -363,7 +355,7 @@ def test_export_clipping_ignores_interpolation_and_window(cube, monkeypatch):
         figures.append(figure)
         return figure
 
-    monkeypatch.setattr("backend.core.Figure", capture)
+    monkeypatch.setattr("backend.rendering.Figure", capture)
     settings = Settings(format="png", width=180, height=100, dpi=600)
     # A zoomed bicubic export keeps the full-section colour range.
     zoomed = ViewState(section_number=12, x_range=(30, 33), seismic=Seismic(interpolation="bicubic"))

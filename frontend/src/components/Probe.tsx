@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { api, json } from "../api/client";
 
 /** Where the cursor is, in original seismic coordinates. */
 export type ProbeRequest = {
@@ -53,12 +54,7 @@ export function useOriginalProbe(delay = 60) {
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(async () => {
         try {
-          const response = await fetch("/api/sample", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(request),
-          });
-          if (!response.ok) return;
+          const response = await api("/sample", json(request));
           const value: ProbeReading = await response.json();
           if (cache.current.size > 4096) cache.current.clear();
           cache.current.set(id, value);

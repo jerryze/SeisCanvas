@@ -118,14 +118,6 @@ def queue_body(state=None, settings=None, dataset="F3", **extra):
     return body
 
 
-@pytest.fixture
-def client(cube, horizon):
-    server.survey = cube
-    server.horizons.clear()
-    server.horizons["h"] = horizon
-    return TestClient(server.app)
-
-
 def test_add_to_export_stores_a_rendered_figure_and_names_it(client):
     response = client.post("/api/export/queue", json=queue_body())
     assert response.status_code == 200, response.text

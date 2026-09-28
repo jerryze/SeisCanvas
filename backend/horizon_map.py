@@ -1,4 +1,9 @@
-"""Horizon TWT map shared state, native grid preview and publication renderer."""
+"""Horizon TWT map: native grid values, contour extraction and publication render.
+
+The map's request schemas (``HorizonMapState``/``HorizonMapExport``) live in
+``backend.models`` like every other API model; they are re-exported here for
+backward compatibility.
+"""
 import io
 import numpy as np
 import contourpy
@@ -6,42 +11,13 @@ from matplotlib import colormaps
 from matplotlib.colors import LinearSegmentedColormap, Normalize, to_hex
 from matplotlib.figure import Figure
 from matplotlib.cm import ScalarMappable
-from pydantic import Field, model_validator
-from typing import Literal
-from backend.models import BaseModel, Settings
-from backend.core import font_family
+from backend.models import HorizonMapExport, HorizonMapState
+from backend.style import font_family
 from backend.scene import horizon_grid, serial
 
+__all__ = ["HorizonMapState", "HorizonMapExport", "map_values", "map_data", "render_map"]
+
 PETREL = ['#ff0000', '#ff8000', '#ffff00', '#00c040', '#00ffff', '#0000ff', '#8000c0', '#ff00ff']
-
-class HorizonMapState(BaseModel):
-    horizon: str
-    display: Literal['filled', 'contour', 'filled_contour'] = 'filled_contour'
-    colormap: Literal['petrel', 'turbo', 'viridis', 'cividis', 'jet'] = 'petrel'
-    reverse_colormap: bool = False
-    range_mode: Literal['auto', 'manual'] = 'auto'
-    vmin: float | None = None
-    vmax: float | None = None
-    contours: bool = True
-    interval: float = Field(10, gt=0)
-    line_width: float = Field(.5, ge=.1, le=6)
-    labels: bool = False
-    colorbar: bool = True
-    x_range: tuple[float, float] | None = None
-    y_range: tuple[float, float] | None = None
-
-    @model_validator(mode='after')
-    def ranges(self):
-        if self.range_mode == 'manual' and (self.vmin is None or self.vmax is None or self.vmin >= self.vmax):
-            raise ValueError('Manual minimum must be less than maximum.')
-        for r in [self.x_range, self.y_range]:
-            if r and r[0] >= r[1]:
-                raise ValueError('Axis range must be increasing.')
-        return self
-
-class HorizonMapExport(BaseModel):
-    state: HorizonMapState
-    settings: Settings
 
 def map_values(horizon, state):
     x, y, grid = horizon_grid(horizon)

@@ -19,6 +19,7 @@ import {
   SceneSettings,
   HS,
   Export3D,
+  ExportDialogSettings,
   makeSlice,
 } from "../../types";
 const titles = {
@@ -415,7 +416,8 @@ export function Export3DDialog({
     show_bounding_box: scene.show_bounding_box,
     interpolation: "bicubic",
   });
-  const patch = (p: Partial<Export3D>) => setSettings((s) => ({ ...s, ...p }));
+  const patch = (p: Partial<ExportDialogSettings>) =>
+    setSettings((s) => ({ ...s, ...(p as Partial<Export3D>) }));
   return <ExportDialog title="三维场景 · Add to Export" scene settings={settings}
     onChange={patch} onClose={onClose} onExport={() => onExport(settings)}
     dataset={dataset} onDataset={onDataset} datasetPlaceholder={datasetPlaceholder}

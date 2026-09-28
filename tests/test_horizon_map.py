@@ -3,7 +3,7 @@ import pytest
 from backend.core import Horizon
 from backend.horizon_map import HorizonMapState, map_data, render_map
 from backend.models import Settings
-from test_scene import make_horizon
+from conftest import make_horizon
 
 
 def test_map_native_coordinates_holes_and_contours(tmp_path):

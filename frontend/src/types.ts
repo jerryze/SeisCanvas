@@ -126,6 +126,24 @@ export function exportPixels(settings: {
 }
 export const MAX_SCENE_PIXELS = 24_000_000;
 
+/** Settings shape accepted by the shared "Add to Export" dialog (2D, map or 3D). */
+export type ExportDialogSettings = {
+  format: "png" | "pdf" | "svg";
+  width: number;
+  height: number;
+  dpi: number;
+  font: string;
+  font_size: number;
+  show_axes: boolean;
+  show_labels?: boolean;
+  show_title?: boolean;
+  show_axis_labels?: boolean;
+  show_bounding_box?: boolean;
+  background?: string;
+  interpolation?: Interpolation;
+  resolution?: ResolutionMode;
+};
+
 /** An immutable figure already rendered and stored in the export session. */
 export type ExportItem = {
   id: string;

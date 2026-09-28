@@ -17,6 +17,7 @@ import {
 import { VS, Meta, Camera, Export3D, perspective, exportPixels, MAX_SCENE_PIXELS } from "../../types";
 import { SceneData, buildTraces, buildLayout } from "./sceneGeometry";
 import { useOriginalProbe, ProbeReadout } from "../Probe";
+import { api } from "../../api/client";
 /** A finalised WebGL capture, ready to be stored in the export session. */
 export type Scene3DCapture = {
   png: string;
@@ -121,18 +122,12 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
     latest.current.onReady(false);
     const timer = setTimeout(async () => {
       try {
-        const response = await fetch("/api/scene", {
+        const response = await api("/scene", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...latest.current.view, view_mode: "3d" }),
           signal: abort.signal,
         });
-        if (!response.ok) {
-          const e = await response.json();
-          throw new Error(
-            typeof e.detail === "string" ? e.detail : JSON.stringify(e.detail),
-          );
-        }
         const next = await response.json();
         if (active) {
           setData(next);
@@ -292,12 +287,13 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
             current.seismic.interpolation !== settings.interpolation
           ) {
             try {
-              const response = await fetch("/api/scene", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(publication),
-              });
-              if (response.ok) scene = await response.json();
+              scene = await (
+                await api("/scene", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(publication),
+                })
+              ).json();
             } catch {
               /* Keep the browsed texture when the extra read fails. */
             }

@@ -1,4 +1,7 @@
-"""Package the browser's exact WebGL rendering without changing the camera."""
+"""Package the browser's exact WebGL rendering without changing the camera.
+
+The request schema (``SceneExportRequest``) lives in ``backend.models``.
+"""
 
 import base64
 import binascii
@@ -6,16 +9,7 @@ import io
 import numpy as np
 from PIL import Image, UnidentifiedImageError
 from matplotlib.figure import Figure
-from backend.models import BaseModel, Field
-from typing import Literal
-
-
-class SceneExportRequest(BaseModel):
-    png: str = Field(max_length=135_000_000)
-    format: Literal["png", "pdf", "svg"]
-    width: int = Field(ge=64, le=4000)
-    height: int = Field(ge=64, le=4000)
-    scale: int = Field(ge=1, le=4)
+from backend.models import MAX_SCENE_PIXELS
 
 
 def decode_scene_png(req):
@@ -63,7 +57,7 @@ def encode_scene(req, raw, pixels, size):
 
 
 def package_scene(req):
-    if req.width * req.height * req.scale**2 > 24_000_000:
+    if req.width * req.height * req.scale**2 > MAX_SCENE_PIXELS:
         raise ValueError("Export exceeds 24 megapixels.")
     raw, pixels, size = decode_scene_png(req)
     return encode_scene(req, raw, pixels, size)

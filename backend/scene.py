@@ -3,7 +3,7 @@
 from collections import OrderedDict
 import numpy as np
 import segyio
-from backend.core import amplitude
+from backend.rendering import amplitude
 
 
 #: Above this many samples a slice is never read at native resolution; the

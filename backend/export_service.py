@@ -3,78 +3,20 @@
 ``Add to Export`` reads the current viewer state, renders the final figure at the
 publication settings and stores the bytes in the active export session.  The item
 is detached from the viewer from that moment on.
+
+The queue request schemas (``Queue2DRequest``/``QueueMapRequest``/
+``Queue3DRequest``/``QueueAddRequest``/``RenameRequest``) live in
+``backend.models``.
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Union
-
-from pydantic import Field, model_validator
-
 from backend import naming
-from backend.core import amplitude, render
-from backend.export3d import SceneExportRequest, decode_scene_png, encode_scene
+from backend.export3d import decode_scene_png, encode_scene
 from backend.export_queue import session
-from backend.horizon_map import HorizonMapState, render_map
-from backend.models import (
-    BaseModel,
-    Scene3DSettings,
-    Settings,
-    ViewState,
-    ViewState3D,
-)
-
-MAX_SCENE_PIXELS = 24_000_000
-
-
-class Queue2DRequest(BaseModel):
-    kind: Literal["2d"] = "2d"
-    dataset: str | None = Field(None, max_length=120)
-    state: ViewState
-    settings: Settings
-
-
-class QueueMapRequest(BaseModel):
-    kind: Literal["map"] = "map"
-    dataset: str | None = Field(None, max_length=120)
-    state: HorizonMapState
-    settings: Settings
-
-
-class Queue3DRequest(BaseModel):
-    """The browser ships its exact WebGL PNG plus the settings used to draw it."""
-
-    kind: Literal["3d"] = "3d"
-    dataset: str | None = Field(None, max_length=120)
-    png: str = Field(max_length=135_000_000)
-    format: Literal["png", "pdf", "svg"] = "png"
-    width_px: int = Field(ge=64, le=4000)
-    height_px: int = Field(ge=64, le=4000)
-    scale: int = Field(ge=1, le=4)
-    settings: Scene3DSettings = Field(default_factory=Scene3DSettings)
-    state: ViewState3D
-
-    @model_validator(mode="after")
-    def pixels(self):
-        if self.width_px * self.height_px * self.scale**2 > MAX_SCENE_PIXELS:
-            raise ValueError("3D export exceeds 24 megapixels.")
-        return self
-
-
-QueueAddRequest = Annotated[
-    Union[Queue2DRequest, QueueMapRequest, Queue3DRequest],
-    Field(discriminator="kind"),
-]
-
-
-class RenameRequest(BaseModel):
-    filename: str = Field(min_length=1, max_length=200)
-
-    @model_validator(mode="after")
-    def not_blank(self):
-        if not self.filename.strip():
-            raise ValueError("A file name is required.")
-        return self
+from backend.horizon_map import render_map
+from backend.models import Queue2DRequest, Queue3DRequest, QueueMapRequest, SceneExportRequest
+from backend.rendering import amplitude, render
 
 
 def dataset_label(survey, requested=None) -> str:
