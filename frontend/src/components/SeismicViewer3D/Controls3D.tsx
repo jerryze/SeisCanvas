@@ -1,3 +1,4 @@
+import ExportDialog from "../ExportDialog";
 import { useState } from "react";
 import {
   Plus,
@@ -21,9 +22,9 @@ import {
   makeSlice,
 } from "../../types";
 const titles = {
-  inline: "Inline slices",
-  crossline: "Crossline slices",
-  time: "Time slices",
+  inline: "Inline 切片",
+  crossline: "Crossline 切片",
+  time: "时间切片",
 };
 const prefixes = { inline: "IL", crossline: "XL", time: "TWT" };
 export function SliceManager({
@@ -75,7 +76,7 @@ export function SliceManager({
     onChange({ ...slices, [kind]: [...slices[kind], makeSlice(pos)] });
   }
   return (
-    <Group icon={<Layers size={16} />} title="三维切片 / Slices">
+    <Group icon={<Layers size={16} />} title="三维切片">
       {(["inline", "crossline", "time"] as const).map((kind) => (
         <div className="slice-family" key={kind}>
           <div className="slice-family-heading">
@@ -220,9 +221,6 @@ export function SliceManager({
         </div>
       ))}
       {message && <div className="control-note">{message}</div>}
-      <div className="control-note">
-        时间位置对齐最近的 SEG-Y 采样点。最多组合 18 个切片。
-      </div>
     </Group>
   );
 }
@@ -237,7 +235,7 @@ export function SceneControls({
   return (
     <Group
       icon={<Box size={16} />}
-      title="三维场景 / Scene"
+      title="场景设置"
       defaultOpen={false}
     >
       <Toggle
@@ -299,9 +297,6 @@ export function SceneControls({
           <option value={512}>精细 · 512</option>
         </select>
       </label>
-      <div className="control-note">
-        显示比例不改变真实坐标。精度控制每方向最大采样点数；提高精度后再导出可保留更多细节。
-      </div>
     </Group>
   );
 }
@@ -322,9 +317,9 @@ export function Horizon3DControls({
             onChange({ display_mode: e.target.value as HS["display_mode"] })
           }
         >
-          <option value="full_surface">Full Surface · 完整曲面</option>
+          <option value="full_surface">完整曲面</option>
           <option value="slice_intersections">
-            Slice Intersections · 交线
+            切片交线
           </option>
         </select>
       </label>
@@ -340,34 +335,28 @@ export function Horizon3DControls({
       </label>
       {h.display_mode === "full_surface" ? (
         <>
-          <div className="control-note">
-            TWT 范围：{h.twt_range
-              ? `${h.twt_range[0].toFixed(1)}–${h.twt_range[1].toFixed(1)} ms`
-              : "—"}
-          </div>
           <label className="field">
-            Color By · 着色依据
+            着色依据
             <select value={h.color_by || "twt"}
               onChange={(e) => onChange({ color_by: e.target.value as HS["color_by"] })}>
-              <option value="twt">TWT · 独立时间范围</option>
-              <option value="solid">Solid · 单色</option>
+              <option value="twt">TWT · 层位时间</option>
+              <option value="solid">单色</option>
             </select>
           </label>
           {h.color_by !== "solid" && (
             <label className="field">
-              Colormap · 层位色标
+              层位色标
               <select value={h.horizon_colormap || "petrel"}
                 onChange={() => onChange({ horizon_colormap: "petrel" })}>
                 <option value="petrel">Petrel</option>
               </select>
               <span style={{ display: "block", height: 10, background: "linear-gradient(to right, #ff0000, #ff8000, #ffff00, #00c040, #00ffff, #0000ff, #8000c0, #ff00ff)" }} />
-              <small>低 TWT → 高 TWT · 每个层位独立归一化</small>
             </label>
           )}
-          <Toggle label="Smooth Shading · 平滑着色"
+          <Toggle label="平滑着色"
             checked={h.smooth_shading !== false}
             onChange={(smooth_shading) => onChange({ smooth_shading })} />
-          <Toggle label="Lighting · 光照"
+          <Toggle label="柔和光照"
             checked={h.lighting !== false}
             onChange={(lighting) => onChange({ lighting })} />
           <label className="field">
@@ -378,9 +367,9 @@ export function Horizon3DControls({
                 onChange({ surface_mode: e.target.value as HS["surface_mode"] })
               }
             >
-              <option value="surface">Surface · 曲面</option>
-              <option value="wireframe">Wireframe · 网格</option>
-              <option value="surface_wireframe">Surface + Wireframe</option>
+              <option value="surface">曲面</option>
+              <option value="wireframe">网格</option>
+              <option value="surface_wireframe">曲面与网格</option>
             </select>
           </label>
           {h.surface_mode !== "surface" && (
@@ -410,11 +399,6 @@ export function Horizon3DControls({
           />
         </label>
       )}
-      <div className="control-note">
-        {h.display_mode === "full_surface"
-          ? "有效范围内显示曲面，缺失拾取保持为空。"
-          : "交线仅对应可见切片。时间切片显示容差范围内的层位点。"}
-      </div>
     </div>
   );
 }
@@ -444,153 +428,7 @@ export function Export3DDialog({
     show_bounding_box: scene.show_bounding_box,
   });
   const patch = (p: Partial<Export3D>) => setSettings((s) => ({ ...s, ...p }));
-  return (
-    <div className="modal-backdrop" onClick={() => !busy && onClose()}>
-      <div
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label="导出三维图片"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="modal-heading">
-          <div>
-            <span className="eyebrow">3D PUBLICATION EXPORT</span>
-            <h2>导出当前三维场景</h2>
-          </div>
-          <button
-            className="icon"
-            disabled={!!busy}
-            title="关闭导出"
-            onClick={onClose}
-          >
-            <X size={20} />
-          </button>
-        </div>
-        <p>保留当前相机、切片、层位样式和显示比例。</p>
-        <div className="format-options">
-          {(["png", "pdf", "svg"] as const).map((format) => (
-            <button
-              key={format}
-              className={settings.format === format ? "active" : ""}
-              onClick={() => patch({ format })}
-            >
-              {format.toUpperCase()}
-              <small>
-                {format === "png"
-                  ? "高分辨率位图"
-                  : format === "pdf"
-                    ? "论文排版"
-                    : "SVG 图像"}
-              </small>
-            </button>
-          ))}
-        </div>
-        <div className="field-row">
-          <label>
-            字体
-            <select
-              value={settings.font}
-              onChange={(e) => patch({ font: e.target.value })}
-            >
-              {["DejaVu Sans", "DejaVu Serif", "Arial", "Times New Roman"].map(
-                (f) => (
-                  <option key={f}>{f}</option>
-                ),
-              )}
-            </select>
-          </label>
-          <label>
-            字号 · pt
-            <Num
-              value={settings.font_size}
-              min={5}
-              max={30}
-              onChange={(font_size) => patch({ font_size })}
-            />
-          </label>
-        </div>
-        <div className="field-row">
-          <label>
-            宽度 · px
-            <Num
-              value={settings.width}
-              min={400}
-              max={4000}
-              onChange={(width) => patch({ width })}
-            />
-          </label>
-          <label>
-            高度 · px
-            <Num
-              value={settings.height}
-              min={300}
-              max={4000}
-              onChange={(height) => patch({ height })}
-            />
-          </label>
-          <label>
-            分辨率倍率
-            <select
-              value={settings.scale}
-              onChange={(e) => patch({ scale: +e.target.value })}
-            >
-              {[1, 2, 3, 4].map((n) => (
-                <option key={n} value={n}>
-                  {n}×
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <label className="field">
-          背景颜色
-          <input
-            aria-label="导出背景颜色"
-            type="color"
-            value={settings.background}
-            onChange={(e) => patch({ background: e.target.value })}
-          />
-        </label>
-        <div className="check-row">
-          <Toggle
-            label="导出坐标轴"
-            checked={settings.show_axes}
-            onChange={(show_axes) => patch({ show_axes })}
-          />
-          <Toggle
-            label="导出轴标签"
-            checked={settings.show_axis_labels}
-            onChange={(show_axis_labels) => patch({ show_axis_labels })}
-          />
-          <Toggle
-            label="导出包围盒"
-            checked={settings.show_bounding_box}
-            onChange={(show_bounding_box) => patch({ show_bounding_box })}
-          />
-        </div>
-        <div className="export-note">
-          输出 {settings.width * settings.scale} ×{" "}
-          {settings.height * settings.scale} px ·{" "}
-          {settings.format.toUpperCase()}
-          <br />
-          字体与字号应用于坐标轴标签和刻度。PDF / SVG
-          内嵌高分辨率三维渲染图，场景与文字均为栅格内容。输出精度沿用当前场景采样。
-        </div>
-        {error && <div className="error">{error}</div>}
-        <button
-          className="primary full"
-          disabled={!!busy}
-          onClick={() => onExport(settings)}
-        >
-          {busy ? (
-            <LoaderCircle className="spin" size={16} />
-          ) : (
-            <Download size={16} />
-          )}{" "}
-          {busy || `导出三维 ${settings.format.toUpperCase()}`}
-        </button>
-      </div>
-    </div>
-  );
+  return <ExportDialog title="导出三维场景" scene settings={settings}
+    onChange={patch} onClose={onClose} onExport={() => onExport(settings)}
+    busy={!!busy} error={error} />;
 }

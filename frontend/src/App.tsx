@@ -1,3 +1,5 @@
+import ExportDialog from "./components/ExportDialog";
+import HorizonMap from "./components/HorizonMap";
 import { useState, useEffect, useRef, useMemo } from "react";
 import Plotly from "plotly.js-dist-min";
 import {
@@ -33,7 +35,7 @@ import {
 } from "./components/SeismicViewer3D/Controls3D";
 
 type HorizonImportState = {
-  file: File;
+  token: string;
   filename: string;
   columns: { index: number; name: string }[];
   rows: string[][];
@@ -88,6 +90,7 @@ const initialExport = {
   font: "DejaVu Sans",
   font_size: 10,
 
+  show_axes: true,
   show_labels: true,
   show_title: true,
 
@@ -134,8 +137,6 @@ export default function App() {
   const sceneRef = useRef<Scene3DHandle>(null);
   const plot = useRef<HTMLDivElement>(null);
 
-  const segyInput = useRef<HTMLInputElement>(null);
-  const horizonInput = useRef<HTMLInputElement>(null);
 
   const requestId = useRef(0);
 
@@ -144,6 +145,8 @@ export default function App() {
   /* ------------------------------------------------------------------------ */
 
   const [sceneReady, setSceneReady] = useState(false);
+  const [importProgress, setImportProgress] = useState<{percent:number;stage:string;status:string}|null>(null);
+  const [mapReady, setMapReady] = useState(false);
 
   const [meta, setMeta] = useState<Meta | null>(null);
   const [view, setView] = useState<VS>(initial);
@@ -159,6 +162,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
+  const [geometryMode, setGeometryMode] = useState("auto");
   const [bytes, setBytes] = useState({
     il: 189,
     xl: 21,
@@ -292,22 +296,37 @@ export default function App() {
   /* Upload SEG-Y                                                             */
   /* ------------------------------------------------------------------------ */
 
-  function uploadSegy(file?: File) {
-    if (!file) return;
-
-    task("读取 SEG-Y…", async () => {
-      const f = new FormData();
-
-      f.append("file", file);
-      f.append("ilbyte", String(bytes.il));
-      f.append("xlbyte", String(bytes.xl));
-
-      const r = await api("/segy", {
-        method: "POST",
-        body: f,
-      });
-
-      loaded(await r.json());
+  function openSegy() {
+    task("正在导入 SEG-Y…", async () => {
+      const job_id = crypto.randomUUID();
+      setImportProgress({percent:0, stage:"请在系统窗口选择文件", status:"waiting"});
+      let active = true;
+      let timer: ReturnType<typeof setTimeout>;
+      const poll = async () => {
+        try {
+          const r = await api(`/segy/progress/${job_id}`);
+          const p = await r.json();
+          if (active) setImportProgress(p);
+        } catch { /* The import request reports failures. */ }
+        if (active) timer = setTimeout(poll, 600);
+      };
+      timer = setTimeout(poll, 300);
+      try {
+        const r = await api("/segy/pick", json({job_id, ilbyte: bytes.il, xlbyte: bytes.xl, geometry_mode: geometryMode}));
+        const result = await r.json();
+        active = false;
+        if (!result.cancelled) {
+          loaded(result);
+          setImportProgress({percent:100, stage:"导入完成", status:"done"});
+        } else setImportProgress(null);
+      } catch (e) {
+        active = false;
+        setImportProgress(null);
+        throw e;
+      } finally {
+        active = false;
+        clearTimeout(timer);
+      }
     });
   }
 
@@ -315,23 +334,13 @@ export default function App() {
   /* Upload horizons                                                          */
   /* ------------------------------------------------------------------------ */
 
-  function uploadHorizons(files: FileList | null) {
-    const file = files?.[0];
-    if (!file) return;
-
+  function uploadHorizons() {
     task("读取层位列…", async () => {
-      const f = new FormData();
-      f.append("file", file);
-
-      const preview = await (
-        await api("/horizons/preview", {
-          method: "POST",
-          body: f,
-        })
-      ).json();
+      const preview = await (await api("/horizons/pick", {method: "POST"})).json();
+      if (preview.cancelled) return;
 
       setHorizonImport({
-        file,
+        token: preview.token,
         filename: preview.filename,
         columns: preview.columns,
         rows: preview.rows,
@@ -346,18 +355,13 @@ export default function App() {
     if (!horizonImport) return;
 
     task("加载层位…", async () => {
-      const f = new FormData();
-      f.append("files", horizonImport.file);
-      f.append("inline_column", String(horizonImport.inline_column));
-      f.append("xline_column", String(horizonImport.xline_column));
-      f.append("time_column", String(horizonImport.time_column));
-
-      const hs = await (
-        await api("/horizons", {
-          method: "POST",
-          body: f,
-        })
-      ).json();
+      const hs = await (await api("/horizons/local", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({token: horizonImport.token,
+          inline_column: horizonImport.inline_column,
+          xline_column: horizonImport.xline_column, time_column: horizonImport.time_column}),
+      })).json();
 
       setView((v) => ({
         ...v,
@@ -983,7 +987,7 @@ export default function App() {
             !!busy ||
             (view.view_mode === "2d"
               ? loading
-              : !sceneReady)
+              : view.view_mode === "map" ? !mapReady : !sceneReady)
           }
           onClick={() =>
             setExportOpen(true)
@@ -1015,30 +1019,23 @@ export default function App() {
               }
               title="数据"
             >
+              {importProgress && <div className="import-progress" role="status" aria-live="polite">
+                <div><span>{importProgress.stage}</span><b>{importProgress.status === "waiting" ? "" : `${importProgress.percent}%`}</b></div>
+                <progress aria-label="SEG-Y 导入进度" max={100}
+                  value={importProgress.status === "waiting" ? undefined : importProgress.percent} />
+              </div>}
               <button
                 className="primary full"
                 disabled={!!busy}
                 onClick={() =>
-                  segyInput.current?.click()
+                  openSegy()
                 }
               >
                 <Upload size={14} />
                 导入 SEG-Y
               </button>
 
-              <input
-                hidden
-                ref={segyInput}
-                type="file"
-                accept=".sgy,.segy"
-                onChange={(e) => {
-                  uploadSegy(
-                    e.target.files?.[0],
-                  );
 
-                  e.target.value = "";
-                }}
-              />
 
               <button
                 className="secondary full"
@@ -1049,6 +1046,12 @@ export default function App() {
                 加载 F3 示例
               </button>
 
+              <label className="field">Geometry Mode
+                <select value={geometryMode} disabled={!!busy} onChange={e => setGeometryMode(e.target.value)}>
+                  <option value="auto">Auto</option>
+                  <option value="regular">Regular Grid (Fast)</option>
+                </select>
+              </label>
               <div className="field-row">
                 <label>
                   Inline byte
@@ -1194,12 +1197,18 @@ export default function App() {
               >
                 3D
               </button>
+              <button disabled={!view.horizons.length}
+                className={view.view_mode === "map" ? "active" : ""}
+                onClick={() => setView(v => ({...v, view_mode: "map"}))}>
+                Horizon Map
+              </button>
             </div>
 
             {/* ------------------------------------------------------------ */}
             {/* 3D controls                                                  */}
             {/* ------------------------------------------------------------ */}
 
+            {view.view_mode === "map" && <div id="horizon-map-controls" />}
             {view.view_mode === "3d" &&
               meta && (
                 <>
@@ -1356,6 +1365,7 @@ export default function App() {
             {/* Seismic display                                              */}
             {/* ------------------------------------------------------------ */}
 
+            <div hidden={view.view_mode === "map"}>
             <Group
               icon={
                 <Activity size={16} />
@@ -1653,26 +1663,14 @@ export default function App() {
                   !meta || !!busy
                 }
                 onClick={() =>
-                  horizonInput.current?.click()
+                  uploadHorizons()
                 }
               >
                 <Plus size={14} />
                 添加层位
               </button>
 
-              <input
-                hidden
-                ref={horizonInput}
-                type="file"
-                accept=".txt,.dat"
-                onChange={(e) => {
-                  uploadHorizons(
-                    e.target.files,
-                  );
 
-                  e.target.value = "";
-                }}
-              />
 
 
               {/* ---------------------------------------------------------- */}
@@ -1924,6 +1922,7 @@ export default function App() {
                 </div>
               )}
             </Group>
+            </div>
           </aside>
         )}
 
@@ -1969,7 +1968,7 @@ export default function App() {
           <div className="viewer-heading">
             <div>
               <h1>
-                {meta
+                {view.view_mode === "map" ? "Horizon Map" : meta
                   ? view.view_mode ===
                     "3d"
                     ? "3D 视图"
@@ -2031,7 +2030,10 @@ export default function App() {
           {/* 3D                                                             */}
           {/* -------------------------------------------------------------- */}
 
-          {view.view_mode === "3d" &&
+          {view.view_mode === "map" ? (
+            <HorizonMap horizons={view.horizons} exportOpen={exportOpen}
+              onCloseExport={() => setExportOpen(false)} onReady={setMapReady} />
+          ) : view.view_mode === "3d" &&
           meta ? (
             <Scene3D
               ref={sceneRef}
@@ -2163,7 +2165,7 @@ export default function App() {
                             !!busy
                           }
                           onClick={() =>
-                            segyInput.current?.click()
+                            openSegy()
                           }
                         >
                           <Upload
@@ -2376,322 +2378,12 @@ export default function App() {
       {/* 2D export                                                          */}
       {/* ------------------------------------------------------------------ */}
 
-      {exportOpen &&
-        view.view_mode === "2d" && (
-          <div
-            className="modal-backdrop"
-            onClick={() =>
-              !busy &&
-              setExportOpen(false)
-            }
-          >
-            <div
-              className="modal"
-              role="dialog"
-              aria-modal="true"
-              aria-label="导出图片"
-              onClick={(e) =>
-                e.stopPropagation()
-              }
-            >
-              {/* ---------------------------------------------------------- */}
-              {/* Modal heading                                              */}
-              {/* ---------------------------------------------------------- */}
-
-              <div className="modal-heading">
-                <h2>
-                  导出图片
-                </h2>
-
-                <button
-                  className="icon"
-                  onClick={() =>
-                    setExportOpen(
-                      false,
-                    )
-                  }
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              {/* ---------------------------------------------------------- */}
-              {/* Format                                                     */}
-              {/* ---------------------------------------------------------- */}
-
-              <div className="format-options compact">
-                {[
-                  "png",
-                  "pdf",
-                  "svg",
-                ].map((format) => (
-                  <button
-                    key={format}
-                    className={
-                      settings.format ===
-                      format
-                        ? "active"
-                        : ""
-                    }
-                    onClick={() =>
-                      setSettings(
-                        (s) => ({
-                          ...s,
-                          format,
-                        }),
-                      )
-                    }
-                  >
-                    {format.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-
-              {/* ---------------------------------------------------------- */}
-              {/* Size                                                       */}
-              {/* ---------------------------------------------------------- */}
-
-              <div className="field-row">
-                <label>
-                  宽度 · mm
-
-                  <Num
-                    value={
-                      settings.width
-                    }
-                    min={40}
-                    max={500}
-                    onChange={(width) =>
-                      setSettings(
-                        (s) => ({
-                          ...s,
-                          width,
-                        }),
-                      )
-                    }
-                  />
-                </label>
-
-                <label>
-                  高度 · mm
-
-                  <Num
-                    value={
-                      settings.height
-                    }
-                    min={30}
-                    max={500}
-                    onChange={(height) =>
-                      setSettings(
-                        (s) => ({
-                          ...s,
-                          height,
-                        }),
-                      )
-                    }
-                  />
-                </label>
-
-                <label>
-                  DPI
-
-                  <select
-                    value={
-                      settings.dpi
-                    }
-                    onChange={(e) =>
-                      setSettings(
-                        (s) => ({
-                          ...s,
-
-                          dpi:
-                            +e.target
-                              .value,
-                        }),
-                      )
-                    }
-                  >
-                    <option>
-                      300
-                    </option>
-
-                    <option>
-                      600
-                    </option>
-                  </select>
-                </label>
-              </div>
-
-              {/* ---------------------------------------------------------- */}
-              {/* Font                                                       */}
-              {/* ---------------------------------------------------------- */}
-
-              <div className="field-row">
-                <label>
-                  字体
-
-                  <select
-                    value={
-                      settings.font
-                    }
-                    onChange={(e) =>
-                      setSettings(
-                        (s) => ({
-                          ...s,
-
-                          font:
-                            e.target
-                              .value,
-                        }),
-                      )
-                    }
-                  >
-                    {[
-                      "DejaVu Sans",
-                      "DejaVu Serif",
-                      "Arial",
-                      "Times New Roman",
-                    ].map((f) => (
-                      <option
-                        key={f}
-                      >
-                        {f}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label>
-                  字号 · pt
-
-                  <Num
-                    value={
-                      settings.font_size
-                    }
-                    min={5}
-                    max={30}
-                    onChange={(
-                      font_size,
-                    ) =>
-                      setSettings(
-                        (s) => ({
-                          ...s,
-                          font_size,
-                        }),
-                      )
-                    }
-                  />
-                </label>
-              </div>
-
-              {/* ---------------------------------------------------------- */}
-              {/* Options                                                    */}
-              {/* ---------------------------------------------------------- */}
-
-              <div className="check-row">
-                <Toggle
-                  label="坐标轴标签"
-                  checked={
-                    settings.show_labels
-                  }
-                  onChange={(
-                    show_labels,
-                  ) =>
-                    setSettings(
-                      (s) => ({
-                        ...s,
-                        show_labels,
-                      }),
-                    )
-                  }
-                />
-
-                <Toggle
-                  label="标题"
-                  checked={
-                    settings.show_title
-                  }
-                  onChange={(
-                    show_title,
-                  ) =>
-                    setSettings(
-                      (s) => ({
-                        ...s,
-                        show_title,
-                      }),
-                    )
-                  }
-                />
-              </div>
-
-              {/* ---------------------------------------------------------- */}
-              {/* Export summary                                             */}
-              {/* ---------------------------------------------------------- */}
-
-              <div className="export-note">
-                {view.view_type ===
-                "inline"
-                  ? "Inline"
-                  : "Crossline"}{" "}
-                {view.section_number}
-
-                <span className="dot-separator">
-                  ·
-                </span>
-
-                {
-                  view.horizons.filter(
-                    (h) =>
-                      h.visible,
-                  ).length
-                }{" "}
-                个层位
-
-                <span className="dot-separator">
-                  ·
-                </span>
-
-                {view.x_range
-                  ? "当前范围"
-                  : "完整剖面"}
-              </div>
-
-              {error && (
-                <div className="error">
-                  {error}
-                </div>
-              )}
-
-              {/* ---------------------------------------------------------- */}
-              {/* Export button                                              */}
-              {/* ---------------------------------------------------------- */}
-
-              <button
-                className="primary full"
-                disabled={
-                  !!busy || loading
-                }
-                onClick={
-                  exportFigure
-                }
-              >
-                {busy ? (
-                  <LoaderCircle
-                    className="spin"
-                    size={16}
-                  />
-                ) : (
-                  <Download
-                    size={16}
-                  />
-                )}
-
-                {busy ||
-                  `导出 ${settings.format.toUpperCase()}`}
-              </button>
-            </div>
-          </div>
-        )}
+      {exportOpen && view.view_mode === "2d" && (
+        <ExportDialog title="导出二维剖面" settings={settings}
+          onChange={p => setSettings(s => ({...s, ...p}))}
+          onClose={() => setExportOpen(false)} onExport={exportFigure}
+          busy={!!busy} disabled={loading} error={error} />
+      )}
 
       {horizonImport && (
         <div

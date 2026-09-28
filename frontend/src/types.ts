@@ -28,7 +28,7 @@ export type SS = {
   reverse_polarity: boolean;
 };
 export type VS = {
-  view_mode: "2d" | "3d";
+  view_mode: "2d" | "3d" | "map";
   slices: SliceCollection;
   scene: SceneSettings;
   view_type: "inline" | "crossline";

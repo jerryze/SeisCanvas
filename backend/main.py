@@ -1,4 +1,7 @@
 from pathlib import Path
+from typing import Literal
+from pydantic import BaseModel, Field
+from backend.file_picker import choose_segy
 from uuid import uuid4
 import shutil
 import tempfile
@@ -19,7 +22,9 @@ from backend.core import (
     horizon_preview,
 )
 from backend.models import ViewState, ExportRequest, Horizon3DStyle, ViewState3D
-from backend.scene import slice_data, horizon_mesh, horizon_intersection, scene_data
+from backend.scene import slice_data, horizon_mesh, horizon_intersection, scene_data, indices
+
+from backend.horizon_map import HorizonMapState, HorizonMapExport, map_data, render_map
 
 ROOT = Path(__file__).resolve().parents[1]
 HORIZON_SUFFIXES = {".txt", ".dat"}
@@ -49,6 +54,29 @@ def add_horizon(h):
 
 def error(e):
     return HTTPException(400, str(e))
+
+
+@app.post("/api/horizon-map")
+def horizon_map(state: HorizonMapState):
+    with lock:
+        if state.horizon not in horizons:
+            raise HTTPException(404, "Horizon not found.")
+        try:
+            return map_data(horizons[state.horizon], state)
+        except ValueError as e:
+            raise error(e)
+
+
+@app.post("/api/horizon-map/export")
+def horizon_map_export(req: HorizonMapExport):
+    with lock:
+        if req.state.horizon not in horizons:
+            raise HTTPException(404, "Horizon not found.")
+        try:
+            content = render_map(horizons[req.state.horizon], req.state, req.settings)
+            return Response(content, media_type={"png": "image/png", "pdf": "application/pdf", "svg": "image/svg+xml"}[req.settings.format])
+        except ValueError as e:
+            raise error(e)
 
 
 @app.get("/api/catalog")
@@ -89,6 +117,83 @@ def example(ilbyte: int = 189, xlbyte: int = 21):
         raise error(e)
 
 
+class LocalSegyRequest(BaseModel):
+    geometry_mode: Literal["auto", "regular"] = "auto"
+    path: str = Field(min_length=1)
+    ilbyte: int = Field(189, ge=1, le=237)
+    xlbyte: int = Field(21, ge=1, le=237)
+
+
+import_progress = {}
+progress_lock = RLock()
+
+
+@app.get("/api/segy/progress/{job_id}")
+def segy_progress(job_id: str):
+    with progress_lock:
+        return import_progress.get(job_id, {"percent": 0, "stage": "等待文件选择", "status": "waiting"})
+
+
+class PickSegyRequest(BaseModel):
+    geometry_mode: Literal["auto", "regular"] = "auto"
+    job_id: str | None = Field(None, pattern=r"^[a-zA-Z0-9-]{1,64}$")
+    ilbyte: int = Field(189, ge=1, le=237)
+    xlbyte: int = Field(21, ge=1, le=237)
+
+
+@app.post("/api/segy/pick")
+def pick_local_segy(req: PickSegyRequest):
+    job_id = req.job_id or uuid4().hex
+    def report(percent, stage, status="running"):
+        with progress_lock:
+            import_progress[job_id] = dict(percent=round(percent), stage=stage, status=status)
+            if len(import_progress) > 32:
+                for key in list(import_progress):
+                    if key != job_id and import_progress[key]["status"] in ["done", "cancelled", "error"]:
+                        del import_progress[key]
+                        break
+    report(0, "请在系统窗口选择文件", "waiting")
+    try:
+        path = choose_segy()
+        if path is None:
+            report(0, "已取消导入", "cancelled")
+            return {"cancelled": True}
+        result = open_local_segy(LocalSegyRequest(path=path, ilbyte=req.ilbyte, xlbyte=req.xlbyte, geometry_mode=req.geometry_mode), report)
+        report(100, "导入完成", "done")
+        return result
+    except Exception as e:
+        report(0, "导入失败", "error")
+        if isinstance(e, HTTPException):
+            raise
+        raise error(e)
+
+
+@app.post("/api/segy/local")
+def local_segy_endpoint(req: LocalSegyRequest):
+    return open_local_segy(req)
+
+
+def open_local_segy(req: LocalSegyRequest, progress=None):
+    """Open an existing file on the local server, without copying its samples."""
+    global survey
+    path = Path(req.path.strip()).expanduser()
+    if not path.is_absolute():
+        raise HTTPException(400, "请填写 SEG-Y 文件的绝对路径。")
+    if path.suffix.lower() not in [".sgy", ".segy"] or not path.is_file():
+        raise HTTPException(400, "文件不存在，或不是 .sgy / .segy 文件。")
+    try:
+        new = Survey(path, req.ilbyte, req.xlbyte, progress=progress, geometry_mode=req.geometry_mode)
+        with lock:
+            old = survey
+            survey = new
+            horizons.clear()
+            if old and old.path != path and Path(workspace.name) in old.path.parents:
+                shutil.rmtree(old.path.parent, ignore_errors=True)
+            return {"metadata": new.metadata(), "horizons": []}
+    except (ValueError, OSError, RuntimeError, IndexError, MemoryError) as e:
+        raise error(str(e) or "内存不足，请关闭其他大型数据后重试。")
+
+
 @app.post("/api/segy")
 def upload_segy(
     file: UploadFile = File(...), ilbyte: int = Form(189), xlbyte: int = Form(21)
@@ -100,8 +205,10 @@ def upload_segy(
     folder.mkdir()
     path = folder / Path(file.filename).name
     try:
+        if file.size and shutil.disk_usage(folder).free < file.size + 256 * 1024 * 1024:
+            raise ValueError("临时磁盘空间不足。大文件请使用本地路径直接打开，避免上传和复制。")
         with path.open("wb") as out:
-            shutil.copyfileobj(file.file, out)
+            shutil.copyfileobj(file.file, out, length=8 * 1024 * 1024)
         new = Survey(path, ilbyte, xlbyte)
         with lock:
             old = survey
@@ -115,6 +222,53 @@ def upload_segy(
         raise error(e)
     finally:
         file.file.close()
+
+
+# Only paths selected in the native dialog can be imported through this route.
+horizon_selections = {}
+
+
+class LocalHorizonRequest(BaseModel):
+    token: str
+    inline_column: int = Field(default=0, ge=0)
+    xline_column: int = Field(default=1, ge=0)
+    time_column: int = Field(default=2, ge=0)
+
+
+@app.post("/api/horizons/pick")
+def pick_horizon():
+    try:
+        path = choose_segy("Horizon")
+        if not path:
+            return {"cancelled": True}
+        path = Path(path)
+        if path.suffix.lower() not in HORIZON_SUFFIXES:
+            raise ValueError("Horizon files must use .txt or .dat extension.")
+        preview = horizon_preview(path)
+        token = uuid4().hex
+        with lock:
+            if len(horizon_selections) >= 32:
+                horizon_selections.pop(next(iter(horizon_selections)))
+            horizon_selections[token] = path
+        return {**preview, "token": token, "filename": path.name}
+    except (ValueError, OSError) as e:
+        raise error(e)
+
+
+@app.post("/api/horizons/local")
+def local_horizon(req: LocalHorizonRequest):
+    try:
+        with lock:
+            path = horizon_selections.get(req.token)
+        if path is None:
+            raise ValueError("请重新选择层位文件。")
+        h = Horizon(path, columns=(req.inline_column, req.xline_column, req.time_column))
+        with lock:
+            result = [add_horizon(h)]
+            horizon_selections.pop(req.token, None)
+        return result
+    except (ValueError, OSError) as e:
+        raise error(e)
 
 
 @app.post("/api/horizons/preview")
@@ -177,10 +331,14 @@ def section(state: ViewState):
             s = require_survey()
             x, t, z = s.section(state.view_type, state.section_number)
             _, lo, hi = amplitude(z, state.seismic)
+            # Bound browser JSON and heatmap memory; export still uses native data.
+            rows, cols = indices(len(t), 1200), indices(len(x), 1600)
             return {
-                "x": x.tolist(),
-                "time": t.tolist(),
-                "z": z.tolist(),
+                "x": x[cols].tolist(),
+                "time": t[rows].tolist(),
+                "z": z[rows[:, None], cols[None, :]].tolist(),
+                "preview_shape": [len(rows), len(cols)],
+                "native_shape": list(z.shape),
                 "vmin": lo,
                 "vmax": hi,
                 "horizons": {

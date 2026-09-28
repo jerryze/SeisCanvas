@@ -187,3 +187,50 @@ def test_surface_defaults_and_import_range(tmp_path):
         assert imported["twt_range"] == (200, 212)
     finally:
         server.horizons.pop(imported["id"])
+
+
+def test_preview_reads_only_selected_samples(cube, monkeypatch):
+    import backend.preview as preview
+    real_read = preview.read_samples
+    calls = []
+    def read(survey, ids, samples):
+        calls.append((np.asarray(ids).size, len(samples)))
+        return real_read(survey, ids, samples)
+    monkeypatch.setattr(preview, 'read_samples', read)
+    monkeypatch.setattr(cube, 'section', lambda *a: pytest.fail('full section read'))
+    plane, values = slice_data(cube, 'time', 204, 2)
+    assert calls == [(4, 1)]
+    assert values.shape == (2, 2)
+    assert plane['amplitude'] == [[1031, 1039], [1231, 1239]]
+    slice_data(cube, 'time', 204, 2)
+    assert len(calls) == 1
+    slice_data(cube, 'inline', 12, 2)
+    assert calls[-1] == (2, 2)
+
+
+def test_horizon_geometry_is_lazy(tmp_path):
+    h = make_horizon(tmp_path, True)
+    horizon_intersection(h, 'inline', 1)
+    assert not hasattr(h, '_grid3d')
+    horizon_mesh(h, 3)
+    assert not hasattr(h, '_grid3d')
+
+
+def test_horizon_local_cache_and_invalidation(tmp_path, monkeypatch):
+    import backend.horizon_cache as cache
+    monkeypatch.setattr(cache, 'CACHE_DIR', tmp_path / 'cache')
+    p = tmp_path / 'local.txt'
+    p.write_text('1 2 100\n3 4 200\n')
+    first = Horizon(p)
+    second = Horizon(p)
+    assert not first.cache_hit and second.cache_hit
+    np.testing.assert_array_equal(first.data, second.data)
+    p.write_text('1 2 1234\n3 4 200\n')
+    assert not Horizon(p).cache_hit
+    assert not Horizon(p, columns=(1, 0, 2)).cache_hit
+    monkeypatch.setattr(server, 'choose_segy', lambda kind: str(p))
+    c = TestClient(server.app)
+    selection = c.post('/api/horizons/pick').json()
+    response = c.post('/api/horizons/local', json={'token': selection['token']})
+    assert response.status_code == 200
+    server.horizons.pop(response.json()[0]['id'])

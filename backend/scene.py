@@ -31,10 +31,16 @@ def timeslice(survey, time):
     grid = np.full(
         (len(survey.inlines), len(survey.crosslines)), np.nan, dtype=np.float32
     )
-    grid[
-        np.searchsorted(survey.inlines, survey.ils),
-        np.searchsorted(survey.crosslines, survey.xls),
-    ] = values
+    if survey.regular is not None:
+        grid = survey.regular.timeslice_grid(values).copy()
+    elif survey.trace_lookup is not None:
+        valid = survey.trace_lookup >= 0
+        grid[valid] = values[survey.trace_lookup[valid]]
+    else:
+        grid[
+            np.searchsorted(survey.inlines, survey.ils),
+            np.searchsorted(survey.crosslines, survey.xls),
+        ] = values
     survey.cache[key] = grid
     while len(survey.cache) > 12:
         survey.cache.popitem(last=False)
@@ -42,41 +48,38 @@ def timeslice(survey, time):
 
 
 def slice_data(survey, kind, position, maximum=256):
+    from backend.preview import read_samples, preview_ids
+    if kind not in ("time", "inline", "crossline"):
+        raise ValueError("Unknown slice kind.")
     if kind == "time":
-        actual, values = timeslice(survey, position)
+        if not survey.times[0] <= position <= survey.times[-1]:
+            raise ValueError("Time slice is outside the survey time range.")
+        sample = int(np.argmin(np.abs(survey.times-position)))
+        actual = float(survey.times[sample])
         a, b = survey.crosslines, survey.inlines
     else:
-        if position != int(position):
-            raise ValueError("Inline and Crossline positions must be integers.")
-        coords, b, raw = survey.section(kind, int(position))
-        a = survey.crosslines if kind == "inline" else survey.inlines
-        # Reindex to the survey axis; missing traces stay masked.
-        values = np.full((len(b), len(a)), np.nan, dtype=np.float32)
-        values[:, np.searchsorted(a, coords)] = raw
+        axis = survey.inlines if kind == "inline" else survey.crosslines
+        if position != int(position) or position not in axis:
+            raise ValueError("Section does not exist in this survey.")
         actual = int(position)
+        a = survey.crosslines if kind == "inline" else survey.inlines
+        b = survey.times
     rows, cols = indices(len(b), maximum), indices(len(a), maximum)
-    sampled = values[np.ix_(rows, cols)].copy()
-    # A coarse cell may not cover an unobserved trace/sample.
-    missing = ~np.isfinite(values)
-    if missing.any():
-        for ri in range(len(rows) - 1):
-            for ci in range(len(cols) - 1):
-                if missing[
-                    rows[ri] : rows[ri + 1] + 1, cols[ci] : cols[ci + 1] + 1
-                ].any():
-                    sampled[ri : ri + 2, ci : ci + 2] = np.nan
-    return (
-        dict(
-            kind=kind,
-            position=actual,
-            requested_position=position,
-            a=a[cols].tolist(),
-            b=b[rows].tolist(),
-            amplitude=serial(sampled),
-            native_shape=list(values.shape),
-        ),
-        values,
-    )
+    key = ("preview", kind, actual, maximum)
+    if key in survey.cache:
+        sampled = survey.cache[key]
+        survey.cache.move_to_end(key)
+    else:
+        if kind == "time":
+            ids = preview_ids(survey, b[rows], a[cols])
+            sampled = read_samples(survey, ids, [sample])[..., 0]
+        else:
+            ids = preview_ids(survey, [actual], a[cols])[0] if kind == "inline" else preview_ids(survey, a[cols], [actual])[:, 0]
+            sampled = read_samples(survey, ids, rows).T
+        survey.cache[key] = sampled
+    return dict(kind=kind, position=actual, requested_position=position,
+                a=a[cols].tolist(), b=b[rows].tolist(), amplitude=serial(sampled),
+                native_shape=[len(b), len(a)]), sampled
 
 
 def regular_axis(values):
@@ -109,27 +112,49 @@ def horizon_grid(horizon):
         )
     grid[row, col] = horizon.data[:, 2]
     horizon._grid3d = (x, y, grid)
-    horizon._mesh3d = OrderedDict()
+    if not hasattr(horizon, "_mesh3d"):
+        horizon._mesh3d = OrderedDict()
     return horizon._grid3d
 
 
 def horizon_mesh(horizon, maximum=256):
-    x, y, grid = horizon_grid(horizon)
+    if not hasattr(horizon, "_mesh3d"):
+        horizon._mesh3d = OrderedDict()
     if maximum in horizon._mesh3d:
         return horizon._mesh3d[maximum]
+    y, x = regular_axis(horizon.data[:, 0]), regular_axis(horizon.data[:, 1])
     rows, cols = indices(len(y), maximum), indices(len(x), maximum)
     xx, yy = np.meshgrid(x[cols], y[rows])
-    zz = grid[np.ix_(rows, cols)]
-    # Integral mask tests every native cell inside each coarse quad. Even tiny holes
-    # remain holes after downsampling; no triangulation across missing picks.
-    bad = (
-        np.pad((~np.isfinite(grid)).astype(np.int32), ((1, 0), (1, 0)))
-        .cumsum(0)
-        .cumsum(1)
-    )
-    r0, r1 = rows[:-1, None], rows[1:, None] + 1
-    c0, c1 = cols[None, :-1], cols[None, 1:] + 1
-    valid = (bad[r1, c1] - bad[r0, c1] - bad[r1, c0] + bad[r0, c0]) == 0
+    # Gather just preview vertices; no native-resolution floating-point grid.
+    row = np.searchsorted(y, horizon.data[:, 0])
+    col = np.searchsorted(x, horizon.data[:, 1])
+    keys = row * len(x) + col
+    order = np.argsort(keys)
+    sorted_keys = keys[order]
+    if np.any(np.diff(sorted_keys) == 0):
+        raise ValueError(f"{horizon.name}: duplicate Inline/Crossline horizon coordinates.")
+    wanted = (rows[:, None] * len(x) + cols[None, :]).ravel()
+    positions = np.searchsorted(sorted_keys, wanted)
+    found = positions < len(keys)
+    found &= sorted_keys[np.minimum(positions, len(keys)-1)] == wanted
+    zz = np.full(len(wanted), np.nan)
+    zz[found] = horizon.data[order[positions[found]], 2]
+    zz = zz.reshape(len(rows), len(cols))
+    # Count observed native picks in compressed coordinate bins. This preserves
+    # holes inside coarse quads without allocating a full native grid/mask.
+    rb = np.unique(np.r_[rows, rows+1])
+    cb = np.unique(np.r_[cols, cols+1])
+    bins = np.searchsorted(rb, row, side="right")-1
+    bins = bins * len(cb) + np.searchsorted(cb, col, side="right")-1
+    counts = np.bincount(bins, minlength=len(rb)*len(cb)).reshape(len(rb), len(cb))
+    total = np.pad(counts, ((1,0),(1,0))).cumsum(0).cumsum(1)
+    r0 = np.searchsorted(rb, rows[:-1])[:, None]
+    r1 = np.searchsorted(rb, rows[1:]+1)[:, None]
+    c0 = np.searchsorted(cb, cols[:-1])[None, :]
+    c1 = np.searchsorted(cb, cols[1:]+1)[None, :]
+    observed = total[r1,c1]-total[r0,c1]-total[r1,c0]+total[r0,c0]
+    expected = (np.diff(rows)+1)[:,None]*(np.diff(cols)+1)[None,:]
+    valid = observed == expected
     rr, cc = np.where(valid)
     width = len(cols)
     a = rr * width + cc
@@ -158,7 +183,7 @@ def horizon_mesh(horizon, maximum=256):
         j=faces[:, 1].tolist(),
         k=faces[:, 2].tolist(),
         edges=edges.tolist(),
-        native_shape=list(grid.shape),
+        native_shape=[len(y), len(x)],
         preview_shape=list(zz.shape),
     )
     horizon._mesh3d[maximum] = result
@@ -167,9 +192,11 @@ def horizon_mesh(horizon, maximum=256):
     return result
 
 
-def horizon_intersection(horizon, kind, position, tolerance=4):
+def horizon_intersection(horizon, kind, position, tolerance=4, maximum=None):
     if kind == "time":
         data = horizon.data[np.abs(horizon.data[:, 2] - position) <= tolerance]
+        if maximum is not None and len(data) > maximum * maximum:
+            data = data[indices(len(data), maximum * maximum)]
         return dict(
             kind=kind,
             position=position,
@@ -182,7 +209,7 @@ def horizon_intersection(horizon, kind, position, tolerance=4):
     data = horizon.data[horizon.data[:, axis] == position]
     data = data[np.argsort(data[:, 1 - axis])]
     # Include breaks at absent expected coordinates, rather than bridging gaps.
-    grid_axis = horizon_grid(horizon)[0 if kind == "inline" else 1]
+    grid_axis = regular_axis(horizon.data[:, 1 if kind == "inline" else 0])
     xyz = []
     last = None
     for il, xl, t in data:
@@ -218,7 +245,7 @@ def scene_data(survey, horizons, state):
             finite = values[np.isfinite(values)]
             if len(finite):
                 stats.append(finite)
-    # All visible slices share one amplitude window, calculated before decimation.
+    # All visible slices share one amplitude window, estimated from the displayed preview samples.
     samples = np.concatenate(stats) if stats else np.array([0.0])
     _, lo, hi = amplitude(samples, state.seismic)
     result.update(vmin=lo, vmax=hi)
@@ -240,7 +267,7 @@ def scene_data(survey, horizons, state):
             lines = []
             for sl in result["slices"]:
                 pts = horizon_intersection(
-                    source, sl["kind"], sl["position"], h.time_slice_tolerance
+                    source, sl["kind"], sl["position"], h.time_slice_tolerance, state.scene.quality
                 )
                 # Intersection lives only on the finite seismic plane extent.
                 if sl["kind"] == "time":

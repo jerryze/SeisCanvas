@@ -1809,3 +1809,161 @@ main {
     flex-wrap: wrap;
   }
 }
+
+/* Horizon Map: compact, grouped controls with a shared visual hierarchy. */
+.map-controls { padding: 0 18px 20px; color: var(--text, #344256); }
+.map-control-section { padding: 18px 0; border-bottom: 1px solid var(--border, #e4e9ef); }
+.map-control-section:last-child { border-bottom: 0; }
+.map-control-section h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 16px; font-size: 12px; font-weight: 650; }
+.map-control-section h3 > svg { color: #657a96; flex-shrink: 0; }
+.map-control-section h3 > span { margin-left: auto; font-size: 9px; font-weight: 500; letter-spacing: 1px; color: #8a98aa; }
+.map-controls .field { display: flex; flex-direction: column; gap: 7px; margin: 0 0 12px; font-size: 11px; color: #65748a; }
+.map-controls select, .map-controls input[type="number"] { width: 100%; min-width: 0; height: 34px; border: 1px solid #dce3ec; border-radius: 7px; background-color: #fff; color: #344256; font-size: 12px; padding: 6px 9px; }
+.map-controls select:focus-visible, .map-controls input:focus-visible, .map-controls button:focus-visible { outline: 2px solid #7297ca; outline-offset: 2px; }
+.map-range-summary { display: flex; flex-direction: column; gap: 5px; margin: 0 0 16px; padding: 11px 12px; background: #f0f4f9; border-radius: 8px; font-variant-numeric: tabular-nums; }
+.map-range-summary > span { display: flex; justify-content: space-between; color: #7b899b; font-size: 10px; }
+.map-range-summary small { font-size: 10px; }
+.map-range-summary strong { font-size: 14px; font-weight: 550; letter-spacing: .3px; color: #405875; }
+.map-field-label { display: block; margin-bottom: 8px; font-size: 11px; color: #65748a; }
+.map-display-options { display: flex; gap: 3px; padding: 3px; border-radius: 7px; background: #edf1f6; }
+.map-display-options button { flex: 1; min-width: 0; padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: #77869a; font-size: 11px; cursor: pointer; transition: background .15s, color .15s; }
+.map-display-options button:hover { color: #365985; background: #e2e9f2; }
+.map-display-options button.active { background: #fff; color: #365985; box-shadow: 0 1px 3px #203b5a18; font-weight: 600; }
+.map-color-preview { margin: 0 0 14px; }
+.map-color-preview > div { height: 10px; border-radius: 4px; box-shadow: inset 0 0 0 1px #00000008; }
+.map-color-preview > span { display: flex; justify-content: space-between; margin-top: 6px; font-size: 10px; color: #7b899b; font-variant-numeric: tabular-nums; }
+.map-color-preview > span > span { color: #9ba6b5; }
+.map-controls .check { margin: 11px 0; font-size: 11px; color: #526277; }
+.map-controls .check input { accent-color: #496e9f; }
+.map-range-mode { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 15px 0 12px; font-size: 11px; color: #65748a; }
+.map-range-mode .map-display-options { width: 116px; }
+.map-controls .field-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin: 12px 0; }
+.map-controls .field-row > label { display: flex; flex-direction: column; gap: 7px; font-size: 11px; color: #65748a; }
+.map-contour-fields { min-width: 0; padding: 0; border: 0; margin: 0; }
+.map-contour-fields:disabled { opacity: .45; }
+
+/* Shared workbench controls and information hierarchy. */
+.sidebar .group > summary { min-height: 49px; font-size: 12px; font-weight: 650; color: #34465d; }
+.sidebar .group > summary > svg:first-child { color: #657a96; }
+.sidebar .group-body { gap: 14px; padding-bottom: 20px; }
+.sidebar input[type="number"], .sidebar select,
+.modal input[type="number"], .modal select { height: 34px; border-radius: 7px; border-color: #dce3ec; background-color: #fff; font-size: 12px; color: #344256; }
+.sidebar .field, .sidebar .field-row > label,
+.sidebar .slice-add label, .modal .field, .modal .field-row > label { font-size: 11px; color: #65748a; gap: 7px; }
+.sidebar .check, .modal .check { font-size: 11px; color: #526277; line-height: 1.5; }
+.sidebar input[type="checkbox"], .modal input[type="checkbox"] { width: 14px; height: 14px; accent-color: #496e9f; }
+.sidebar input[type="color"] { height: 30px; width: 40px; border-radius: 7px; }
+.sidebar .secondary { min-height: 34px; border-radius: 7px; font-size: 11px; }
+.sidebar .secondary:hover:not(:disabled) { background: #f0f4f9; border-color: #b9cadf; }
+.segmented { border: 0; padding: 3px; gap: 3px; border-radius: 8px; background: #edf1f6; }
+.segmented button { min-height: 30px; min-width: 0; border-radius: 5px; font-size: 11px; padding: 6px 8px; }
+.segmented button.active { color: #365985; box-shadow: 0 1px 3px #203b5a18; }
+.view-mode-switch { margin-top: 16px; margin-bottom: 16px; }
+.view-mode-switch button { white-space: nowrap; padding-inline: 5px; }
+.metadata { padding: 12px; gap: 10px; background: #f0f4f9; border: 0; border-radius: 9px; font-size: 11px; }
+.metadata .filename { font-size: 11px; color: #405875; padding-bottom: 10px; border-bottom: 1px solid #dfe7f0; margin-bottom: 1px; overflow-wrap: anywhere; white-space: normal; line-height: 1.6; }
+.metadata > div:not(:first-child) { align-items: baseline; gap: 10px; color: #7b899b; }
+.metadata b { text-align: right; font-weight: 550; color: #405875; }
+.metadata em { font-size: 10px; color: #78899f; }
+.section-number { font-size: 11px; color: #65748a; gap: 12px; }
+.section-number > input { border-radius: 7px; }
+.range-labels { font-size: 10px; color: #8492a5; font-variant-numeric: tabular-nums; }
+.horizon-list { gap: 5px; }
+.horizon-row { min-height: 36px; border-radius: 7px; padding: 4px 7px; border: 1px solid transparent; }
+.horizon-row:hover { background: #f3f6fa; }
+.horizon-row.selected { background: #edf3fb; border-color: #d7e3f2; }
+.horizon-select { min-width: 0; font-size: 11px; }
+.horizon-row:focus-within .delete { opacity: .7; }
+.style-editor { padding: 13px; gap: 14px; border-radius: 9px; background: #f7f9fc; border-color: #e1e8f1; }
+.style-title { padding-bottom: 11px; font-size: 12px; font-weight: 600; color: #405875; }
+.slice-family { gap: 10px; padding-bottom: 16px; }
+.slice-family-heading { font-size: 11px; color: #52667f; }
+.slice-family-heading > span { min-width: 22px; text-align: center; padding: 3px 7px; font-size: 10px; border-radius: 6px; background: #edf3fb; color: #496e9f; font-variant-numeric: tabular-nums; }
+.slice-item { overflow: hidden; background: #f7f9fc; border-color: #e1e8f1; border-radius: 8px; }
+.slice-item > summary { min-height: 37px; padding: 9px 10px; font-size: 11px; }
+.slice-item[open] > summary { background: #f0f4f9; }
+.slice-opacity { font-size: 10px; padding: 3px 5px; border-radius: 4px; color: #6a809b; background: #e9eff7; font-variant-numeric: tabular-nums; }
+.slice-body { gap: 12px; padding: 12px; background: #fff; }
+.control-note, .sidebar .hint { color: #78889d; font-size: 10px; line-height: 1.7; }
+.horizon-3d-controls { gap: 13px; padding-bottom: 14px; }
+.horizon-3d-controls small { font-size: 10px; line-height: 1.6; color: #78889d; }
+.horizon-3d-controls .control-note:first-child { padding: 9px 10px; background: #edf2f8; border-radius: 6px; color: #526a88; font-variant-numeric: tabular-nums; }
+.viewer-heading p { color: #7b899b; font-size: 11px; line-height: 1.6; }
+.breadcrumb { font-size: 11px; color: #7b899b; }
+.viewer-toolbar { gap: 10px; flex-wrap: wrap; min-height: 46px; padding-block: 8px; }
+.viewer-toolbar > b { font-size: 12px; color: #405875; font-weight: 600; }
+.tools > button { min-height: 30px; padding: 6px 9px; border-radius: 6px; background: #f2f5f9; color: #60758f; font-size: 11px; }
+.tools > button:hover:not(:disabled) { background: #e7eef8; color: #365985; }
+.tools > button.chosen { background: #e5eefb; color: #365985; }
+.scene-presets { gap: 5px; padding-block: 10px; }
+.scene-presets button { min-height: 29px; padding: 6px 10px; font-size: 10px; border-radius: 6px; background: #f6f8fb; border-color: #e1e8f1; }
+.scene-presets > span { font-size: 10px; color: #8190a3; }
+.viewer-bottom { gap: 12px; padding-block: 11px; }
+.legend { gap: 6px; }
+.legend > span { padding: 4px 7px; background: #f3f6fa; border-radius: 5px; font-size: 10px; color: #60738a; overflow-wrap: anywhere; }
+.amplitude-key { padding: 5px 8px; background: #f0f4f9; border-radius: 6px; font-size: 10px; font-variant-numeric: tabular-nums; }
+.amplitude-key b { font-size: 9px; color: #8291a5; font-weight: 500; }
+.canvas-footer { font-size: 10px; color: #8291a5; line-height: 1.6; gap: 10px; }
+.modal { border-radius: 14px; }
+.modal-heading { padding-bottom: 16px; border-bottom: 1px solid #e5ebf2; margin-bottom: 16px; }
+.modal .group-body { padding: 0; gap: 14px; }
+.export-note { border-radius: 8px; font-size: 11px; line-height: 1.7; }
+@media (max-width: 720px) {
+  .viewer-toolbar .tools { flex-wrap: wrap; }
+  .scene-presets > span { width: 100%; }
+  .metadata .filename { overflow-wrap: anywhere; }
+}
+
+.export-dialog { width: min(540px, calc(100vw - 32px)); padding: 20px 24px; gap: 0; }
+.export-dialog .modal-heading { margin-bottom: 0; padding-bottom: 10px; }
+.export-settings { border: 0; margin: 0; padding: 0; min-width: 0; }
+.export-settings > section { padding: 10px 0; border-bottom: 1px solid #e5ebf2; }
+.export-settings h3 { margin: 0 0 7px; font-size: 12px; font-weight: 600; color: #405875; }
+.export-settings .format-options { margin: 0; }
+.export-settings .field-row { margin: 0; gap: 12px; }
+.export-settings .field-row > label { font-size: 11px; }
+.export-settings .field { margin-top: 8px; font-size: 11px; }
+.export-toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 6px; }
+.export-toggles fieldset { min-width: 0; padding: 0; border: 0; margin: 0; }
+.export-toggles fieldset:disabled { opacity: .45; }
+.export-settings .field-row > label { gap: 4px; }
+.export-settings .format-options button { min-height: 32px; padding: 7px 12px; }
+.export-dialog .export-actions { margin-top: 12px; }
+.export-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.export-actions > button { min-width: 90px; padding: 9px 16px; }
+@media (max-width: 480px) { .export-settings .field-row { flex-wrap: wrap; } .export-settings .field-row > label { flex-basis: 40%; } }
+
+
+.import-progress { padding: 11px 12px; border-radius: 8px; background: #edf3fb; color: #496580; }
+.import-progress > div { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; line-height: 1.6; margin-bottom: 7px; }
+.import-progress b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.import-progress progress { display: block; width: 100%; height: 7px; border: 0; border-radius: 5px; overflow: hidden; accent-color: #496e9f; }
+.import-progress progress::-webkit-progress-bar { background: #dce6f2; border-radius: 5px; }
+.import-progress progress::-webkit-progress-value { background: #496e9f; border-radius: 5px; transition: width .2s; }
+
+/* Match the compact map controls throughout the other sidebar panels. */
+.sidebar .group > summary { min-height: 40px; padding: 10px 18px; }
+.sidebar .group-body { gap: 9px; padding-bottom: 13px; }
+.sidebar .group input[type="number"],
+.sidebar .group select { height: 32px; padding-block: 4px; }
+.sidebar .group .secondary,
+.sidebar .group .primary { min-height: 32px; padding-block: 6px; }
+.sidebar .group .field-row { gap: 9px; }
+.sidebar .group .field-row > label,
+.sidebar .group .slice-add label { gap: 4px; }
+.sidebar .group .check { min-height: 21px; margin: 0; }
+.sidebar .metadata { padding: 9px 10px; gap: 6px; }
+.sidebar .metadata .filename { padding-bottom: 6px; line-height: 1.4; }
+.sidebar .metadata > div:not(:first-child) { gap: 8px; }
+.sidebar .slice-family { gap: 7px; padding-bottom: 10px; }
+.sidebar .slice-family:last-of-type { padding-bottom: 0; }
+.sidebar .slice-item > summary { min-height: 32px; padding: 6px 9px; }
+.sidebar .slice-opacity { padding: 2px 5px; }
+.sidebar .slice-body { padding: 9px 10px; gap: 8px; }
+.sidebar .horizon-list { gap: 3px; }
+.sidebar .horizon-row { min-height: 31px; padding-block: 2px; }
+.sidebar .style-editor { padding: 10px; gap: 9px; }
+.sidebar .style-title { padding-bottom: 7px; }
+.sidebar .horizon-3d-controls { gap: 9px; padding-bottom: 9px; }
+.sidebar .horizon-3d-controls .field { gap: 4px; }
+.sidebar .control-note, .sidebar .hint { line-height: 1.5; }

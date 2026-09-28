@@ -85,6 +85,7 @@ class Settings(BaseModel):
         "DejaVu Sans"
     )
     font_size: float = Field(10, ge=5, le=30)
+    show_axes: bool = True
     show_labels: bool = True
     show_title: bool = True
     format: Literal["png", "pdf", "svg"] = "png"

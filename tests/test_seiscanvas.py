@@ -43,9 +43,16 @@ def test_geometry_and_samples(cube):
         cube.section("inline", 11)
 
 
-def test_header_validation(cube):
-    with pytest.raises(ValueError):
-        Survey(cube.path, 189, 189)
+def test_import_skips_duplicate_coordinate_validation(cube):
+    survey = Survey(cube.path, 189, 189)
+    assert survey.count == cube.count
+
+
+def test_import_skips_per_trace_time_validation(cube):
+    with segyio.open(str(cube.path), 'r+', ignore_geometry=True) as f:
+        f.header[1] = {109: 240, 117: 2000}
+    survey = Survey(cube.path)
+    assert survey.count == cube.count
 
 
 def test_horizon_headers_and_sorting(tmp_path):
@@ -180,3 +187,166 @@ def test_2d_export_box_ratio(cube, monkeypatch, ratio):
         assert bbox.width / bbox.height == pytest.approx(ratio[0] / ratio[1])
     assert ax.get_ylim() == (212, 200)
     assert ax.get_xlim() == (29.5, 38.5)
+
+
+def test_section_export_without_axes(cube, monkeypatch):
+    from matplotlib.figure import Figure
+    figures = []
+    def capture(*args, **kwargs):
+        fig = Figure(*args, **kwargs)
+        figures.append(fig)
+        return fig
+    monkeypatch.setattr('backend.core.Figure', capture)
+    render(cube, {}, ViewState(section_number=12), Settings(show_axes=False, show_title=True))
+    assert not figures[0].axes[0].axison
+    assert figures[0].axes[0].get_title() == 'Inline 12'
+
+
+def test_array_cache_byte_budget():
+    from backend.core import ArrayCache
+    cache = ArrayCache(max_bytes=32)
+    cache['first'] = np.zeros(6, dtype=np.float32)
+    cache['second'] = np.zeros(4, dtype=np.float32)
+    assert list(cache) == ['second']
+    cache['too_large'] = np.zeros(100, dtype=np.float32)
+    assert 'too_large' not in cache
+    cache['tuple'] = (np.zeros(2, dtype=np.float32), np.zeros(2, dtype=np.float32))
+    assert sum(cache.size(v) for v in cache.values()) <= 32
+
+
+def test_direct_local_segy_preserves_source(cube):
+    old_survey, old_horizons = server.survey, server.horizons.copy()
+    try:
+        client = TestClient(server.app)
+        response = client.post('/api/segy/local', json={'path': str(cube.path), 'ilbyte':189, 'xlbyte':21})
+        assert response.status_code == 200
+        assert server.survey.path == cube.path
+        assert response.json()['metadata']['traces'] == cube.count
+        assert cube.path.exists()
+        response = client.post('/api/segy/local', json={'path':'missing.segy'})
+        assert response.status_code == 400
+        assert server.survey.path == cube.path
+    finally:
+        server.survey = old_survey
+        server.horizons.clear()
+        server.horizons.update(old_horizons)
+
+
+def test_native_segy_picker_open_and_cancel(cube, monkeypatch):
+    old_survey, old_horizons = server.survey, server.horizons.copy()
+    client = TestClient(server.app)
+    try:
+        monkeypatch.setattr(server, 'choose_segy', lambda: str(cube.path))
+        result = client.post('/api/segy/pick', json={'ilbyte':189, 'xlbyte':21})
+        assert result.status_code == 200
+        assert server.survey.path == cube.path
+        current = server.survey
+        monkeypatch.setattr(server, 'choose_segy', lambda: None)
+        assert client.post('/api/segy/pick', json={}).json() == {'cancelled': True}
+        assert server.survey is current and cube.path.exists()
+    finally:
+        server.survey = old_survey
+        server.horizons.clear()
+        server.horizons.update(old_horizons)
+
+
+def test_segy_progress_reports_ordered_stages(cube):
+    events = []
+    Survey(cube.path, progress=lambda percent, stage: events.append((percent, stage)))
+    assert [p for p, _ in events] == sorted(p for p, _ in events)
+    assert events[-1][0] == 98
+    assert any('扫描道头' in stage or '缓存' in stage for _, stage in events)
+    assert any('索引' in stage for _, stage in events)
+
+
+def test_geometry_cache_hit_and_invalidation(cube, tmp_path, monkeypatch):
+    import backend.geometry as geometry
+    import backend.core as core
+    import os
+    monkeypatch.setattr(geometry, 'CACHE_DIR', tmp_path / 'cache')
+    first = Survey(cube.path)
+    assert not first.geometry_cached and first.geometry_cache_saved
+    assert first.trace_lookup.shape == (2, 3)
+    original = core.build_geometry
+    def no_scan(*args):
+        raise AssertionError('Cache hit must not scan headers')
+    monkeypatch.setattr(core, 'build_geometry', no_scan)
+    second = Survey(cube.path)
+    assert second.geometry_cached
+    np.testing.assert_array_equal(second.section('inline', 12)[2], first.section('inline', 12)[2])
+    monkeypatch.setattr(core, 'build_geometry', original)
+    stat = cube.path.stat()
+    os.utime(cube.path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1000000))
+    assert not Survey(cube.path).geometry_cached
+    assert not Survey(cube.path, 189, 193).geometry_cached
+
+
+def test_geometry_scan_only_reads_trace_headers():
+    from backend.geometry import build_geometry
+    class HeaderOnly:
+        tracecount = 4
+        header = [{189: 10, 21: 30}, {189: 10, 21: 31}, {189: 11, 21: 30}, {189: 11, 21: 31}]
+        @property
+        def trace(self):
+            raise AssertionError('No amplitudes during import')
+    result = build_geometry(HeaderOnly(), 189, 21, lambda *args: None)
+    np.testing.assert_array_equal(result['lookup'], [[0, 1], [2, 3]])
+    assert result['ils'].dtype == np.int32
+
+
+@pytest.mark.parametrize('outer', [0, 1])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_regular_geometry_probes_and_lookup(outer, reverse):
+    from backend.geometry import build_regular_geometry
+    il = list(range(100, 140, 2)); xl = list(range(300, 420, 3))
+    if reverse:
+        il.reverse(); xl.reverse()
+    pairs = [(i, x) for i in il for x in xl] if outer == 0 else [(i, x) for x in xl for i in il]
+    reads = []
+    class Headers:
+        def __getitem__(self, index):
+            reads.append(index)
+            return {189:pairs[index][0], 21:pairs[index][1]}
+    class File:
+        tracecount = len(pairs)
+        header = Headers()
+    result = build_regular_geometry(File(), 189, 21, lambda *args: None)
+    assert len(reads) <= 12
+    for r, i in enumerate(sorted(il)):
+        for c, x in enumerate(sorted(xl)):
+            assert pairs[result['lookup'][r,c]] == (i,x)
+
+
+def test_regular_geometry_rejects_inconsistent_boundary():
+    from backend.geometry import build_regular_geometry
+    class File:
+        tracecount = 4
+        header = [{189:1,21:1},{189:1,21:2},{189:2,21:2},{189:2,21:1}]
+    with pytest.raises(ValueError, match='Auto'):
+        build_regular_geometry(File(), 189, 21, lambda *args: None)
+
+
+def test_formula_geometry_reads_and_small_cache(cube, tmp_path, monkeypatch):
+    import backend.geometry as geometry
+    import backend.core as core
+    from backend.scene import timeslice
+    monkeypatch.setattr(geometry, 'CACHE_DIR', tmp_path/'formula-cache')
+    with segyio.open(str(cube.path), 'r+', ignore_geometry=True) as f:
+        for i in [2,5]:
+            f.header[i] = {21:36}
+    expected = Survey(cube.path)
+    fast = Survey(cube.path, geometry_mode='regular')
+    assert fast.regular.inner_count == 3
+    assert fast.regular.outer_count == 2
+    assert not hasattr(fast, 'ils') and not hasattr(fast, 'maps')
+    assert fast.trace_lookup is None
+    assert int(fast.regular.trace_id(12,36)) == 5
+    assert int(fast.regular.byte_offset(12,36)) == 3600+5*(240+4*4)
+    for mode, n in [('inline',12),('crossline',33)]:
+        np.testing.assert_array_equal(fast.section(mode,n)[2], expected.section(mode,n)[2])
+    np.testing.assert_array_equal(timeslice(fast,204)[1],timeslice(expected,204)[1])
+    assert all(a.ndim == 0 for a in fast.regular.parameters().values())
+    def no_probe(*args):
+        raise AssertionError('Cached formula must skip probing')
+    monkeypatch.setattr(core, 'probe_regular', no_probe)
+    assert Survey(cube.path, geometry_mode='regular').geometry_cached
