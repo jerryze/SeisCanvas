@@ -619,7 +619,7 @@ export default function App() {
 
           <span>SeisCanvas</span>
 
-          <span className="version">V0.1</span>
+          <span className="version">V0.2</span>
         </div>
 
         <div className="top-status">
