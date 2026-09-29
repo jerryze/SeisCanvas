@@ -1793,6 +1793,9 @@ main {
 .map-range-summary > span { display: flex; justify-content: space-between; color: var(--text-muted); font-size: var(--fs-xs); }
 .map-range-summary small { font-size: var(--fs-xs); }
 .map-range-summary strong { font-size: var(--fs-lg); font-weight: 550; letter-spacing: .3px; color: var(--text); }
+.map-stats { display: flex; flex-direction: column; gap: 5px; margin: 0 0 16px; padding: 11px 12px; background: #f0f4f9; border-radius: 8px; font-variant-numeric: tabular-nums; }
+.map-stats > span { display: flex; justify-content: space-between; align-items: baseline; font-size: var(--fs-xs); color: var(--text-muted); }
+.map-stats b { font-weight: 550; color: var(--text); }
 .map-field-label { display: block; margin-bottom: 8px; font-size: var(--fs-sm); color: var(--text-secondary); }
 .map-display-options { display: flex; gap: 3px; padding: 3px; border-radius: 7px; background: #edf1f6; }
 .map-display-options button { flex: 1; min-width: 0; padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); font-size: var(--fs-sm); cursor: pointer; transition: background .15s, color .15s; }

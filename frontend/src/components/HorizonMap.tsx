@@ -6,11 +6,12 @@ import Plotly from "plotly.js-dist-min";
 import type { HS } from "../types";
 import type { ExportDialogSettings } from "../types";
 import { api } from "../api/client";
+import { formatAmplitude } from "../format";
 import { Group, Num, Toggle } from "./Controls";
 
 type State = {
   horizon: string;
-  color_by: "twt" | "amplitude";
+  color_by: "twt" | "amplitude" | "difference";
   display: string;
   colormap: string;
   reverse_colormap: boolean;
@@ -18,6 +19,10 @@ type State = {
   vmin: number | null;
   vmax: number | null;
   clip_percentile: number;
+  difference_reference: string | null;
+  difference_comparison: string | null;
+  difference_type: "signed" | "absolute";
+  show_statistics: boolean;
   contours: boolean;
   interval_auto: boolean;
   interval: number;
@@ -27,16 +32,26 @@ type State = {
   x_range: [number, number] | null;
   y_range: [number, number] | null;
 };
+type DifferenceStats = {
+  mae: number | null;
+  rmse: number | null;
+  bias: number | null;
+  valid_ratio: number;
+  count: number;
+};
 type Data = {
   x: number[];
   y: number[];
   z: (number | null)[][];
   colorbar_title?: string;
+  scalar_name?: string;
+  scalar_unit?: string;
   twt_range: number[];
   vmin: number;
   vmax: number;
   colorscale: any[];
   contours: { level: number; x: number[]; y: number[] }[];
+  statistics?: DifferenceStats;
 };
 export default function HorizonMap({
   horizons,
@@ -60,6 +75,10 @@ export default function HorizonMap({
   const [state, setState] = useState<State>({
     horizon: horizons[0]?.id || "",
     color_by: "twt",
+    difference_reference: null,
+    difference_comparison: null,
+    difference_type: "signed",
+    show_statistics: true,
     display: "filled_contour",
     colormap: "petrel",
     reverse_colormap: false,
@@ -364,16 +383,74 @@ export default function HorizonMap({
           [
             ["twt", "TWT"],
             ["amplitude", "沿层振幅"],
+            ["difference", "差值"],
           ],
-          (color_by) =>
-            patch({
+          (color_by) => {
+            const next: Partial<State> = {
               color_by: color_by as State["color_by"],
-              colormap: color_by === "amplitude" ? "seismic" : "petrel",
               range_mode: "auto",
               vmin: null,
               vmax: null,
               interval_auto: true,
-            }),
+            };
+            if (color_by === "amplitude") next.colormap = "seismic";
+            else if (color_by === "difference") {
+              next.colormap = "RdBu";
+              next.difference_type = "signed";
+              next.difference_reference = latest.current.horizon;
+              next.difference_comparison =
+                horizons.find((h) => h.id !== latest.current.horizon)?.id ??
+                latest.current.horizon;
+            } else next.colormap = "petrel";
+            patch(next);
+          },
+        )}
+        {state.color_by === "difference" && (
+          <>
+            {select(
+              "参考层位",
+              state.difference_reference ?? "",
+              horizons.map((h) => [h.id, h.name]),
+              (difference_reference) => patch({ difference_reference }),
+            )}
+            {select(
+              "对比层位",
+              state.difference_comparison ?? "",
+              horizons.map((h) => [h.id, h.name]),
+              (difference_comparison) => patch({ difference_comparison }),
+            )}
+            <label className="map-field-label">差值类型</label>
+            <div className="map-display-options" role="group" aria-label="差值类型">
+              {(
+                [
+                  ["signed", "有符号"],
+                  ["absolute", "绝对值"],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  className={state.difference_type === value ? "active" : ""}
+                  aria-pressed={state.difference_type === value}
+                  onClick={() =>
+                    patch({
+                      difference_type: value,
+                      colormap: value === "absolute" ? "viridis" : "RdBu",
+                      range_mode: "auto",
+                      vmin: null,
+                      vmax: null,
+                    })
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <Toggle
+              label="显示统计"
+              checked={state.show_statistics}
+              onChange={(show_statistics) => patch({ show_statistics })}
+            />
+          </>
         )}
         <div className="map-range-summary">
           <span>
@@ -385,6 +462,40 @@ export default function HorizonMap({
               : "—"}
           </strong>
         </div>
+        {state.color_by === "difference" &&
+          state.show_statistics &&
+          data?.statistics && (
+            <div className="map-stats" role="status" aria-label="差值统计">
+              <span>
+                MAE
+                <b>
+                  {data.statistics.mae === null
+                    ? "—"
+                    : `${formatAmplitude(data.statistics.mae)} ms`}
+                </b>
+              </span>
+              <span>
+                RMSE
+                <b>
+                  {data.statistics.rmse === null
+                    ? "—"
+                    : `${formatAmplitude(data.statistics.rmse)} ms`}
+                </b>
+              </span>
+              <span>
+                Bias
+                <b>
+                  {data.statistics.bias === null
+                    ? "—"
+                    : `${formatAmplitude(data.statistics.bias)} ms`}
+                </b>
+              </span>
+              <span>
+                有效率
+                <b>{(data.statistics.valid_ratio * 100).toFixed(1)}%</b>
+              </span>
+            </div>
+          )}
         <label className="map-field-label">显示方式</label>
         <div
           className="map-display-options"
@@ -417,13 +528,25 @@ export default function HorizonMap({
                 ["RdBu", "RdBu"],
                 ["coolwarm", "Coolwarm"],
               ]
-            : [
-                ["petrel", "Petrel"],
-                ["turbo", "Turbo"],
-                ["viridis", "Viridis"],
-                ["cividis", "Cividis"],
-                ["jet", "Jet"],
-              ]) as [string, string][],
+            : state.color_by === "difference"
+              ? state.difference_type === "absolute"
+                ? [
+                    ["viridis", "Viridis"],
+                    ["turbo", "Turbo"],
+                    ["magma", "Magma"],
+                  ]
+                : [
+                    ["RdBu", "RdBu"],
+                    ["coolwarm", "Coolwarm"],
+                    ["seismic", "Seismic"],
+                  ]
+              : [
+                  ["petrel", "Petrel"],
+                  ["turbo", "Turbo"],
+                  ["viridis", "Viridis"],
+                  ["cividis", "Cividis"],
+                  ["jet", "Jet"],
+                ]) as [string, string][],
           (colormap) => patch({ colormap }),
         )}
         {gradient && (
@@ -433,7 +556,11 @@ export default function HorizonMap({
             />
             <span>
               {data!.vmin.toFixed(1)}
-              <span>TWT · ms</span>
+              <span>
+                {data
+                  ? `${data.scalar_name || "TWT"}${data.scalar_unit ? ` · ${data.scalar_unit}` : ""}`
+                  : "TWT · ms"}
+              </span>
               {data!.vmax.toFixed(1)}
             </span>
           </div>

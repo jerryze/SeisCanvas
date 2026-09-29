@@ -93,7 +93,8 @@ def add_map(survey, horizons, req: QueueMapRequest) -> dict:
         raise ValueError("Horizon not found.")
     horizon = horizons[state.horizon]
     dataset = dataset_label(survey, req.dataset)
-    scalar = "TWT"
+    #: Filename scalar position names the active color variable.
+    scalar = {"twt": "TWT", "amplitude": "Amplitude", "difference": "Diff"}[state.color_by]
     display = naming.display_label(state.display)
     colormap = naming.colormap_label(state.colormap, "Petrel")
     filename = naming.horizon_map_name(
@@ -107,12 +108,21 @@ def add_map(survey, horizons, req: QueueMapRequest) -> dict:
         settings.dpi,
         settings.format,
     )
-    data = render_map(survey, horizon, state, settings)
+    data = render_map(survey, horizon, state, settings, horizons)
     summary = {
         "horizon": horizon.name,
         "color_by": state.color_by,
         "clip_percentile": state.clip_percentile,
         "scalar": scalar,
+        "difference": (
+            {
+                "reference": state.difference_reference,
+                "comparison": state.difference_comparison,
+                "type": state.difference_type,
+            }
+            if state.color_by == "difference"
+            else None
+        ),
         "display": state.display,
         "colormap": state.colormap,
         "reverse_colormap": state.reverse_colormap,

@@ -166,3 +166,140 @@ def test_amplitude_handles_footprints_outside_the_cube(cube, tmp_path):
     h = Horizon(p)
     data = map_data(cube, h, HorizonMapState(horizon='h', color_by='amplitude', display='filled'))
     assert data['z'] == [[1031, 1034], [1231, 1234], [None, None]]
+
+
+# ---------------------------------------------------------------- difference
+
+
+def grid_horizon(tmp_path, name, value, ys=range(5), xs=range(5)):
+    p = tmp_path / name
+    p.write_text("\n".join(f"{y} {x} {value(y, x)}" for y in ys for x in xs))
+    return Horizon(p)
+
+
+def difference_state(horizon_id, reference, comparison, **extra):
+    return HorizonMapState(
+        horizon=horizon_id,
+        color_by="difference",
+        difference_reference=reference,
+        difference_comparison=comparison,
+        **extra,
+    )
+
+
+def test_difference_signed_constant_offset(tmp_path):
+    base = grid_horizon(tmp_path, "a.txt", lambda y, x: 200 + 2 * y + x)
+    comp = grid_horizon(tmp_path, "b.txt", lambda y, x: 200 + 2 * y + x + 3)
+    horizons = {"a": base, "b": comp}
+    data = map_data(None, base, difference_state("a", "a", "b", display="filled"), horizons)
+    assert data["colorbar_title"] == "ΔTWT (ms)"
+    assert data["z"] == [[3.0] * 5] * 5
+    # Signed differences center on zero with a symmetric auto range.
+    assert data["vmin"] == pytest.approx(-data["vmax"])
+    stats = data["statistics"]
+    assert stats["mae"] == 3 and stats["rmse"] == 3 and stats["bias"] == 3
+    assert stats["valid_ratio"] == 1.0 and stats["count"] == 25
+
+
+def test_difference_absolute_range_and_label(tmp_path):
+    base = grid_horizon(tmp_path, "a.txt", lambda y, x: 200 + 2 * y + x)
+    comp = grid_horizon(tmp_path, "b.txt", lambda y, x: 200 + 2 * y + x - 4)
+    horizons = {"a": base, "b": comp}
+    data = map_data(
+        None,
+        base,
+        difference_state("a", "a", "b", difference_type="absolute", colormap="viridis", display="filled"),
+        horizons,
+    )
+    assert data["colorbar_title"] == "|ΔTWT| (ms)"
+    assert data["z"] == [[4.0] * 5] * 5
+    # Absolute differences grow from zero.
+    assert data["vmin"] <= 0 < data["vmax"]
+    assert data["statistics"]["mae"] == 4 and data["statistics"]["bias"] == -4
+
+
+def test_difference_holes_excluded_from_statistics(tmp_path):
+    base = grid_horizon(tmp_path, "a.txt", lambda y, x: 200 + 2 * y + x)
+    p = tmp_path / "b_hole.txt"
+    p.write_text(
+        "\n".join(
+            f"{y} {x} {200 + 2 * y + x + 2}"
+            for y in range(5)
+            for x in range(5)
+            if (y, x) != (1, 1)
+        )
+    )
+    horizons = {"a": base, "b": Horizon(p)}
+    data = map_data(None, base, difference_state("a", "a", "b", display="filled"), horizons)
+    # A missing comparison pick is a gap, never a zero.
+    assert data["z"][1][1] is None
+    stats = data["statistics"]
+    assert stats["count"] == 24 and stats["valid_ratio"] == pytest.approx(0.96)
+    assert stats["mae"] == 2 and stats["bias"] == 2
+
+
+def test_difference_resamples_mismatched_grids(tmp_path):
+    base = grid_horizon(tmp_path, "a.txt", lambda y, x: 200 + 2 * y + x)
+    # Comparison picks every second inline: bilinear fills the in-between rows.
+    comp = grid_horizon(tmp_path, "b.txt", lambda y, x: 100 + y + x, ys=(0, 2, 4))
+    horizons = {"a": base, "b": comp}
+    data = map_data(None, base, difference_state("a", "a", "b", display="filled"), horizons)
+    assert [row[0] for row in data["z"]] == [-100.0, -101.0, -102.0, -103.0, -104.0]
+
+
+def test_difference_ignores_rows_outside_the_comparison(tmp_path):
+    base = grid_horizon(tmp_path, "a.txt", lambda y, x: 200 + 2 * y + x)
+    comp = grid_horizon(tmp_path, "b.txt", lambda y, x: 100 + y + x, ys=(2, 4))
+    horizons = {"a": base, "b": comp}
+    data = map_data(None, base, difference_state("a", "a", "b", display="filled"), horizons)
+    # Comparison extent starts at inline 2: rows 0/1 have no difference,
+    # row 3 interpolates between the picks at 2 and 4.
+    assert [row[0] for row in data["z"]] == [None, None, -102.0, -103.0, -104.0]
+
+
+def test_difference_requires_both_horizons(tmp_path):
+    base = grid_horizon(tmp_path, "a.txt", lambda y, x: 200 + 2 * y + x)
+    horizons = {"a": base}
+    with pytest.raises(ValueError):
+        map_data(None, base, difference_state("a", None, None), horizons)
+    with pytest.raises(ValueError):
+        map_data(None, base, difference_state("a", "a", "missing"), horizons)
+
+
+def test_difference_publication_render(tmp_path):
+    base = grid_horizon(tmp_path, "a.txt", lambda y, x: 200 + 2 * y + x)
+    comp = grid_horizon(tmp_path, "b.txt", lambda y, x: 200 + 2 * y + x + 3)
+    horizons = {"a": base, "b": comp}
+    content = render_map(
+        None,
+        base,
+        difference_state("a", "a", "b", interval=1, colormap="RdBu"),
+        Settings(),
+        horizons,
+    )
+    assert content.startswith(b"\x89PNG")
+
+
+def test_difference_map_api(client, tmp_path):
+    import backend.main as server
+    from backend.core import Horizon as H
+
+    p = tmp_path / "c.txt"
+    p.write_text("10 30 206\n10 33 207\n12 30 208\n12 33 210\n")
+    server.horizons["c"] = H(p)
+    try:
+        response = client.post(
+            "/api/horizon-map",
+            json={
+                "horizon": "h",
+                "color_by": "difference",
+                "difference_reference": "h",
+                "difference_comparison": "c",
+            },
+        )
+    finally:
+        server.horizons.pop("c", None)
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["colorbar_title"] == "ΔTWT (ms)"
+    assert data["statistics"]["mae"] == 2.0 and data["statistics"]["bias"] == 2.0
