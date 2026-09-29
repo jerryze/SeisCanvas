@@ -330,6 +330,9 @@ def test_profile_section_interpolates_between_traces(cube):
     # The reported path ends are the clipped extended end points.
     assert result["path_start"] == [10.0, 30.0]
     assert result["path_end"] == [10.0, 33.45]
+    # Distance runs from the section start, strictly increasing.
+    assert result["distance"][0] == 0
+    assert all(b > a for a, b in zip(result["distance"], result["distance"][1:]))
 
 
 def test_profile_extends_and_stays_inside_the_survey(cube):

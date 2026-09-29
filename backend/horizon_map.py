@@ -330,7 +330,9 @@ def map_profile(survey, horizon, state, horizons, a, b):
     t = np.linspace(t_lo, t_hi, count)
     qil = ail + d_il * t
     qxl = axl + d_xl * t
-    distance = np.hypot(qil - ail, qxl - axl)
+    # Measured from the section start so the axis is strictly increasing
+    # (a Plotly heatmap needs monotonic x); A and B sit inside it.
+    distance = np.hypot(qil - qil[0], qxl - qxl[0])
 
     section = sample_seismic_line(survey, qil, qxl)
     curves = []
