@@ -26,11 +26,15 @@ __all__ = [
     "map_values",
     "map_data",
     "render_map",
+    "map_profile",
     "sample_amplitude",
     "sample_difference",
     "resample_to_grid",
     "difference_statistics",
 ]
+
+#: Uniform samples along one A–B profile line.
+PROFILE_SAMPLES = 256
 
 PETREL = ['#ff0000', '#ff8000', '#ffff00', '#00c040', '#00ffff', '#0000ff', '#8000c0', '#ff00ff']
 
@@ -192,6 +196,96 @@ def difference_statistics(signed):
         "valid_ratio": count / total if total else 0.0,
         "count": count,
     }
+
+
+def _bilinear_points(src_x, src_y, grid, qx, qy):
+    """Strict bilinear sampling of ``grid`` at (qx=crossline, qy=inline).
+
+    Unlike :func:`resample_to_grid` (which renormalises around holes to keep
+    maps filled), a profile must show gaps where data is missing
+    (horizon_map_v2 §9): a sample whose bilinear stencil touches a missing
+    pick is NaN and the curve breaks instead of bridging the hole.
+    """
+    px = _fractional_index(src_x, qx)
+    py = _fractional_index(src_y, qy)
+    finite = np.isfinite(px) & np.isfinite(py)
+    col0 = np.clip(np.nan_to_num(np.floor(px)).astype(np.int64), 0, max(len(src_x) - 2, 0))
+    row0 = np.clip(np.nan_to_num(np.floor(py)).astype(np.int64), 0, max(len(src_y) - 2, 0))
+    col1 = np.clip(col0 + 1, 0, len(src_x) - 1)
+    row1 = np.clip(row0 + 1, 0, len(src_y) - 1)
+    fx = np.nan_to_num(px - col0)
+    fy = np.nan_to_num(py - row0)
+    corners = [
+        (grid[row0, col0], (1 - fx) * (1 - fy)),
+        (grid[row0, col1], fx * (1 - fy)),
+        (grid[row1, col0], (1 - fx) * fy),
+        (grid[row1, col1], fx * fy),
+    ]
+    total = np.zeros(len(qx))
+    acc = np.zeros(len(qx))
+    complete = np.ones(len(qx), dtype=bool)
+    for values, weight in corners:
+        known = np.isfinite(values)
+        complete &= known
+        total += weight
+        acc += np.where(known, values, 0.0) * weight
+    out = np.where(complete, acc / np.where(total > 0, total, 1.0), np.nan)
+    out[~finite] = np.nan
+    return out
+
+
+def map_profile(survey, horizon, state, horizons, a, b):
+    """Sample the active scalars along the straight A–B line.
+
+    Returns uniform ``(distance, curves)`` with the horizontal axis in grid
+    units.  TWT/amplitude maps yield the active scalar curve; difference maps
+    yield the reference and comparison TWT curves (no difference curve, per
+    horizon_map_v2 §11).  Missing picks become ``None`` so the curve gaps
+    instead of bridging across holes.
+    """
+    try:
+        (ail, axl), (bil, bxl) = (float(a[0]), float(a[1])), (float(b[0]), float(b[1]))
+    except (TypeError, ValueError, IndexError) as e:
+        raise ValueError("Profile end points must be (inline, crossline) pairs.") from e
+    if not all(np.isfinite(v) for v in (ail, axl, bil, bxl)):
+        raise ValueError("Profile end points must be finite coordinates.")
+    if (ail, axl) == (bil, bxl):
+        raise ValueError("Profile end points A and B must be two different positions.")
+    t = np.linspace(0.0, 1.0, PROFILE_SAMPLES)
+    qil = ail + (bil - ail) * t
+    qxl = axl + (bxl - axl) * t
+    distance = np.hypot(qil - ail, qxl - axl)
+    if state.color_by == "difference":
+        if not horizons:
+            raise ValueError("Difference needs the loaded horizons.")
+        reference = horizons.get(state.difference_reference or "")
+        comparison = horizons.get(state.difference_comparison or "")
+        if reference is None or comparison is None:
+            raise ValueError("Difference needs a reference and a comparison horizon.")
+        curves = []
+        for role, h in (("reference", reference), ("comparison", comparison)):
+            hx, hy, hgrid = horizon_grid(h)
+            curves.append(
+                dict(role=role, name=h.name, values=serial(_bilinear_points(hx, hy, hgrid, qxl, qil)))
+            )
+        label_y = "TWT (ms)"
+    else:
+        data = map_scalar(survey, horizon, state, horizons)
+        curves = [
+            dict(
+                role="scalar",
+                name=horizon.name,
+                values=serial(_bilinear_points(data.x, data.y, data.scalar, qxl, qil)),
+            )
+        ]
+        label_y = data.label
+    return dict(
+        distance=np.round(distance, 3).tolist(),
+        curves=curves,
+        label_y=label_y,
+        a=[ail, axl],
+        b=[bil, bxl],
+    )
 
 
 def map_scalar(survey, horizon, state, horizons=None) -> HorizonMapData:

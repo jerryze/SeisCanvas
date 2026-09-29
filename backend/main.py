@@ -22,6 +22,7 @@ from backend.models import (
     Horizon3DStyle,
     HorizonMapExport,
     HorizonMapState,
+    HorizonProfileRequest,
     LocalHorizonRequest,
     LocalSegyRequest,
     PickSegyRequest,
@@ -36,7 +37,7 @@ from backend.scene import slice_data, horizon_mesh, horizon_intersection, scene_
 from backend.section_service import interactive_section
 from backend.preview import preview_ids, read_samples
 
-from backend.horizon_map import map_data, render_map
+from backend.horizon_map import map_data, map_profile, render_map
 from backend import export_queue
 from backend.export_service import (
     add_2d,
@@ -90,6 +91,24 @@ def horizon_map(state: HorizonMapState):
             raise HTTPException(404, "Horizon not found.")
         try:
             return map_data(require_survey(), horizons[state.horizon], state, horizons)
+        except ValueError as e:
+            raise error(e)
+
+
+@app.post("/api/horizon-map/profile")
+def horizon_map_profile(req: HorizonProfileRequest):
+    with lock:
+        if req.state.horizon not in horizons:
+            raise HTTPException(404, "Horizon not found.")
+        try:
+            return map_profile(
+                require_survey(),
+                horizons[req.state.horizon],
+                req.state,
+                horizons,
+                req.a,
+                req.b,
+            )
         except ValueError as e:
             raise error(e)
 

@@ -32,6 +32,14 @@ type State = {
   x_range: [number, number] | null;
   y_range: [number, number] | null;
 };
+type ProfileCurve = { role: string; name: string; values: (number | null)[] };
+type ProfileData = {
+  distance: number[];
+  curves: ProfileCurve[];
+  label_y: string;
+  a: number[];
+  b: number[];
+};
 type DifferenceStats = {
   mae: number | null;
   rmse: number | null;
@@ -116,7 +124,29 @@ export default function HorizonMap({
     version = useRef(0),
     latest = useRef(state);
   latest.current = state;
+  const [profileOn, setProfileOn] = useState(false);
+  const [profileA, setProfileA] = useState<[number, number] | null>(null);
+  const [profileB, setProfileB] = useState<[number, number] | null>(null);
+  const [picking, setPicking] = useState<null | "a" | "b">(null);
+  const [profileData, setProfileData] = useState<ProfileData | null>(null);
+  const [profileError, setProfileError] = useState("");
+  const profileRef = useRef<HTMLDivElement>(null);
+  const pickingRef = useRef(picking);
+  pickingRef.current = picking;
   const patch = (p: Partial<State>) => setState((s) => ({ ...s, ...p }));
+  const centerInline = Math.round(((data?.y[0] ?? 0) + (data?.y.at(-1) ?? 0)) / 2);
+  const centerCrossline = Math.round(((data?.x[0] ?? 0) + (data?.x.at(-1) ?? 0)) / 2);
+  const setPoint = (
+    setter: (p: [number, number] | null) => void,
+    point: [number, number] | null,
+    index: 0 | 1,
+    value: number,
+  ) => {
+    const base: [number, number] = point ?? [centerInline, centerCrossline];
+    const next = [...base] as [number, number];
+    next[index] = value;
+    setter(next);
+  };
   const ready = useRef(onReady);
   ready.current = onReady;
   useEffect(() => {
@@ -262,6 +292,22 @@ export default function HorizonMap({
             textfont: { size: 11, color: "#333" },
             hoverinfo: "skip",
           });
+        if (profileOn && profileA && profileB) {
+          traces.push({
+            type: "scatter",
+            mode: "lines+markers+text",
+            x: [profileA[1], profileB[1]],
+            y: [profileA[0], profileB[0]],
+            text: ["A", "B"],
+            textposition: "bottom center",
+            textfont: { size: 11, color: "#365985" },
+            line: { color: "#365985", width: 2, dash: "dash" },
+            marker: { color: "#365985", size: 7 },
+            connectgaps: true,
+            hoverinfo: "skip",
+            showlegend: false,
+          });
+        }
         await Plotly.react(
           el,
           traces,
@@ -290,6 +336,20 @@ export default function HorizonMap({
           { responsive: true, scrollZoom: true, displayModeBar: false },
         );
         if (token !== version.current) return;
+        // Profile picking: the next map click lands on A, the one after on B.
+        el.on("plotly_click", (event: any) => {
+          const target = pickingRef.current;
+          const point = event?.points?.[0];
+          if (!target || !point) return;
+          const pos: [number, number] = [point.y, point.x];
+          if (target === "a") {
+            setProfileA(pos);
+            setPicking("b");
+          } else {
+            setProfileB(pos);
+            setPicking(null);
+          }
+        });
         el.on("plotly_relayout", (e: any) => {
           if (e["xaxis.autorange"] || e["yaxis.autorange"])
             patch({ x_range: null, y_range: null });
@@ -314,7 +374,79 @@ export default function HorizonMap({
         setError(String(e));
         ready.current(false);
       });
-  }, [data, state.x_range, state.y_range, drag]);
+  }, [data, state.x_range, state.y_range, drag, profileOn, profileA, profileB]);
+  // A–B profile: refetch whenever the endpoints or the active scalars change.
+  useEffect(() => {
+    if (!profileOn || !profileA || !profileB) {
+      setProfileData(null);
+      setProfileError("");
+      return;
+    }
+    if (profileA[0] === profileB[0] && profileA[1] === profileB[1]) return;
+    const abort = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const res = await api("/horizon-map/profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ state: latest.current, a: profileA, b: profileB }),
+          signal: abort.signal,
+        });
+        const result = await res.json();
+        setProfileData(result);
+        setProfileError("");
+      } catch (e) {
+        if ((e as Error).name !== "AbortError")
+          setProfileError((e as Error).message);
+      }
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      abort.abort();
+    };
+  }, [profileOn, profileA, profileB, query]);
+
+  // Profile subplot below the map: hover, zoom, double-click to reset.
+  useEffect(() => {
+    const el = profileRef.current as any;
+    if (!el || !profileData) return;
+    const colors = ["#365985", "#c45252"];
+    const traces: any[] = profileData.curves.map((c, i) => ({
+      type: "scatter",
+      mode: "lines",
+      name: c.name,
+      x: profileData.distance,
+      y: c.values,
+      connectgaps: false,
+      line: { color: colors[i % colors.length], width: 2 },
+      hovertemplate: `${c.name}<br>距离 %{x:.1f}<br>%{y}<extra></extra>`,
+    }));
+    Plotly.react(
+      el,
+      traces,
+      {
+        margin: { l: 62, r: 14, t: 8, b: 38 },
+        showlegend: profileData.curves.length > 1,
+        legend: { orientation: "h", y: -0.25 },
+        paper_bgcolor: "#fff",
+        plot_bgcolor: "#fff",
+        font: { family: "DM Sans, 'PingFang SC', Arial, sans-serif", color: "#425367", size: 11 },
+        xaxis: { title: { text: "距离 (网格)", standoff: 8 }, showgrid: false, linecolor: "#bcc8cf", ticks: "outside" },
+        yaxis: { title: { text: profileData.label_y, standoff: 4 }, showgrid: false, linecolor: "#bcc8cf", ticks: "outside" },
+        hovermode: "closest",
+      } as any,
+      { responsive: true, displayModeBar: false, scrollZoom: true },
+    );
+  }, [profileData]);
+
+  useEffect(() => {
+    if (!profileOn) return;
+    const el = profileRef.current;
+    return () => {
+      if (el) Plotly.purge(el);
+    };
+  }, [profileOn]);
+
   useEffect(() => {
     const el = plot.current!;
     const observer = new ResizeObserver(() => {
@@ -517,6 +649,77 @@ export default function HorizonMap({
             </button>
           ))}
         </div>
+        <Toggle
+          label="A–B 剖面"
+          checked={profileOn}
+          onChange={(value) => {
+            setProfileOn(value);
+            setPicking(null);
+          }}
+        />
+        {profileOn && (
+          <div className="map-profile-controls">
+            <div className="field-row">
+              <label>
+                A · Inline
+                <Num
+                  value={profileA?.[0] ?? centerInline}
+                  onChange={(v) => setPoint(setProfileA, profileA, 0, v)}
+                />
+              </label>
+              <label>
+                A · Xline
+                <Num
+                  value={profileA?.[1] ?? centerCrossline}
+                  onChange={(v) => setPoint(setProfileA, profileA, 1, v)}
+                />
+              </label>
+            </div>
+            <div className="field-row">
+              <label>
+                B · Inline
+                <Num
+                  value={profileB?.[0] ?? centerInline}
+                  onChange={(v) => setPoint(setProfileB, profileB, 0, v)}
+                />
+              </label>
+              <label>
+                B · Xline
+                <Num
+                  value={profileB?.[1] ?? centerCrossline}
+                  onChange={(v) => setPoint(setProfileB, profileB, 1, v)}
+                />
+              </label>
+            </div>
+            <div className="map-profile-actions">
+              <button
+                className={picking === "a" ? "active" : ""}
+                disabled={!data}
+                onClick={() => setPicking(picking === "a" ? null : "a")}
+              >
+                拾取 A
+              </button>
+              <button
+                className={picking === "b" ? "active" : ""}
+                disabled={!data}
+                onClick={() => setPicking(picking === "b" ? null : "b")}
+              >
+                拾取 B
+              </button>
+              <button
+                onClick={() => {
+                  setProfileA(null);
+                  setProfileB(null);
+                  setPicking(null);
+                  setProfileData(null);
+                  setProfileError("");
+                }}
+              >
+                清除
+              </button>
+            </div>
+          </div>
+        )}
       </Group>
       <Group icon={<Palette size={16} />} title="色彩映射">
         {select(
@@ -732,6 +935,33 @@ export default function HorizonMap({
             visibility: data ? "visible" : "hidden",
           }}
         />
+        {profileOn && (
+          <div className="map-profile">
+            <div className="map-profile-head">
+              <b>A–B 剖面</b>
+              <span>
+                {picking
+                  ? picking === "a"
+                    ? "在地图上点击 A 点…"
+                    : "在地图上点击 B 点…"
+                  : profileData
+                    ? `${profileData.curves.length} 条曲线 · ${profileData.curves[0]?.values.filter((v) => v !== null).length ?? 0} 有效采样`
+                    : ""}
+              </span>
+            </div>
+            {profileError && (
+              <p role="alert" className="error">
+                {profileError}
+              </p>
+            )}
+            <div ref={profileRef} className="map-profile-plot" />
+            {!profileData && !profileError && (
+              <p className="map-profile-hint">
+                在地图上拾取 A、B 两点，或在左侧手动输入坐标后自动绘制。
+              </p>
+            )}
+          </div>
+        )}
       </div>
       {exportOpen && <ExportDialog title="层位地图 · 加入导出" settings={settings}
         onChange={p => setSettings(s => ({...s, ...p}))}

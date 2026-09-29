@@ -316,6 +316,16 @@ class HorizonMapExport(BaseModel):
     settings: Settings
 
 
+class HorizonProfileRequest(BaseModel):
+    """A–B horizon profile: sample the map scalars along a straight line."""
+
+    state: HorizonMapState
+    #: End points as (inline, crossline) in survey grid units; both may sit
+    #: between grid nodes (bilinear) but must be two different positions.
+    a: tuple[float, float]
+    b: tuple[float, float]
+
+
 class Queue2DRequest(BaseModel):
     kind: Literal["2d"] = "2d"
     dataset: str | None = Field(None, max_length=120)
