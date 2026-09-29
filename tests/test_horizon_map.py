@@ -581,3 +581,44 @@ def test_profile_export_rejects_bad_colors(client):
         },
     )
     assert response.status_code == 422
+
+
+def test_render_profile_removable_furniture(cube, tmp_path, monkeypatch):
+    from matplotlib.figure import Figure
+    from backend.horizon_map import render_profile
+
+    figures = []
+
+    def capture(*args, **kwargs):
+        fig = Figure(*args, **kwargs)
+        figures.append(fig)
+        return fig
+
+    monkeypatch.setattr("backend.horizon_map.Figure", capture)
+    full = amplitude_horizon(tmp_path, 204, xls=(30, 32, 34, 36, 38))
+    horizons = {"h": full}
+    common = dict(
+        state=HorizonMapState(horizon="h"),
+        horizons=horizons,
+        a=(10, 30),
+        b=(12, 38),
+        settings=Settings(),
+    )
+    # Everything on by default: curve + A/B lines exist, legend present.
+    render_profile(cube, **common, curve_colors={"h": "#f5b942"})
+    lines = figures[0].axes[0].get_lines()
+    assert any(ln.get_color() == "#f5b942" for ln in lines)
+    assert sum("dashdot" not in str(ln.get_linestyle()) for ln in lines) >= 1
+    assert figures[0].axes[0].get_legend() is not None
+    # All furniture removed: only the (empty) axes remain.
+    render_profile(
+        cube, **common, show_curves=False, show_legend=False, show_ab=False
+    )
+    axes = figures[1].axes[0]
+    overlay = [
+        ln
+        for ln in axes.get_lines()
+        if ln.get_color() == "#f5b942" or ln.get_linestyle() in ("--", (0, (4, 3)))
+    ]
+    assert overlay == []
+    assert axes.get_legend() is None

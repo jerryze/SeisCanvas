@@ -171,6 +171,9 @@ export default function HorizonMap({
     show_axes: true,
     show_labels: true,
     show_title: true,
+    show_curves: true,
+    show_legend: true,
+    show_ab: true,
   });
   const profileRef = useRef<HTMLDivElement>(null);
   const pickingRef = useRef(picking);
@@ -1186,6 +1189,7 @@ export default function HorizonMap({
       {profileExportOpen && profileA && profileB && (
         <ExportDialog
           title="A–B 剖面 · 加入导出"
+          profile
           settings={profileSettings}
           onChange={(p) => setProfileSettings((s) => ({ ...s, ...p }))}
           onClose={() => setProfileExportOpen(false)}

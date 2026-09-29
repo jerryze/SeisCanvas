@@ -440,6 +440,9 @@ def render_profile(
     curve_colors=None,
     colormap="seismic",
     reverse_colormap=False,
+    show_curves=True,
+    show_legend=True,
+    show_ab=True,
 ):
     """Publication A–B section: interpolated seismic background, horizon TWT
     overlays in their style colors, A/B markers.  Returns ``(bytes, info)``.
@@ -474,35 +477,37 @@ def render_profile(
         rasterized=True,
     )
     colors = curve_colors or {}
-    for curve in d["curves"]:
-        ax.plot(
-            d["distance"],
-            curve["values"],
-            color=colors.get(curve["id"], "#1a1a1a"),
-            lw=1.8,
-            label=curve["name"],
-        )
-    for x in (d["a_distance"], d["b_distance"]):
-        ax.axvline(x, color="#1a1a1a", lw=1.2, ls=(0, (4, 3)))
-    top = float(d["time"][0])
-    span = float(d["time"][-1]) - top
-    for x, text in ((d["a_distance"], "A"), (d["b_distance"], "B")):
-        ax.text(
-            x,
-            top + 0.02 * span,
-            f" {text}",
-            color="#1a1a1a",
-            fontsize=settings.font_size,
-            ha="left",
-            va="top",
-        )
+    if show_curves:
+        for curve in d["curves"]:
+            ax.plot(
+                d["distance"],
+                curve["values"],
+                color=colors.get(curve["id"], "#1a1a1a"),
+                lw=1.8,
+                label=curve["name"],
+            )
+    if show_ab:
+        for x in (d["a_distance"], d["b_distance"]):
+            ax.axvline(x, color="#1a1a1a", lw=1.2, ls=(0, (4, 3)))
+        top = float(d["time"][0])
+        span = float(d["time"][-1]) - top
+        for x, text in ((d["a_distance"], "A"), (d["b_distance"], "B")):
+            ax.text(
+                x,
+                top + 0.02 * span,
+                f" {text}",
+                color="#1a1a1a",
+                fontsize=settings.font_size,
+                ha="left",
+                va="top",
+            )
     ax.set_xlim(float(d["distance"][0]), float(d["distance"][-1]))
     if not settings.show_axes:
         ax.set_axis_off()
     if settings.show_axes and settings.show_labels:
         ax.set_xlabel("Distance (grid)")
         ax.set_ylabel("TWT (ms)")
-    if d["curves"]:
+    if show_curves and show_legend and d["curves"]:
         ax.legend(loc="lower right", fontsize=settings.font_size, framealpha=0.85)
     if settings.show_title:
         ax.set_title("A–B Profile")

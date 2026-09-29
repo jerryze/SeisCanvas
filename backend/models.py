@@ -380,6 +380,10 @@ class QueueProfileRequest(BaseModel):
     #: Section background colormap, shared with the 2D window display.
     colormap: str = "seismic"
     reverse_colormap: bool = False
+    #: Figure furniture, all removable for publication layouts.
+    show_curves: bool = True
+    show_legend: bool = True
+    show_ab: bool = True
     settings: Settings = Field(default_factory=Settings)
 
     @field_validator("curve_colors")

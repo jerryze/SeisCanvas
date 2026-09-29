@@ -12,6 +12,8 @@ type Props = {
   disabled?: boolean;
   error?: string;
   scene?: boolean;
+  /** A–B profile dialog: exposes the removable figure furniture. */
+  profile?: boolean;
   colorbar?: boolean;
   onColorbar?: (value: boolean) => void;
   rendering?: boolean;
@@ -30,6 +32,7 @@ export default function ExportDialog({
   disabled,
   error,
   scene = false,
+  profile = false,
   colorbar,
   onColorbar,
   rendering = true,
@@ -181,6 +184,27 @@ export default function ExportDialog({
                   checked={s.show_title !== false}
                   onChange={(show_title) => patch({ show_title })}
                 />
+              )}
+              {profile && (
+                <>
+                  <Toggle
+                    label="层位曲线"
+                    checked={s.show_curves !== false}
+                    onChange={(show_curves) => patch({ show_curves })}
+                  />
+                  <fieldset disabled={s.show_curves === false}>
+                    <Toggle
+                      label="图例"
+                      checked={s.show_legend !== false}
+                      onChange={(show_legend) => patch({ show_legend })}
+                    />
+                  </fieldset>
+                  <Toggle
+                    label="A/B 标注"
+                    checked={s.show_ab !== false}
+                    onChange={(show_ab) => patch({ show_ab })}
+                  />
+                </>
               )}
               {onColorbar && (
                 <Toggle label="显示色标尺" checked={!!colorbar} onChange={onColorbar} />

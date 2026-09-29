@@ -142,6 +142,10 @@ export type ExportDialogSettings = {
   background?: string;
   interpolation?: Interpolation;
   resolution?: ResolutionMode;
+  /** A–B profile figure furniture, all removable. */
+  show_curves?: boolean;
+  show_legend?: boolean;
+  show_ab?: boolean;
 };
 
 /** An immutable figure already rendered and stored in the export session. */

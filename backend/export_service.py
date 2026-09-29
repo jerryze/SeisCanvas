@@ -175,6 +175,9 @@ def add_profile(survey, horizons, req: QueueProfileRequest) -> dict:
         req.curve_colors,
         req.colormap,
         req.reverse_colormap,
+        req.show_curves,
+        req.show_legend,
+        req.show_ab,
     )
     filename = naming.map_profile_name(
         dataset,
@@ -197,7 +200,10 @@ def add_profile(survey, horizons, req: QueueProfileRequest) -> dict:
         "path_end": info["path_end"],
         "colormap": req.colormap,
         "reverse_colormap": req.reverse_colormap,
-        "overlays": info["curves"],
+        "overlays": info["curves"] if req.show_curves else [],
+        "show_curves": req.show_curves,
+        "show_legend": req.show_legend,
+        "show_ab": req.show_ab,
         "amplitude_range": [-info["vmax"], info["vmax"]],
     }
     return session().add(
