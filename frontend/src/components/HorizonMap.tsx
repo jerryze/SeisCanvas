@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Plotly from "plotly.js-dist-min";
 import type { HS } from "../types";
-import type { ExportDialogSettings } from "../types";
+import type { ExportDialogSettings, SS } from "../types";
 import { api } from "../api/client";
 import { formatAmplitude } from "../format";
 import { Group, Num, Toggle } from "./Controls";
@@ -69,6 +69,10 @@ type Data = {
 export default function HorizonMap({
   horizons,
   maps,
+  seismic,
+  aspect,
+  onSeismic,
+  onAspect,
   exportOpen,
   onCloseExport,
   onReady,
@@ -79,6 +83,11 @@ export default function HorizonMap({
 }: {
   horizons: HS[];
   maps: Record<string, any[]>;
+  /** Shared with the 2D window: the profile reuses its display settings. */
+  seismic: SS;
+  aspect: [number, number] | null;
+  onSeismic: (patch: Partial<SS>) => void;
+  onAspect: (ratio: [number, number] | null) => void;
   exportOpen: boolean;
   onCloseExport: () => void;
   onReady: (v: boolean) => void;
@@ -417,13 +426,21 @@ export default function HorizonMap({
   useEffect(() => {
     const el = profileRef.current as any;
     if (!el || !profileData) return;
+    // Same colormap the 2D window uses, reversal included.
+    const base = maps?.[seismic.colormap]?.length
+      ? maps[seismic.colormap]
+      : "RdBu";
+    const colorscale =
+      seismic.reverse_colormap && Array.isArray(base)
+        ? base.map((c, i) => [c[0], base[base.length - 1 - i][1]])
+        : base;
     const traces: any[] = [
       {
         type: "heatmap",
         x: profileData.distance,
         y: profileData.time,
         z: profileData.amplitude,
-        colorscale: maps?.seismic?.length ? maps.seismic : "RdBu",
+        colorscale,
         zmin: profileData.vmin,
         zmax: profileData.vmax,
         showscale: false,
@@ -445,6 +462,13 @@ export default function HorizonMap({
         hovertemplate: `${curve.name}<br>TWT %{y:.1f} ms<extra></extra>`,
       });
     }
+    // Aspect lock shared with the 2D window: the same 横向/纵向 ratio.
+    const distSpan = Math.abs(
+      (profileData.distance.at(-1) ?? 1) - (profileData.distance[0] ?? 0),
+    );
+    const timeSpan = Math.abs(
+      (profileData.time.at(-1) ?? 1) - (profileData.time[0] ?? 0),
+    );
     const abShape = (x: number) => ({
       type: "line",
       x0: x,
@@ -473,7 +497,19 @@ export default function HorizonMap({
         plot_bgcolor: "#fff",
         font: { family: "DM Sans, 'PingFang SC', Arial, sans-serif", color: "#425367", size: 11 },
         xaxis: { title: { text: "距离 (网格)", standoff: 8 }, showgrid: false, linecolor: "#bcc8cf", ticks: "outside" },
-        yaxis: { title: { text: profileData.label_y, standoff: 4 }, autorange: "reversed", showgrid: false, linecolor: "#bcc8cf", ticks: "outside" },
+        yaxis: {
+          title: { text: profileData.label_y, standoff: 4 },
+          range: [profileData.time.at(-1) ?? 0, profileData.time[0] ?? 0],
+          autorange: false,
+          scaleanchor: aspect ? "x" : undefined,
+          scaleratio: aspect
+            ? (aspect[1] / aspect[0]) * (distSpan / timeSpan)
+            : undefined,
+          constrain: "domain",
+          showgrid: false,
+          linecolor: "#bcc8cf",
+          ticks: "outside",
+        },
         hovermode: "closest",
         shapes: [
           abShape(profileData.a_distance),
@@ -486,7 +522,7 @@ export default function HorizonMap({
       } as any,
       { responsive: true, displayModeBar: false, scrollZoom: true },
     );
-  }, [profileData, maps, horizons]);
+  }, [profileData, maps, horizons, seismic, aspect]);
 
   useEffect(() => {
     if (!profileOn) return;
@@ -740,6 +776,47 @@ export default function HorizonMap({
                 />
               </label>
             </div>
+            <label className="field">
+              色标
+              <select
+                value={seismic.colormap}
+                onChange={(e) => onSeismic({ colormap: e.target.value })}
+              >
+                {Object.keys(maps).map((n) => (
+                  <option key={n}>{n}</option>
+                ))}
+              </select>
+            </label>
+            <Toggle
+              label="反转色标"
+              checked={seismic.reverse_colormap}
+              onChange={(reverse_colormap) => onSeismic({ reverse_colormap })}
+            />
+            <Toggle
+              label="固定横纵比例"
+              checked={!!aspect}
+              onChange={(enabled) => onAspect(enabled ? [2, 1] : null)}
+            />
+            {aspect && (
+              <div className="field-row">
+                {["横向比例", "纵向比例"].map((label, index) => (
+                  <label key={label}>
+                    {label}
+                    <Num
+                      value={aspect[index]}
+                      min={0.1}
+                      max={5}
+                      step={0.1}
+                      onChange={(n) => {
+                        const ratio = [...aspect] as [number, number];
+                        ratio[index] = n;
+                        onAspect(ratio);
+                      }}
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
             <div className="map-profile-actions">
               <button
                 className={picking === "a" ? "active" : ""}

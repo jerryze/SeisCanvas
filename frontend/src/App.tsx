@@ -785,6 +785,12 @@ export default function App() {
             <HorizonMap
               horizons={view.horizons}
               maps={maps}
+              seismic={view.seismic}
+              aspect={view.aspect_ratio_2d}
+              onSeismic={seismic}
+              onAspect={(ratio) =>
+                setView((v) => ({ ...v, aspect_ratio_2d: ratio }))
+              }
               exportOpen={exportOpen}
               onCloseExport={() => setExportOpen(false)}
               onReady={setMapReady}

@@ -1804,7 +1804,7 @@ main {
 .map-profile { flex-shrink: 0; border-top: 1px solid var(--border-light); padding: 10px 14px 12px; background: #ffffff; }
 .map-profile-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
 .map-profile-head > span { font-weight: 400; font-size: var(--fs-xs); color: var(--text-muted); }
-.map-profile-plot { height: 300px; }
+.map-profile-plot { height: 400px; }
 .map-profile-hint { margin: 8px 0 4px; font-size: var(--fs-xs); line-height: 1.6; color: var(--text-muted); }
 .map-field-label { display: block; margin-bottom: 8px; font-size: var(--fs-sm); color: var(--text-secondary); }
 .map-display-options { display: flex; gap: 3px; padding: 3px; border-radius: 7px; background: #edf1f6; }
