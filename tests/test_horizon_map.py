@@ -394,3 +394,50 @@ def test_profile_api(client):
     assert data["amplitude"][0][0] == 1030
     assert data["curves"][0]["id"] == "h"
     assert data["curves"][0]["name"] == "h"
+
+
+def test_profile_display_resampling(cube):
+    # Adaptive: the raster is fitted to the target pixels with bilinear, but
+    # never upsampled beyond 3x the native grid (same guard as /api/section).
+    result = map_profile(
+        cube,
+        None,
+        HorizonMapState(horizon="h"),
+        {},
+        (10, 30),
+        (12, 38),
+        target_width=400,
+        target_height=200,
+        interpolation="bilinear",
+    )
+    # Native path grid is 5 x 4 (tiny cube): 3x cap gives 15 x 12.
+    assert len(result["distance"]) == 15
+    assert len(result["time"]) == 12
+    assert len(result["amplitude"]) == 12 and len(result["amplitude"][0]) == 15
+    # Coordinate axes are resampled linspaces spanning the native extent.
+    assert result["distance"][0] == pytest.approx(0)
+    assert result["time"][0] == 200.0 and result["time"][-1] == 212.0
+
+
+def test_profile_native_without_target(cube):
+    result = map_profile(cube, None, HorizonMapState(horizon="h"), {}, (10, 30), (12, 38))
+    n = len(result["distance"])
+    assert len(result["amplitude"][0]) == n
+
+
+def test_profile_resampling_api(client):
+    response = client.post(
+        "/api/horizon-map/profile",
+        json={
+            "state": {"horizon": "h"},
+            "a": [10, 30],
+            "b": [12, 38],
+            "target_width": 300,
+            "target_height": 150,
+            "interpolation": "bicubic",
+        },
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    # 3x upsample cap of the 5 x 4 native grid.
+    assert len(data["distance"]) == 15 and len(data["time"]) == 12

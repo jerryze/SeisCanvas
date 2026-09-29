@@ -442,10 +442,26 @@ export default function HorizonMap({
     const abort = new AbortController();
     const timer = setTimeout(async () => {
       try {
+        // Same adaptive-resolution contract as the 2D window: ask for the
+        // subplot's real pixels; the raster is resampled server-side with the
+        // selected filter (and not at all when 自适应分辨率 is off).
+        const box = profileRef.current;
+        const ratio = Math.min(window.devicePixelRatio || 1, 2);
         const res = await api("/horizon-map/profile", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ state: latest.current, a: profileA, b: profileB }),
+          body: JSON.stringify({
+            state: latest.current,
+            a: profileA,
+            b: profileB,
+            ...(seismic.adaptive_resolution
+              ? {
+                  target_width: box ? Math.round(box.clientWidth * ratio) : null,
+                  target_height: box ? Math.round(box.clientHeight * ratio) : null,
+                }
+              : {}),
+            interpolation: seismic.interpolation,
+          }),
           signal: abort.signal,
         });
         const result = await res.json();
@@ -460,7 +476,7 @@ export default function HorizonMap({
       clearTimeout(timer);
       abort.abort();
     };
-  }, [profileOn, profileA, profileB, query]);
+  }, [profileOn, profileA, profileB, query, seismic]);
 
   // Profile subplot: interpolated seismic section with horizon TWT overlays.
   useEffect(() => {

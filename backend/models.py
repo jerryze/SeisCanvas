@@ -324,6 +324,11 @@ class HorizonProfileRequest(BaseModel):
     #: between grid nodes (bilinear) but must be two different positions.
     a: tuple[float, float]
     b: tuple[float, float]
+    #: Display resampling of the section, mirroring /api/section: when a
+    #: target is given the raster is fitted to the subplot's pixels.
+    target_width: int | None = Field(None, ge=8, le=8000)
+    target_height: int | None = Field(None, ge=8, le=8000)
+    interpolation: Literal["nearest", "bilinear", "bicubic"] | None = None
 
 
 class Queue2DRequest(BaseModel):

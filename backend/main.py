@@ -108,6 +108,9 @@ def horizon_map_profile(req: HorizonProfileRequest):
                 horizons,
                 req.a,
                 req.b,
+                req.target_width,
+                req.target_height,
+                req.interpolation,
             )
         except ValueError as e:
             raise error(e)

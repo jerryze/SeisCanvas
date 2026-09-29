@@ -16,6 +16,7 @@ from matplotlib.colors import LinearSegmentedColormap, Normalize, to_hex
 from matplotlib.figure import Figure
 from matplotlib.cm import ScalarMappable
 from backend.models import HorizonMapExport, HorizonMapState
+from backend import resample
 from backend.preview import preview_ids, read_samples, trace_ids_at
 from backend.scene import horizon_grid, serial
 from backend.style import font_family
@@ -282,7 +283,17 @@ def sample_seismic_line(survey, qil, qxl):
     return section
 
 
-def map_profile(survey, horizon, state, horizons, a, b):
+def map_profile(
+    survey,
+    horizon,
+    state,
+    horizons,
+    a,
+    b,
+    target_width=None,
+    target_height=None,
+    interpolation=None,
+):
     """Arbitrary-direction seismic section along the straight A–B line.
 
     The path runs through A and B, extends ``PROFILE_EXTENSION`` beyond both
@@ -335,20 +346,40 @@ def map_profile(survey, horizon, state, horizons, a, b):
     distance = np.hypot(qil - qil[0], qxl - qxl[0])
 
     section = sample_seismic_line(survey, qil, qxl)
+    native_shape = section.shape
+    # Display resampling, identical to the 2D section pipeline: the raster is
+    # fitted to the subplot's pixels (adaptive) with the selected filter and
+    # antialiasing on downsample; the underlying data is never altered.
+    method = resample.method(interpolation, "bilinear")
+    if target_width or target_height:
+        width, height = resample.fit_target(
+            native_shape[0], native_shape[1], target_width, target_height
+        )
+    else:
+        width, height = native_shape
+    # resample expects rows = height (time) and columns = width (distance),
+    # so transpose before and the result is already time-major for the payload.
+    if (width, height) != native_shape:
+        display = resample.resample(section.T, width, height, method)
+    else:
+        display = section.T
+    finite = section[np.isfinite(section)]
+    vmax = float(np.percentile(np.abs(finite), 99)) if len(finite) else 0.0
+    vmax = vmax or 1.0
     curves = []
     for key, h in (horizons or {}).items():
         hx, hy, hgrid = horizon_grid(h)
         curves.append(
             dict(id=key, name=h.name, values=serial(_bilinear_points(hx, hy, hgrid, qxl, qil)))
         )
-    finite = section[np.isfinite(section)]
-    vmax = float(np.percentile(np.abs(finite), 99)) if len(finite) else 0.0
-    vmax = vmax or 1.0
     return dict(
-        distance=np.round(distance, 3).tolist(),
-        time=[float(v) for v in survey.times],
+        # Resampled coordinate axes, matching the display raster exactly.
+        distance=np.linspace(distance[0], distance[-1], width).tolist(),
+        time=np.linspace(survey.times[0], survey.times[-1], height).tolist(),
         # Time-major rows so the browser heatmap can consume z directly.
-        amplitude=serial(section.T),
+        amplitude=resample.display_values(
+            display, -vmax, vmax, method, resampled=(width, height) != native_shape
+        ),
         curves=curves,
         a_distance=float(round(np.hypot(ail - qil[0], axl - qxl[0]), 3)),
         b_distance=float(round(np.hypot(bil - qil[0], bxl - qxl[0]), 3)),
