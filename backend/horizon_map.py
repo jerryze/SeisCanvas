@@ -366,11 +366,22 @@ def map_profile(
     finite = section[np.isfinite(section)]
     vmax = float(np.percentile(np.abs(finite), 99)) if len(finite) else 0.0
     vmax = vmax or 1.0
+    # Horizon curves are sampled at the DISPLAY positions, so they line up
+    # with the resampled heatmap columns exactly (same count, same axis).
+    # The path is straight with uniform sampling, so positions are linear in
+    # the path fraction; without resampling this reproduces the native points.
+    fraction = np.linspace(0.0, 1.0, width)
+    display_il = qil[0] + (qil[-1] - qil[0]) * fraction
+    display_xl = qxl[0] + (qxl[-1] - qxl[0]) * fraction
     curves = []
     for key, h in (horizons or {}).items():
         hx, hy, hgrid = horizon_grid(h)
         curves.append(
-            dict(id=key, name=h.name, values=serial(_bilinear_points(hx, hy, hgrid, qxl, qil)))
+            dict(
+                id=key,
+                name=h.name,
+                values=serial(_bilinear_points(hx, hy, hgrid, display_xl, display_il)),
+            )
         )
     return dict(
         # Resampled coordinate axes, matching the display raster exactly.

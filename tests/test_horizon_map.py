@@ -425,6 +425,48 @@ def test_profile_native_without_target(cube):
     assert len(result["amplitude"][0]) == n
 
 
+def test_profile_curves_align_with_display_columns(cube, tmp_path):
+    # A constant horizon sampled at the display positions stays constant, and
+    # a gapped horizon breaks exactly once at the display resolution too.
+    full = amplitude_horizon(tmp_path, 204, xls=(30, 32, 34, 36, 38))
+    p = tmp_path / "gapped.txt"
+    p.write_text(
+        "".join(
+            f"{il} {xl} 204\n"
+            for il in (10, 12)
+            for xl in (30, 32, 34, 36, 38)
+            if (il, xl) != (10, 34)
+        )
+    )
+    horizons = {"h": full, "g": Horizon(p)}
+    result = map_profile(
+        cube,
+        None,
+        HorizonMapState(horizon="h"),
+        horizons,
+        (10, 30),
+        (12, 38),
+        target_width=15,
+        target_height=12,
+    )
+    curves = {c["id"]: c for c in result["curves"]}
+    assert len(curves["h"]["values"]) == len(result["distance"]) == 15
+    assert all(v == pytest.approx(204) for v in curves["h"]["values"])
+    # The missing pick (10, 34) invalidates every display column whose bilinear
+    # stencil touches it: the gap spans the path where crossline is in (32, 36)
+    # — the same distance range as at native sampling, just finer sampled.
+    gap = [
+        x
+        for x, v in zip(result["distance"], curves["g"]["values"])
+        if v is None
+    ]
+    assert len(gap) >= 1
+    # Distance of path points at xline 32 and 36 along the 8.25-long diagonal.
+    lo, hi = 0.25 * 8.246, 0.75 * 8.246
+    assert lo - 0.1 < min(gap) < lo + 0.3
+    assert hi - 0.3 < max(gap) < hi + 0.1
+
+
 def test_profile_resampling_api(client):
     response = client.post(
         "/api/horizon-map/profile",
