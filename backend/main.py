@@ -43,6 +43,7 @@ from backend.export_service import (
     add_2d,
     add_3d,
     add_map,
+    add_profile,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -464,6 +465,8 @@ def queue_add(req: QueueAddRequest):
                 return add_2d(require_survey(), horizons, req)
             if req.kind == "map":
                 return add_map(require_survey(), horizons, req)
+            if req.kind == "profile":
+                return add_profile(require_survey(), horizons, req)
             return add_3d(require_survey(), req)
     except KeyError:
         raise HTTPException(404, "Export item not found.")

@@ -483,3 +483,101 @@ def test_profile_resampling_api(client):
     data = response.json()
     # 3x upsample cap of the 5 x 4 native grid.
     assert len(data["distance"]) == 15 and len(data["time"]) == 12
+
+
+# ------------------------------------------------------------- profile export
+
+
+@pytest.mark.parametrize(
+    "fmt,signature", [("png", b"\x89PNG"), ("pdf", b"%PDF"), ("svg", b"<?xml")]
+)
+def test_render_profile_publication(cube, tmp_path, fmt, signature):
+    from backend.horizon_map import render_profile
+
+    full = amplitude_horizon(tmp_path, 204, xls=(30, 32, 34, 36, 38))
+    horizons = {"h": full}
+    content, info = render_profile(
+        cube,
+        HorizonMapState(horizon="h", colorbar=True),
+        horizons,
+        (10, 30),
+        (12, 38),
+        Settings(format=fmt, width=180, height=80),
+        {"h": "#f5b942"},
+        colormap="seismic",
+    )
+    assert content.startswith(signature)
+    assert info["a"] == [10.0, 30.0] and info["b"] == [12.0, 38.0]
+    assert info["curves"] == ["amp"]  # horizon name, not its queue id
+    assert info["a_distance"] == pytest.approx(0)  # A sits on the extent corner
+
+
+def test_render_profile_uses_curve_colors(cube, tmp_path, monkeypatch):
+    from matplotlib.figure import Figure
+    from backend.horizon_map import render_profile
+
+    figures = []
+
+    def capture(*args, **kwargs):
+        fig = Figure(*args, **kwargs)
+        figures.append(fig)
+        return fig
+
+    monkeypatch.setattr("backend.horizon_map.Figure", capture)
+    full = amplitude_horizon(tmp_path, 204, xls=(30, 32, 34, 36, 38))
+    render_profile(
+        cube,
+        HorizonMapState(horizon="h"),
+        {"h": full},
+        (10, 30),
+        (12, 38),
+        Settings(),
+        {"h": "#f5b942"},
+    )
+    lines = figures[0].axes[0].get_lines()
+    overlay = [ln for ln in lines if ln.get_color() == "#f5b942"]
+    assert overlay and overlay[0].get_label() == "amp"
+
+
+def test_profile_export_queue_naming_and_manifest(client, tmp_path):
+    p = tmp_path / "ov.txt"
+    p.write_text("10 30 204\n10 33 205\n12 30 206\n12 33 208\n")
+    import backend.main as server
+
+    server.horizons["ov"] = Horizon(p)
+    try:
+        response = client.post(
+            "/api/export/queue",
+            json={
+                "kind": "profile",
+                "dataset": "F3",
+                "state": {"horizon": "h"},
+                "a": [10, 30],
+                "b": [12, 33],
+                "curve_colors": {"ov": "#42ddbc"},
+                "colormap": "seismic",
+                "settings": {"format": "png", "width": 180, "height": 80, "dpi": 300},
+            },
+        )
+    finally:
+        server.horizons.pop("ov", None)
+    assert response.status_code == 200, response.text
+    item = response.json()
+    assert item["view_type"] == "horizon_map"
+    assert item["folder"] == "HorizonMap"
+    assert item["filename"].startswith("F3_HorizonMap_h_Seismic_ProfileAB_")
+    assert "180x80mm_300dpi.png" in item["filename"]
+
+
+def test_profile_export_rejects_bad_colors(client):
+    response = client.post(
+        "/api/export/queue",
+        json={
+            "kind": "profile",
+            "state": {"horizon": "h"},
+            "a": [10, 30],
+            "b": [12, 33],
+            "curve_colors": {"ov": "orange"},
+        },
+    )
+    assert response.status_code == 422

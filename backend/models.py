@@ -1,3 +1,5 @@
+import re
+
 from typing import Annotated, Literal, Union
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, model_validator, field_validator
 
@@ -365,8 +367,32 @@ class Queue3DRequest(BaseModel):
         return self
 
 
+class QueueProfileRequest(BaseModel):
+    """Standalone A–B profile figure: interpolated seismic section + overlays."""
+
+    kind: Literal["profile"] = "profile"
+    dataset: str | None = Field(None, max_length=120)
+    state: HorizonMapState
+    a: tuple[float, float]
+    b: tuple[float, float]
+    #: Horizon id -> line color, so overlays match the on-screen styles.
+    curve_colors: dict[str, str] = Field(default_factory=dict)
+    #: Section background colormap, shared with the 2D window display.
+    colormap: str = "seismic"
+    reverse_colormap: bool = False
+    settings: Settings = Field(default_factory=Settings)
+
+    @field_validator("curve_colors")
+    @classmethod
+    def hex_colors(cls, value):
+        for color in value.values():
+            if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(color)):
+                raise ValueError(f"Invalid curve color {color!r}.")
+        return value
+
+
 QueueAddRequest = Annotated[
-    Union[Queue2DRequest, QueueMapRequest, Queue3DRequest],
+    Union[Queue2DRequest, QueueMapRequest, Queue3DRequest, QueueProfileRequest],
     Field(discriminator="kind"),
 ]
 

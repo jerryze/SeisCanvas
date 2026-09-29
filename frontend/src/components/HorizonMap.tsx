@@ -75,6 +75,7 @@ export default function HorizonMap({
   aspect,
   onSeismic,
   onAspect,
+  onAddProfileToExport,
   exportOpen,
   onCloseExport,
   onReady,
@@ -90,6 +91,16 @@ export default function HorizonMap({
   aspect: [number, number] | null;
   onSeismic: (patch: Partial<SS>) => void;
   onAspect: (ratio: [number, number] | null) => void;
+  /** Queue the standalone A–B profile figure (payload built here). */
+  onAddProfileToExport: (payload: {
+    state: State;
+    a: [number, number];
+    b: [number, number];
+    curve_colors: Record<string, string>;
+    colormap: string;
+    reverse_colormap: boolean;
+    settings: Record<string, unknown>;
+  }) => Promise<void>;
   exportOpen: boolean;
   onCloseExport: () => void;
   onReady: (v: boolean) => void;
@@ -148,6 +159,19 @@ export default function HorizonMap({
   const [picking, setPicking] = useState<null | "a" | "b">(null);
   const [profileData, setProfileData] = useState<ProfileData | null>(null);
   const [profileError, setProfileError] = useState("");
+  const [profileExportOpen, setProfileExportOpen] = useState(false);
+  const [profileExportBusy, setProfileExportBusy] = useState(false);
+  const [profileSettings, setProfileSettings] = useState<ExportDialogSettings>({
+    format: "png",
+    width: 180,
+    height: 80,
+    dpi: 300,
+    font: "Times New Roman",
+    font_size: 10,
+    show_axes: true,
+    show_labels: true,
+    show_title: true,
+  });
   const profileRef = useRef<HTMLDivElement>(null);
   const pickingRef = useRef(picking);
   pickingRef.current = picking;
@@ -899,6 +923,13 @@ export default function HorizonMap({
               >
                 清除
               </button>
+              <button
+                className="primary"
+                disabled={!profileData}
+                onClick={() => setProfileExportOpen(true)}
+              >
+                加入导出
+              </button>
             </div>
           </div>
         )}
@@ -1151,6 +1182,43 @@ export default function HorizonMap({
         disabled={!data || loading} error={error} rendering={false}
         dataset={dataset} onDataset={onDataset} datasetPlaceholder={datasetPlaceholder}
         colorbar={state.colorbar} onColorbar={colorbar => patch({colorbar})} />}
+
+      {profileExportOpen && profileA && profileB && (
+        <ExportDialog
+          title="A–B 剖面 · 加入导出"
+          settings={profileSettings}
+          onChange={(p) => setProfileSettings((s) => ({ ...s, ...p }))}
+          onClose={() => setProfileExportOpen(false)}
+          onExport={async () => {
+            setProfileExportBusy(true);
+            try {
+              await onAddProfileToExport({
+                state,
+                a: profileA,
+                b: profileB,
+                curve_colors: Object.fromEntries(
+                  horizons
+                    .filter((h) => h.visible)
+                    .map((h) => [h.id, h.color]),
+                ),
+                colormap: seismic.colormap,
+                reverse_colormap: seismic.reverse_colormap,
+                settings: profileSettings,
+              });
+              setProfileExportOpen(false);
+            } finally {
+              setProfileExportBusy(false);
+            }
+          }}
+          busy={profileExportBusy}
+          disabled={!profileData}
+          error={profileError}
+          rendering={false}
+          dataset={dataset}
+          onDataset={onDataset}
+          datasetPlaceholder={datasetPlaceholder}
+        />
+      )}
 
     </>
   );

@@ -14,8 +14,14 @@ from __future__ import annotations
 from backend import naming
 from backend.export3d import decode_scene_png, encode_scene
 from backend.export_queue import session
-from backend.horizon_map import render_map
-from backend.models import Queue2DRequest, Queue3DRequest, QueueMapRequest, SceneExportRequest
+from backend.horizon_map import render_map, render_profile
+from backend.models import (
+    Queue2DRequest,
+    Queue3DRequest,
+    QueueMapRequest,
+    QueueProfileRequest,
+    SceneExportRequest,
+)
 from backend.rendering import amplitude, render
 
 
@@ -149,6 +155,62 @@ def add_map(survey, horizons, req: QueueMapRequest) -> dict:
         width_mm=settings.width,
         height_mm=settings.height,
         dpi=settings.dpi,
+    )
+
+
+def add_profile(survey, horizons, req: QueueProfileRequest) -> dict:
+    """Render the standalone A–B profile figure and queue it."""
+    state = req.state
+    if state.horizon not in horizons:
+        raise ValueError("Horizon not found.")
+    horizon = horizons[state.horizon]
+    dataset = dataset_label(survey, req.dataset)
+    data, info = render_profile(
+        survey,
+        state,
+        horizons,
+        req.a,
+        req.b,
+        req.settings,
+        req.curve_colors,
+        req.colormap,
+        req.reverse_colormap,
+    )
+    filename = naming.map_profile_name(
+        dataset,
+        horizon.name,
+        "Seismic",
+        naming.colormap_label(req.colormap, "Seismic"),
+        req.settings.width,
+        req.settings.height,
+        req.settings.dpi,
+        req.settings.format,
+    )
+    summary = {
+        "horizon": horizon.name,
+        "figure": "ab_profile",
+        "a": info["a"],
+        "b": info["b"],
+        "a_distance": info["a_distance"],
+        "b_distance": info["b_distance"],
+        "path_start": info["path_start"],
+        "path_end": info["path_end"],
+        "colormap": req.colormap,
+        "reverse_colormap": req.reverse_colormap,
+        "overlays": info["curves"],
+        "amplitude_range": [-info["vmax"], info["vmax"]],
+    }
+    return session().add(
+        data=data,
+        filename=filename,
+        view_type="horizon_map",
+        dataset=dataset,
+        view_state=state.model_dump(),
+        summary=summary,
+        render=req.settings.model_dump(),
+        width_mm=req.settings.width,
+        height_mm=req.settings.height,
+        dpi=req.settings.dpi,
     )
 
 

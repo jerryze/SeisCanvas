@@ -283,18 +283,8 @@ def sample_seismic_line(survey, qil, qxl):
     return section
 
 
-def map_profile(
-    survey,
-    horizon,
-    state,
-    horizons,
-    a,
-    b,
-    target_width=None,
-    target_height=None,
-    interpolation=None,
-):
-    """Arbitrary-direction seismic section along the straight A–B line.
+def _profile_data(survey, state, horizons, a, b, target_width=None, target_height=None, interpolation=None):
+    """Compute the A–B section as numpy arrays (web and renderer share it).
 
     The path runs through A and B, extends ``PROFILE_EXTENSION`` beyond both
     ends and is clipped to the surveyed extent; traces are placed at a fixed
@@ -380,17 +370,15 @@ def map_profile(
             dict(
                 id=key,
                 name=h.name,
-                values=serial(_bilinear_points(hx, hy, hgrid, display_xl, display_il)),
+                values=_bilinear_points(hx, hy, hgrid, display_xl, display_il),
             )
         )
     return dict(
         # Resampled coordinate axes, matching the display raster exactly.
-        distance=np.linspace(distance[0], distance[-1], width).tolist(),
-        time=np.linspace(survey.times[0], survey.times[-1], height).tolist(),
-        # Time-major rows so the browser heatmap can consume z directly.
-        amplitude=resample.display_values(
-            display, -vmax, vmax, method, resampled=(width, height) != native_shape
-        ),
+        distance=np.linspace(distance[0], distance[-1], width),
+        time=np.linspace(survey.times[0], survey.times[-1], height),
+        # Time-major rows so both the heatmap and matplotlib consume z directly.
+        amplitude=display,
         curves=curves,
         a_distance=float(round(np.hypot(ail - qil[0], axl - qxl[0]), 3)),
         b_distance=float(round(np.hypot(bil - qil[0], bxl - qxl[0]), 3)),
@@ -399,8 +387,148 @@ def map_profile(
         path_end=[float(qil[-1]), float(qxl[-1])],
         vmin=-vmax,
         vmax=vmax,
+        method=method,
+        resampled=(width, height) != native_shape,
         label_y="TWT (ms)",
     )
+
+
+def map_profile(
+    survey,
+    horizon,
+    state,
+    horizons,
+    a,
+    b,
+    target_width=None,
+    target_height=None,
+    interpolation=None,
+):
+    """Serialized A–B section for the web profile subplot."""
+    d = _profile_data(survey, state, horizons, a, b, target_width, target_height, interpolation)
+    return dict(
+        distance=np.round(d["distance"], 3).tolist(),
+        time=[float(v) for v in d["time"]],
+        amplitude=resample.display_values(
+            d["amplitude"],
+            -d["vmax"],
+            d["vmax"],
+            d["method"],
+            resampled=d["resampled"],
+        ),
+        curves=[
+            dict(id=c["id"], name=c["name"], values=serial(c["values"]))
+            for c in d["curves"]
+        ],
+        a_distance=d["a_distance"],
+        b_distance=d["b_distance"],
+        path_start=d["path_start"],
+        path_end=d["path_end"],
+        vmin=d["vmin"],
+        vmax=d["vmax"],
+        label_y=d["label_y"],
+    )
+
+
+def render_profile(
+    survey,
+    state,
+    horizons,
+    a,
+    b,
+    settings,
+    curve_colors=None,
+    colormap="seismic",
+    reverse_colormap=False,
+):
+    """Publication A–B section: interpolated seismic background, horizon TWT
+    overlays in their style colors, A/B markers.  Returns ``(bytes, info)``.
+    """
+    from backend.style import get_cmap, font_family
+
+    d = _profile_data(survey, state, horizons, a, b)
+    fig = Figure(
+        figsize=(settings.width / 25.4, settings.height / 25.4),
+        dpi=settings.dpi,
+        layout="constrained",
+    )
+    ax = fig.subplots()
+    extent = [
+        float(d["distance"][0]),
+        float(d["distance"][-1]),
+        float(d["time"][-1]),
+        float(d["time"][0]),
+    ]
+    canvas_w, canvas_h = settings.canvas_pixels()
+    blend = "nearest" if d["amplitude"].size >= canvas_w * canvas_h else "bilinear"
+    cmap = get_cmap(colormap, reverse_colormap)
+    ax.imshow(
+        d["amplitude"],
+        extent=extent,
+        aspect="auto",
+        cmap=cmap,
+        vmin=-d["vmax"],
+        vmax=d["vmax"],
+        origin="upper",
+        interpolation=blend,
+        rasterized=True,
+    )
+    colors = curve_colors or {}
+    for curve in d["curves"]:
+        ax.plot(
+            d["distance"],
+            curve["values"],
+            color=colors.get(curve["id"], "#1a1a1a"),
+            lw=1.8,
+            label=curve["name"],
+        )
+    for x in (d["a_distance"], d["b_distance"]):
+        ax.axvline(x, color="#1a1a1a", lw=1.2, ls=(0, (4, 3)))
+    top = float(d["time"][0])
+    span = float(d["time"][-1]) - top
+    for x, text in ((d["a_distance"], "A"), (d["b_distance"], "B")):
+        ax.text(
+            x,
+            top + 0.02 * span,
+            f" {text}",
+            color="#1a1a1a",
+            fontsize=settings.font_size,
+            ha="left",
+            va="top",
+        )
+    ax.set_xlim(float(d["distance"][0]), float(d["distance"][-1]))
+    if not settings.show_axes:
+        ax.set_axis_off()
+    if settings.show_axes and settings.show_labels:
+        ax.set_xlabel("Distance (grid)")
+        ax.set_ylabel("TWT (ms)")
+    if d["curves"]:
+        ax.legend(loc="lower right", fontsize=settings.font_size, framealpha=0.85)
+    if settings.show_title:
+        ax.set_title("A–B Profile")
+    if state.colorbar:
+        norm = Normalize(-d["vmax"], d["vmax"])
+        cb = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax)
+        cb.set_label("Amplitude")
+        cb.solids.set_rasterized(False)
+    from matplotlib.text import Text
+
+    for text in fig.findobj(Text):
+        text.set_fontfamily(font_family(settings.font))
+        text.set_fontsize(settings.font_size)
+    out = io.BytesIO()
+    fig.savefig(out, format=settings.format, dpi=settings.dpi)
+    info = dict(
+        a=list(a) if not isinstance(a, (list, tuple)) else [float(a[0]), float(a[1])],
+        b=[float(b[0]), float(b[1])],
+        a_distance=d["a_distance"],
+        b_distance=d["b_distance"],
+        path_start=d["path_start"],
+        path_end=d["path_end"],
+        curves=[c["name"] for c in d["curves"]],
+        vmax=d["vmax"],
+    )
+    return out.getvalue(), info
 
 
 def map_scalar(survey, horizon, state, horizons=None) -> HorizonMapData:

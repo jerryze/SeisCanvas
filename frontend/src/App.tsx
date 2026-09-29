@@ -601,6 +601,14 @@ export default function App() {
     });
   }
 
+  async function addProfileToQueue(
+    payload: Record<string, unknown> & { settings: unknown },
+  ) {
+    await task("正在渲染 A–B 剖面并加入导出队列…", async () => {
+      await queueItem({ kind: "profile", dataset, ...payload });
+    });
+  }
+
   /* ------------------------------------------------------------------------ */
   /* Render                                                                   */
   /* ------------------------------------------------------------------------ */
@@ -613,11 +621,21 @@ export default function App() {
 
       <header className="topbar">
         <div className="brand">
-          <div className="brand-mark">
-            <Activity size={23} />
-          </div>
+          <img
+            className="brand-mark"
+            src={new URL("./assets/seiscanvas-symbol.svg", import.meta.url).href}
+            alt=""
+            width={44}
+            height={44}
+          />
 
-          <span>SeisCanvas</span>
+          <img
+            className="brand-wordmark"
+            src={new URL("./assets/seiscanvas-wordmark.svg", import.meta.url).href}
+            alt="SeisCanvas"
+            width={140}
+            height={24}
+          />
 
           <span className="version">V0.2</span>
         </div>
@@ -791,6 +809,7 @@ export default function App() {
               onAspect={(ratio) =>
                 setView((v) => ({ ...v, aspect_ratio_2d: ratio }))
               }
+              onAddProfileToExport={addProfileToQueue}
               exportOpen={exportOpen}
               onCloseExport={() => setExportOpen(false)}
               onReady={setMapReady}
