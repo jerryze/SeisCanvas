@@ -58,6 +58,44 @@ def read_samples(survey, trace_ids, samples):
     return result
 
 
+def trace_ids_at(survey, ils, xls):
+    """Per-point trace ids for exact survey-grid (inline, crossline) nodes.
+
+    The caller interpolates between the returned traces, so positions must be
+    survey nodes; anything outside the surveyed extent maps to -1.
+    """
+    ils = np.asarray(ils, dtype=np.int64)
+    xls = np.asarray(xls, dtype=np.int64)
+    if survey.regular is not None:
+        inside = (
+            (ils >= survey.inlines[0]) & (ils <= survey.inlines[-1])
+            & (xls >= survey.crosslines[0]) & (xls <= survey.crosslines[-1])
+        )
+        return np.where(inside, survey.regular.trace_id(ils, xls), -1)
+    if survey.trace_lookup is not None:
+        i = np.searchsorted(survey.inlines, ils, side="right") - 1
+        j = np.searchsorted(survey.crosslines, xls, side="right") - 1
+        inside = (
+            (i >= 0) & (i < len(survey.inlines))
+            & (survey.inlines[np.clip(i, 0, None)] == ils)
+            & (j >= 0) & (j < len(survey.crosslines))
+            & (survey.crosslines[np.clip(j, 0, None)] == xls)
+        )
+        i = np.clip(i, 0, len(survey.inlines) - 1)
+        j = np.clip(j, 0, len(survey.crosslines) - 1)
+        return np.where(inside, survey.trace_lookup[i, j], -1)
+    result = np.full(len(ils), -1, dtype=np.int64)
+    for k, (il, xl) in enumerate(zip(ils.tolist(), xls.tolist())):
+        ids = survey.maps["inline"].get(int(il), [])
+        if not len(ids):
+            continue
+        coords = survey.xls[ids]
+        pos = int(np.searchsorted(coords, xl))
+        if pos < len(coords) and coords[pos] == xl:
+            result[k] = int(ids[pos])
+    return result
+
+
 def preview_ids(survey, ils, xls):
     if survey.regular is not None:
         return survey.regular.trace_id(np.asarray(ils)[:, None], np.asarray(xls)[None, :])

@@ -784,6 +784,7 @@ export default function App() {
           {view.view_mode === "map" ? (
             <HorizonMap
               horizons={view.horizons}
+              maps={maps}
               exportOpen={exportOpen}
               onCloseExport={() => setExportOpen(false)}
               onReady={setMapReady}

@@ -32,13 +32,18 @@ type State = {
   x_range: [number, number] | null;
   y_range: [number, number] | null;
 };
-type ProfileCurve = { role: string; name: string; values: (number | null)[] };
+type ProfileCurve = { id: string; name: string; values: (number | null)[] };
 type ProfileData = {
   distance: number[];
+  time: number[];
+  /** Time-major heatmap rows: amplitude[time][position]. */
+  amplitude: (number | null)[][];
   curves: ProfileCurve[];
+  a_distance: number;
+  b_distance: number;
+  vmin: number;
+  vmax: number;
   label_y: string;
-  a: number[];
-  b: number[];
 };
 type DifferenceStats = {
   mae: number | null;
@@ -63,6 +68,7 @@ type Data = {
 };
 export default function HorizonMap({
   horizons,
+  maps,
   exportOpen,
   onCloseExport,
   onReady,
@@ -72,6 +78,7 @@ export default function HorizonMap({
   onAddToExport,
 }: {
   horizons: HS[];
+  maps: Record<string, any[]>;
   exportOpen: boolean;
   onCloseExport: () => void;
   onReady: (v: boolean) => void;
@@ -406,38 +413,80 @@ export default function HorizonMap({
     };
   }, [profileOn, profileA, profileB, query]);
 
-  // Profile subplot below the map: hover, zoom, double-click to reset.
+  // Profile subplot: interpolated seismic section with horizon TWT overlays.
   useEffect(() => {
     const el = profileRef.current as any;
     if (!el || !profileData) return;
-    const colors = ["#365985", "#c45252"];
-    const traces: any[] = profileData.curves.map((c, i) => ({
-      type: "scatter",
-      mode: "lines",
-      name: c.name,
-      x: profileData.distance,
-      y: c.values,
-      connectgaps: false,
-      line: { color: colors[i % colors.length], width: 2 },
-      hovertemplate: `${c.name}<br>距离 %{x:.1f}<br>%{y}<extra></extra>`,
-    }));
+    const traces: any[] = [
+      {
+        type: "heatmap",
+        x: profileData.distance,
+        y: profileData.time,
+        z: profileData.amplitude,
+        colorscale: maps?.seismic?.length ? maps.seismic : "RdBu",
+        zmin: profileData.vmin,
+        zmax: profileData.vmax,
+        showscale: false,
+        zsmooth: false,
+        hovertemplate: "距离 %{x:.1f}<br>TWT %{y:.1f} ms<br>振幅 %{z}<extra></extra>",
+      },
+    ];
+    for (const curve of profileData.curves) {
+      const style = horizons.find((h) => h.id === curve.id);
+      if (style && !style.visible) continue;
+      traces.push({
+        type: "scatter",
+        mode: "lines",
+        name: curve.name,
+        x: profileData.distance,
+        y: curve.values,
+        connectgaps: false,
+        line: { color: style?.color || "#e6b450", width: 2.5 },
+        hovertemplate: `${curve.name}<br>TWT %{y:.1f} ms<extra></extra>`,
+      });
+    }
+    const abShape = (x: number) => ({
+      type: "line",
+      x0: x,
+      x1: x,
+      yref: "paper",
+      y0: 0,
+      y1: 1,
+      line: { color: "#365985", width: 1.5, dash: "dot" },
+    });
+    const abLabel = (x: number, text: string) => ({
+      x,
+      yref: "paper",
+      y: 1.03,
+      text,
+      showarrow: false,
+      font: { color: "#365985", size: 11 },
+    });
     Plotly.react(
       el,
       traces,
       {
-        margin: { l: 62, r: 14, t: 8, b: 38 },
-        showlegend: profileData.curves.length > 1,
-        legend: { orientation: "h", y: -0.25 },
+        margin: { l: 62, r: 14, t: 20, b: 38 },
+        showlegend: traces.length > 2,
+        legend: { orientation: "h", y: -0.32 },
         paper_bgcolor: "#fff",
         plot_bgcolor: "#fff",
         font: { family: "DM Sans, 'PingFang SC', Arial, sans-serif", color: "#425367", size: 11 },
         xaxis: { title: { text: "距离 (网格)", standoff: 8 }, showgrid: false, linecolor: "#bcc8cf", ticks: "outside" },
-        yaxis: { title: { text: profileData.label_y, standoff: 4 }, showgrid: false, linecolor: "#bcc8cf", ticks: "outside" },
+        yaxis: { title: { text: profileData.label_y, standoff: 4 }, autorange: "reversed", showgrid: false, linecolor: "#bcc8cf", ticks: "outside" },
         hovermode: "closest",
+        shapes: [
+          abShape(profileData.a_distance),
+          abShape(profileData.b_distance),
+        ],
+        annotations: [
+          abLabel(profileData.a_distance, "A"),
+          abLabel(profileData.b_distance, "B"),
+        ],
       } as any,
       { responsive: true, displayModeBar: false, scrollZoom: true },
     );
-  }, [profileData]);
+  }, [profileData, maps, horizons]);
 
   useEffect(() => {
     if (!profileOn) return;

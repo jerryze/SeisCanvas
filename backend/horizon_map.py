@@ -16,7 +16,7 @@ from matplotlib.colors import LinearSegmentedColormap, Normalize, to_hex
 from matplotlib.figure import Figure
 from matplotlib.cm import ScalarMappable
 from backend.models import HorizonMapExport, HorizonMapState
-from backend.preview import preview_ids, read_samples
+from backend.preview import preview_ids, read_samples, trace_ids_at
 from backend.scene import horizon_grid, serial
 from backend.style import font_family
 
@@ -27,14 +27,18 @@ __all__ = [
     "map_data",
     "render_map",
     "map_profile",
+    "sample_seismic_line",
     "sample_amplitude",
     "sample_difference",
     "resample_to_grid",
     "difference_statistics",
 ]
 
-#: Uniform samples along one A–B profile line.
-PROFILE_SAMPLES = 256
+#: How far the A–B profile path extends beyond each end, as a fraction of the
+#: A–B length (clipped to the surveyed extent).
+PROFILE_EXTENSION = 0.15
+#: Upper bound on interpolated traces in one profile section (payload guard).
+PROFILE_MAX_TRACES = 1200
 
 PETREL = ['#ff0000', '#ff8000', '#ffff00', '#00c040', '#00ffff', '#0000ff', '#8000c0', '#ff00ff']
 
@@ -226,7 +230,9 @@ def _bilinear_points(src_x, src_y, grid, qx, qy):
     complete = np.ones(len(qx), dtype=bool)
     for values, weight in corners:
         known = np.isfinite(values)
-        complete &= known
+        # A zero-weight corner cannot contribute, so its being missing is
+        # irrelevant: this keeps exact-node samples valid next to holes.
+        complete &= known | (weight == 0)
         total += weight
         acc += np.where(known, values, 0.0) * weight
     out = np.where(complete, acc / np.where(total > 0, total, 1.0), np.nan)
@@ -234,14 +240,57 @@ def _bilinear_points(src_x, src_y, grid, qx, qy):
     return out
 
 
-def map_profile(survey, horizon, state, horizons, a, b):
-    """Sample the active scalars along the straight A–B line.
+def sample_seismic_line(survey, qil, qxl):
+    """Interpolated seismic traces along a path of floating grid positions.
 
-    Returns uniform ``(distance, curves)`` with the horizontal axis in grid
-    units.  TWT/amplitude maps yield the active scalar curve; difference maps
-    yield the reference and comparison TWT curves (no difference curve, per
-    horizon_map_v2 §11).  Missing picks become ``None`` so the curve gaps
-    instead of bridging across holes.
+    For every (inline, crossline) position the four surrounding survey traces
+    are bilinearly blended per time sample, producing a spatially continuous
+    trace (horizon_map_v2 profile).  Positions outside the surveyed extent and
+    traces missing at a node yield NaN; the result has shape ``(len(qil), ns)``
+    with rows ordered along the path.
+    """
+    ns = len(survey.times)
+    i0 = np.clip(np.searchsorted(survey.inlines, qil, side="right") - 1, 0, len(survey.inlines) - 2)
+    i1 = i0 + 1
+    j0 = np.clip(np.searchsorted(survey.crosslines, qxl, side="right") - 1, 0, len(survey.crosslines) - 2)
+    j1 = j0 + 1
+    node_i0, node_i1 = survey.inlines[i0], survey.inlines[i1]
+    node_j0, node_j1 = survey.crosslines[j0], survey.crosslines[j1]
+    span_i = node_i1 - node_i0
+    span_j = node_j1 - node_j0
+    fy = np.where(span_i > 0, (qil - node_i0) / np.where(span_i > 0, span_i, 1.0), 0.0)
+    fx = np.where(span_j > 0, (qxl - node_j0) / np.where(span_j > 0, span_j, 1.0), 0.0)
+    samples = np.arange(ns)
+    v00 = read_samples(survey, trace_ids_at(survey, node_i0, node_j0), samples)
+    v01 = read_samples(survey, trace_ids_at(survey, node_i0, node_j1), samples)
+    v10 = read_samples(survey, trace_ids_at(survey, node_i1, node_j0), samples)
+    v11 = read_samples(survey, trace_ids_at(survey, node_i1, node_j1), samples)
+    w00 = ((1 - fy) * (1 - fx))[:, None]
+    w01 = ((1 - fy) * fx)[:, None]
+    w10 = (fy * (1 - fx))[:, None]
+    w11 = (fy * fx)[:, None]
+    corners = [(v00, w00), (v01, w01), (v10, w10), (v11, w11)]
+    known = [np.isfinite(v) for v, _ in corners]
+    total = sum(np.where(k, w, 0.0) for (_, w), k in zip(corners, known))
+    acc = sum(np.where(k, v, 0.0) * np.where(k, w, 0.0) for (v, w), k in zip(corners, known))
+    section = np.where(total > 0, acc / np.where(total > 0, total, 1.0), np.nan)
+    inside = (
+        (qil >= survey.inlines[0]) & (qil <= survey.inlines[-1])
+        & (qxl >= survey.crosslines[0]) & (qxl <= survey.crosslines[-1])
+    )
+    section[~inside] = np.nan
+    return section
+
+
+def map_profile(survey, horizon, state, horizons, a, b):
+    """Arbitrary-direction seismic section along the straight A–B line.
+
+    The path runs through A and B, extends ``PROFILE_EXTENSION`` beyond both
+    ends and is clipped to the surveyed extent; traces are placed at a fixed
+    one-grid-unit spatial step.  Every floating position gets a bilinearly
+    interpolated trace from its four surrounding survey traces, every loaded
+    horizon contributes its TWT along the exact same path, and A/B are
+    reported as distances from the start of the section.
     """
     try:
         (ail, axl), (bil, bxl) = (float(a[0]), float(a[1])), (float(b[0]), float(b[1]))
@@ -249,42 +298,61 @@ def map_profile(survey, horizon, state, horizons, a, b):
         raise ValueError("Profile end points must be (inline, crossline) pairs.") from e
     if not all(np.isfinite(v) for v in (ail, axl, bil, bxl)):
         raise ValueError("Profile end points must be finite coordinates.")
+    if survey is None:
+        raise ValueError("The seismic profile needs a loaded SEG-Y survey.")
     if (ail, axl) == (bil, bxl):
         raise ValueError("Profile end points A and B must be two different positions.")
-    t = np.linspace(0.0, 1.0, PROFILE_SAMPLES)
-    qil = ail + (bil - ail) * t
-    qxl = axl + (bxl - axl) * t
+    d_il, d_xl = bil - ail, bxl - axl
+    length = float(np.hypot(d_il, d_xl))
+
+    # Clip the extended path to the surveyed rectangle.
+    il_lo, il_hi = float(survey.inlines[0]), float(survey.inlines[-1])
+    xl_lo, xl_hi = float(survey.crosslines[0]), float(survey.crosslines[-1])
+    t_lo, t_hi = -PROFILE_EXTENSION, 1.0 + PROFILE_EXTENSION
+    for bound_lo, bound_hi, start, delta in ((il_lo, il_hi, ail, d_il), (xl_lo, xl_hi, axl, d_xl)):
+        if delta == 0:
+            if not bound_lo <= start <= bound_hi:
+                raise ValueError("Profile path lies outside the survey extent.")
+            continue
+        first, second = (bound_lo - start) / delta, (bound_hi - start) / delta
+        t_lo = max(t_lo, min(first, second))
+        t_hi = min(t_hi, max(first, second))
+    if t_hi <= t_lo:
+        raise ValueError("Profile path lies outside the survey extent.")
+
+    # Fixed spatial step: one survey grid unit along the shorter axis spacing.
+    steps = [
+        float(np.median(np.diff(axis))) for axis in (survey.inlines, survey.crosslines) if len(axis) > 1
+    ]
+    step = min(steps) if steps else 1.0
+    step = step if step > 0 else 1.0
+    count = int(min(PROFILE_MAX_TRACES, max(2, round((t_hi - t_lo) * length / step) + 1)))
+    t = np.linspace(t_lo, t_hi, count)
+    qil = ail + d_il * t
+    qxl = axl + d_xl * t
     distance = np.hypot(qil - ail, qxl - axl)
-    if state.color_by == "difference":
-        if not horizons:
-            raise ValueError("Difference needs the loaded horizons.")
-        reference = horizons.get(state.difference_reference or "")
-        comparison = horizons.get(state.difference_comparison or "")
-        if reference is None or comparison is None:
-            raise ValueError("Difference needs a reference and a comparison horizon.")
-        curves = []
-        for role, h in (("reference", reference), ("comparison", comparison)):
-            hx, hy, hgrid = horizon_grid(h)
-            curves.append(
-                dict(role=role, name=h.name, values=serial(_bilinear_points(hx, hy, hgrid, qxl, qil)))
-            )
-        label_y = "TWT (ms)"
-    else:
-        data = map_scalar(survey, horizon, state, horizons)
-        curves = [
-            dict(
-                role="scalar",
-                name=horizon.name,
-                values=serial(_bilinear_points(data.x, data.y, data.scalar, qxl, qil)),
-            )
-        ]
-        label_y = data.label
+
+    section = sample_seismic_line(survey, qil, qxl)
+    curves = []
+    for key, h in (horizons or {}).items():
+        hx, hy, hgrid = horizon_grid(h)
+        curves.append(
+            dict(id=key, name=h.name, values=serial(_bilinear_points(hx, hy, hgrid, qxl, qil)))
+        )
+    finite = section[np.isfinite(section)]
+    vmax = float(np.percentile(np.abs(finite), 99)) if len(finite) else 0.0
+    vmax = vmax or 1.0
     return dict(
         distance=np.round(distance, 3).tolist(),
+        time=[float(v) for v in survey.times],
+        # Time-major rows so the browser heatmap can consume z directly.
+        amplitude=serial(section.T),
         curves=curves,
-        label_y=label_y,
-        a=[ail, axl],
-        b=[bil, bxl],
+        a_distance=float(round(np.hypot(ail - qil[0], axl - qxl[0]), 3)),
+        b_distance=float(round(np.hypot(bil - qil[0], bxl - qxl[0]), 3)),
+        vmin=-vmax,
+        vmax=vmax,
+        label_y="TWT (ms)",
     )
 
 

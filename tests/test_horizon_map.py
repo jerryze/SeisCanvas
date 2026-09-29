@@ -311,76 +311,70 @@ def test_difference_map_api(client, tmp_path):
 from backend.horizon_map import map_profile  # noqa: E402
 
 
-def test_profile_samples_along_a_straight_line(tmp_path):
-    base = grid_horizon(tmp_path, "a.txt", lambda y, x: 200 + 2 * y + x)
-    result = map_profile(None, base, HorizonMapState(horizon="a"), {"a": base}, (0, 0), (0, 4))
+def test_profile_section_interpolates_between_traces(cube):
+    # A sits on the extent edge; B can still extend 15% deeper into the survey.
+    result = map_profile(cube, None, HorizonMapState(horizon="h"), {}, (10, 30), (10, 33))
+    assert result["a_distance"] == 0 and result["b_distance"] == 3
+    assert result["distance"][-1] == pytest.approx(3.45)
+    assert result["time"] == [200.0, 204.0, 208.0, 212.0]
     assert result["label_y"] == "TWT (ms)"
-    assert len(result["distance"]) == len(result["curves"][0]["values"]) == 256
-    # Line along inline 0 from xline 0 to 4: value 200 + x, distance == x.
-    values = result["curves"][0]["values"]
-    assert values[0] == 200 and values[-1] == 204
-    assert result["distance"][-1] == 4
-    assert result["curves"][0]["role"] == "scalar"
+    # Amplitude is time-major: amplitude[time][position]. Fractional positions
+    # blend the four surrounding traces linearly.
+    assert result["amplitude"][0][0] == 1030
+    assert result["amplitude"][0][1] == pytest.approx(1031.725)
+    assert result["amplitude"][0][-1] == pytest.approx(1033.45)
+    assert result["amplitude"][1][0] == 1031
+    # Display range is symmetric around zero.
+    assert result["vmin"] == pytest.approx(-result["vmax"])
+    assert result["curves"] == []
 
 
-def test_profile_diagonal_uses_bilinear(tmp_path):
-    base = grid_horizon(tmp_path, "a.txt", lambda y, x: 200 + 2 * y + x)
-    result = map_profile(None, base, HorizonMapState(horizon="a"), {"a": base}, (0, 0), (4, 4))
-    # Diagonal il == xl == d: value 200 + 3d, distance d * sqrt(2). The fixed
-    # sample count rarely lands exactly on the midpoint, so allow one step.
-    mid = len(result["distance"]) // 2
-    assert result["curves"][0]["values"][mid] == pytest.approx(206, abs=0.05)
-    assert result["distance"][mid] == pytest.approx(2 * np.sqrt(2), abs=0.05)
+def test_profile_extends_and_stays_inside_the_survey(cube):
+    # Interior line: both ends extend by 15% of the A–B length.
+    result = map_profile(cube, None, HorizonMapState(horizon="h"), {}, (11, 31), (11, 32))
+    assert result["a_distance"] == pytest.approx(0.15, abs=0.01)
+    assert result["b_distance"] == pytest.approx(1.15, abs=0.01)
+    # Every interpolated sample is inside the cube and therefore finite.
+    assert all(v is not None for row in result["amplitude"] for v in row)
 
 
-def test_profile_off_grid_positions_interpolate(tmp_path):
-    base = grid_horizon(tmp_path, "a.txt", lambda y, x: 200 + 2 * y + x)
-    # Halfway between inlines 0 and 1 at xline 2: (200+2*0+2 + 200+2*1+2) / 2.
-    result = map_profile(None, base, HorizonMapState(horizon="a"), {"a": base}, (0.5, 2), (0.5, 3))
-    assert result["curves"][0]["values"][0] == pytest.approx(203)
-
-
-def test_profile_gaps_at_missing_picks(tmp_path):
-    p = tmp_path / "hole.txt"
+def test_profile_horizon_overlays_follow_the_same_path(cube, tmp_path):
+    full = amplitude_horizon(tmp_path, 204, xls=(30, 32, 34, 36, 38))
+    p = tmp_path / "gapped.txt"
     p.write_text(
-        "\n".join(
-            f"{y} {x} {200 + 2 * y + x}"
-            for y in range(5)
-            for x in range(5)
-            if (y, x) != (1, 1)
+        "".join(
+            f"{il} {xl} 204\n"
+            for il in (10, 12)
+            for xl in (30, 32, 34, 36, 38)
+            if (il, xl) != (10, 34)
         )
     )
-    h = Horizon(p)
-    # Line through inline 1 crosses the hole at xline 1: the two cells sharing
-    # that pick cannot be interpolated and the curve gaps instead of bridging.
-    result = map_profile(None, h, HorizonMapState(horizon="a"), {"a": h}, (1, 0), (1, 4))
-    values = result["curves"][0]["values"]
-    assert values.count(None) == 128
-    valid = [v for v in values if v is not None]
-    assert len(valid) == 128 and all(204 <= v <= 206 for v in valid)
+    gapped = Horizon(p)
+    horizons = {"h": full, "g": gapped}
+    result = map_profile(
+        cube, None, HorizonMapState(horizon="h"), horizons, (10, 30), (12, 38)
+    )
+    curves = {c["id"]: c for c in result["curves"]}
+    # Both horizons sampled along the exact same diagonal path.
+    assert curves["h"]["values"][0] == 204 and curves["h"]["values"][-1] == 204
+    assert curves["h"]["values"].count(None) == 0
+    # The gapped horizon breaks where the path crosses its missing pick.
+    assert curves["g"]["values"].count(None) == 1
+    assert curves["g"]["name"] == "gapped"
 
 
-def test_profile_difference_mode_returns_two_curves(tmp_path):
-    base = grid_horizon(tmp_path, "a.txt", lambda y, x: 200 + 2 * y + x)
-    comp = grid_horizon(tmp_path, "b.txt", lambda y, x: 200 + 2 * y + x + 3)
-    horizons = {"a": base, "b": comp}
-    state = difference_state("a", "a", "b")
-    result = map_profile(None, base, state, horizons, (0, 0), (4, 0))
-    assert [c["role"] for c in result["curves"]] == ["reference", "comparison"]
-    assert [c["name"] for c in result["curves"]] == ["a", "b"]
-    # Reference follows its own TWT; comparison sits 3 ms deeper.
-    assert result["curves"][0]["values"][-1] == 208
-    assert result["curves"][1]["values"][-1] == 211
-    assert result["label_y"] == "TWT (ms)"
-
-
-def test_profile_rejects_degenerate_endpoints(tmp_path):
-    base = grid_horizon(tmp_path, "a.txt", lambda y, x: 200 + 2 * y + x)
-    horizons = {"a": base}
+def test_profile_requires_survey(tmp_path):
     with pytest.raises(ValueError):
-        map_profile(None, base, HorizonMapState(horizon="a"), horizons, (1, 1), (1, 1))
+        map_profile(None, None, HorizonMapState(horizon="h"), {}, (0, 0), (4, 0))
+
+
+def test_profile_rejects_degenerate_endpoints(cube):
     with pytest.raises(ValueError):
-        map_profile(None, base, HorizonMapState(horizon="a"), horizons, (0, 0), (4, float("nan")))
+        map_profile(cube, None, HorizonMapState(horizon="h"), {}, (1, 1), (1, 1))
+    with pytest.raises(ValueError):
+        map_profile(cube, None, HorizonMapState(horizon="h"), {}, (0, 0), (4, float("nan")))
+    with pytest.raises(ValueError):
+        map_profile(cube, None, HorizonMapState(horizon="h"), {}, (0, 0), (0, 0) if False else (5, 30) if False else (0, 0))
 
 
 def test_profile_api(client):
@@ -390,9 +384,7 @@ def test_profile_api(client):
     )
     assert response.status_code == 200, response.text
     data = response.json()
+    assert data["time"] == [200.0, 204.0, 208.0, 212.0]
+    assert data["amplitude"][0][0] == 1030
+    assert data["curves"][0]["id"] == "h"
     assert data["curves"][0]["name"] == "h"
-    assert data["a"] == [10.0, 30.0] and data["b"] == [12.0, 33.0]
-    assert data["label_y"] == "TWT (ms)"
-    # Endpoints sample the exact picks of the conftest horizon.
-    assert data["curves"][0]["values"][0] == 204
-    assert data["curves"][0]["values"][-1] == 208
