@@ -327,6 +327,9 @@ def test_profile_section_interpolates_between_traces(cube):
     # Display range is symmetric around zero.
     assert result["vmin"] == pytest.approx(-result["vmax"])
     assert result["curves"] == []
+    # The reported path ends are the clipped extended end points.
+    assert result["path_start"] == [10.0, 30.0]
+    assert result["path_end"] == [10.0, 33.45]
 
 
 def test_profile_extends_and_stays_inside_the_survey(cube):

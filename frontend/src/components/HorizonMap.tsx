@@ -41,6 +41,8 @@ type ProfileData = {
   curves: ProfileCurve[];
   a_distance: number;
   b_distance: number;
+  path_start: [number, number];
+  path_end: [number, number];
   vmin: number;
   vmax: number;
   label_y: string;
@@ -309,21 +311,59 @@ export default function HorizonMap({
             hoverinfo: "skip",
           });
         if (profileOn && profileA && profileB) {
+          // The section covers the path beyond A/B as well: draw the extended
+          // reaches as a finer dotted line so map and profile agree. Black
+          // stays visible on every colormap (same choice as the contours).
+          if (profileData) {
+            for (const [from, to] of [
+              [profileData.path_start, profileA],
+              [profileB, profileData.path_end],
+            ]) {
+              traces.push({
+                type: "scatter",
+                mode: "lines",
+                x: [from[1], to[1]],
+                y: [from[0], to[0]],
+                line: { color: "#1a1a1a", width: 1.5, dash: "dot" },
+                connectgaps: true,
+                hoverinfo: "skip",
+                showlegend: false,
+              });
+            }
+          }
           traces.push({
             type: "scatter",
-            mode: "lines+markers+text",
+            mode: "lines+markers",
             x: [profileA[1], profileB[1]],
             y: [profileA[0], profileB[0]],
-            text: ["A", "B"],
-            textposition: "bottom center",
-            textfont: { size: 11, color: "#365985" },
-            line: { color: "#365985", width: 2, dash: "dash" },
-            marker: { color: "#365985", size: 7 },
+            line: { color: "#1a1a1a", width: 2, dash: "dash" },
+            marker: { color: "#1a1a1a", size: 7 },
             connectgaps: true,
             hoverinfo: "skip",
             showlegend: false,
           });
         }
+        const abAnnotations =
+          profileOn && profileA && profileB
+            ? [
+                { x: profileA[1], y: profileA[0], text: "A" },
+                { x: profileB[1], y: profileB[0], text: "B" },
+              ].map(({ x, y, text }) => ({
+                x,
+                y,
+                text,
+                showarrow: false,
+                xanchor: "left",
+                yanchor: "top",
+                xshift: 4,
+                yshift: 4,
+                font: { size: 11, color: "#1a1a1a" },
+                bgcolor: "rgba(255, 255, 255, 0.85)",
+                bordercolor: "#1a1a1a",
+                borderwidth: 1,
+                borderpad: 1,
+              }))
+            : [];
         await Plotly.react(
           el,
           traces,
@@ -390,7 +430,7 @@ export default function HorizonMap({
         setError(String(e));
         ready.current(false);
       });
-  }, [data, state.x_range, state.y_range, drag, profileOn, profileA, profileB]);
+  }, [data, state.x_range, state.y_range, drag, profileOn, profileA, profileB, profileData]);
   // A–B profile: refetch whenever the endpoints or the active scalars change.
   useEffect(() => {
     if (!profileOn || !profileA || !profileB) {

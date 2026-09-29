@@ -350,6 +350,9 @@ def map_profile(survey, horizon, state, horizons, a, b):
         curves=curves,
         a_distance=float(round(np.hypot(ail - qil[0], axl - qxl[0]), 3)),
         b_distance=float(round(np.hypot(bil - qil[0], bxl - qxl[0]), 3)),
+        # Full extended path ends, so the map can draw what the section covers.
+        path_start=[float(qil[0]), float(qxl[0])],
+        path_end=[float(qil[-1]), float(qxl[-1])],
         vmin=-vmax,
         vmax=vmax,
         label_y="TWT (ms)",
