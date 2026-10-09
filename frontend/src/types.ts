@@ -93,6 +93,8 @@ export type SceneSettings = {
   camera: Camera;
 };
 export type Export3D = {
+  canvas?: "fit" | "fixed";
+  long_edge?: number;
   format: "png" | "pdf" | "svg";
   font: string;
   font_size: number;
@@ -128,6 +130,8 @@ export const MAX_SCENE_PIXELS = 24_000_000;
 
 /** Settings shape accepted by the shared "Add to Export" dialog (2D, map or 3D). */
 export type ExportDialogSettings = {
+  canvas?: "fit" | "fixed";
+  long_edge?: number;
   format: "png" | "pdf" | "svg";
   width: number;
   height: number;

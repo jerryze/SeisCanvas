@@ -276,7 +276,7 @@ input[type="color"] {
 .brand {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 7px;
 
   font:
     700 20px "Manrope",
@@ -287,9 +287,21 @@ input[type="color"] {
   color: #152234;
 }
 
+.brand-mark,
+.brand-wordmark {
+  display: block;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
 .brand-mark {
-  display: flex;
-  color: var(--primary);
+  width: 44px;
+  height: 44px;
+}
+
+.brand-wordmark {
+  width: 140px;
+  height: 24px;
 }
 
 .version {
@@ -1895,24 +1907,36 @@ main {
   .metadata .filename { overflow-wrap: anywhere; }
 }
 
-.export-dialog { width: min(540px, calc(100vw - 32px)); padding: 20px 24px; gap: 0; }
-.export-dialog .modal-heading { margin-bottom: 0; padding-bottom: 10px; }
-.export-settings { border: 0; margin: 0; padding: 0; min-width: 0; }
-.export-settings > section { padding: 10px 0; border-bottom: 1px solid #e5ebf2; }
-.export-settings h3 { margin: 0 0 7px; font-size: var(--fs-md); font-weight: 600; color: var(--text); }
-.export-settings .format-options { margin: 0; }
-.export-settings .field-row { margin: 0; gap: 12px; }
-.export-settings .field-row > label { font-size: var(--fs-sm); }
-.export-settings .field { margin-top: 8px; font-size: var(--fs-sm); }
-.export-toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 6px; }
+/* Compact publication export panel; styles stay local to this dialog. */
+.export-dialog { width: min(500px, calc(100vw - 32px)); padding: 22px 24px; gap: 0; border-radius: 12px; }
+.export-dialog .modal-heading { margin-bottom: 22px; padding-bottom: 0; border-bottom: 0; }
+.export-dialog .modal-heading h2 { margin: 0; }
+.export-settings { display: flex; flex-direction: column; gap: 22px; border: 0; margin: 0; padding: 0; min-width: 0; }
+.export-settings > section { padding: 0; border: 0; }
+.export-settings h3 { margin: 0 0 10px; font-size: var(--fs-md); font-weight: 600; color: var(--text); }
+.export-settings .format-options { margin: 0; gap: 3px; padding: 3px; border: 1px solid #dce3ec; border-radius: 8px; background: #fff; }
+.export-settings .format-options button { min-height: 32px; padding: 6px 12px; border: 1px solid transparent; border-radius: 5px; background: transparent; font-size: var(--fs-sm); }
+.export-settings .format-options button:hover { background: #f5f6f8; }
+.export-settings .format-options button.active { background: var(--primary-soft); border-color: #b4c9e3; color: var(--primary); }
+.export-settings .field-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); margin: 0; gap: 12px; }
+.export-settings .field-row > label { font-size: var(--fs-sm); gap: 6px; }
+.export-settings .field { font-size: var(--fs-sm); }
+.export-settings .export-dataset { margin-top: 12px; flex-direction: column; align-items: stretch; gap: 6px; }
+.export-hint { margin: 7px 0 0; padding: 0; border: 0; background: none; color: var(--text-muted); font-size: var(--fs-xs); line-height: 1.5; }
+.export-toggles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; margin-top: 14px; }
+.export-toggles .check { gap: 7px; white-space: nowrap; }
 .export-toggles fieldset { min-width: 0; padding: 0; border: 0; margin: 0; }
 .export-toggles fieldset:disabled { opacity: .45; }
-.export-settings .field-row > label { gap: 4px; }
-.export-settings .format-options button { min-height: 32px; padding: 7px 12px; }
-.export-dialog .export-actions { margin-top: 12px; }
+.export-dialog .export-actions { margin-top: 22px; }
 .export-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .export-actions > button { min-width: 90px; padding: 9px 16px; }
-@media (max-width: 480px) { .export-settings .field-row { flex-wrap: wrap; } .export-settings .field-row > label { flex-basis: 40%; } }
+.export-dialog .export-actions > button { border-radius: 7px; }
+.export-dialog .error { margin-top: 14px; }
+@media (max-width: 380px) {
+  .export-dialog { padding: 20px 16px; }
+  .export-toggles { column-gap: 6px; }
+  .export-toggles .check { gap: 4px; font-size: var(--fs-xs); }
+}
 
 
 .import-progress { padding: 11px 12px; border-radius: 8px; background: #edf3fb; color: var(--text-secondary); }

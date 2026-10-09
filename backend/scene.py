@@ -248,6 +248,12 @@ def scene_data(survey, horizons, state):
         },
     }
     stats = []
+    maximum = state.scene.quality
+    if state.scene.export_long_edge:
+        count = sum(sl.visible for kind in ("inline", "crossline", "time") for sl in getattr(state.slices, kind))
+        # Publication sampling follows final pixels; bound total geometry to
+        # keep WebGL and the JSON payload affordable for multi-slice scenes.
+        maximum = min(state.scene.export_long_edge, 2048, int((4_000_000 / max(count, 1)) ** .5))
     for kind in ["inline", "crossline", "time"]:
         for sl in getattr(state.slices, kind):
             if not sl.visible:
@@ -258,7 +264,7 @@ def scene_data(survey, horizons, state):
                 survey,
                 kind,
                 sl.position,
-                state.scene.quality,
+                maximum,
                 state.seismic.interpolation,
             )
             data["id"] = sl.id

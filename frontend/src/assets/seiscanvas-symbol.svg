@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="744" height="720" viewBox="396 56 744 720" role="img" aria-labelledby="title description">
+  <title id="title">SeisCanvas</title>
+  <desc id="description">Strict isometric cube, three identical rotated coordinate arrows, and folded seismic horizon. All artwork is editable vector geometry.</desc>
+  <defs>
+    <g id="axis-arrow" stroke="#12345B" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+      <path id="arrow-shaft" d="M 0,0 V -73.9656" fill="none"/>
+      <path id="arrow-head" d="M 0,-104.9416 L 18.216,-73.9656 L -18.216,-73.9656 Z" fill="#12345B"/>
+    </g>
+  </defs>
+  <rect id="white-background" x="348" y="18" width="840" height="780" fill="#FFFFFF"/>
+  <g id="seiscanvas-symbol">
+    <g id="isometric-cube" fill="none" stroke="#12345B" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+      <polygon id="cube-outline" points="768.000000000,198.000000000 1010.487113060,338.000000000 1010.487113060,618.000000000 768.000000000,758.000000000 525.512886940,618.000000000 525.512886940,338.000000000"/>
+    </g>
+    <g id="coordinate-axes">
+      <use id="axis-z" href="#axis-arrow" transform="translate(768 198) rotate(0)"/>
+      <use id="axis-x" href="#axis-arrow" transform="translate(1010.487113060 618) rotate(120)"/>
+      <use id="axis-y" href="#axis-arrow" transform="translate(525.512886940 618) rotate(240)"/>
+    </g>
+    <g id="seismic-horizon" transform="translate(768 478) scale(0.89 0.94) translate(-768 -460)">
+      <path id="horizon-silhouette" fill="#238BCB" d="M 817,285 C 740,270 610,307 548,364 C 497,410 579,435 670,471 C 798,522 795,559 668,637 C 777,651 900,609 966,563 C 1063,494 959,436 858,403 C 750,368 679,336 817,285 Z"/>
+      <path id="horizon-fold" fill="#12345B" d="M 575,428 C 675,465 810,454 920,493 C 967,510 982,537 954,572 C 884,617 771,650 668,637 C 795,559 798,522 670,471 C 635,457 602,443 575,428 Z"/>
+    </g>
+  </g>
+</svg>

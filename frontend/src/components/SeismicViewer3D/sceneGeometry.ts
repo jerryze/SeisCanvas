@@ -81,6 +81,7 @@ export function buildTraces(
   view: VS,
   maps: Record<string, any[]>,
   exportSettings?: Export3D,
+  cacheExportActors = false,
 ) {
   const traces: any[] = [];
   const s = view.seismic;
@@ -292,7 +293,7 @@ export function buildTraces(
         });
       }
   }
-  if (exportSettings?.show_bounding_box ?? view.scene.show_bounding_box) {
+  if (cacheExportActors || (exportSettings?.show_bounding_box ?? view.scene.show_bounding_box)) {
     const { x, y, z } = data.bounds;
     const xx: (number | null)[] = [],
       yy: (number | null)[] = [],
@@ -309,7 +310,8 @@ export function buildTraces(
           yy.push(y[v[1]], y[w[1]], null);
           zz.push(z[v[2]], z[w[2]], null);
         }
-    traces.push(line(xx, yy, zz, "#7f919a", 1));
+    traces.push(line(xx, yy, zz, "#7f919a", 1, { meta: { exportRole: "boundingBox",
+      interactiveVisible: exportSettings?.show_bounding_box ?? view.scene.show_bounding_box } }));
   }
   return traces;
 }
@@ -342,7 +344,8 @@ export function buildLayout(
     gridcolor: "#e5ecef",
     zeroline: false,
     showline: axes,
-    linecolor: "#c0cdd3",
+    linecolor: settings ? "#000000" : "#c0cdd3",
+    linewidth: settings ? 0.8 * 4 / 3 : 1,
     tickfont: { family, size: fontSize ?? 10, color: ink },
     ticks: axes ? "outside" : "",
   });

@@ -88,6 +88,17 @@ class ViewState(BaseModel):
 
 
 class Settings(BaseModel):
+    canvas: Literal["fit", "fixed"] = "fit"
+    long_edge: int = Field(3000, ge=600, le=4000)
+    # Older clients may still send physical page dimensions.
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_canvas(cls, values):
+        if isinstance(values, dict) and "canvas" not in values and any(k in values for k in ("width", "height", "dpi")):
+            values = {**values, "canvas": "fixed"}
+        return values
+
+    background: Literal["white", "transparent"] = "white"
     width: float = Field(180, ge=40, le=500)
     height: float = Field(100, ge=30, le=500)
     dpi: Literal[300, 600] = 300
@@ -108,7 +119,7 @@ class Settings(BaseModel):
 
     @model_validator(mode="after")
     def pixels(self):
-        if self.width * self.height * (self.dpi / 25.4) ** 2 > 40_000_000:
+        if self.canvas == "fixed" and self.width * self.height * (self.dpi / 25.4) ** 2 > 40_000_000:
             raise ValueError("Export exceeds 40 megapixels. Reduce dimensions or DPI.")
         return self
 
@@ -146,7 +157,7 @@ class Slices(BaseModel):
 
 
 class Horizon3DStyle(HorizonStyle):
-    display_mode: Literal["full_surface", "slice_intersections"] = "slice_intersections"
+    display_mode: Literal["full_surface", "slice_intersections"] = "full_surface"
     opacity: float = Field(1, ge=0, le=1)
     color_by: Literal["twt", "solid"] = "twt"
     horizon_colormap: Literal["petrel"] = "petrel"
@@ -162,6 +173,7 @@ class SceneState(BaseModel):
     show_bounding_box: bool = True
     aspect_ratio: tuple[float, float, float] = (1, 1, 0.7)
     quality: Literal[128, 256, 512] = 256
+    export_long_edge: int | None = Field(None, ge=600, le=4000)
     background: str = Field("#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
     #: Plotly camera. The backend never renders it, but the export manifest must
     #: be able to reproduce the exact viewpoint.
@@ -196,7 +208,17 @@ class ViewState3D(BaseModel):
 
 
 class Scene3DSettings(BaseModel):
-    """Publication settings for a WebGL scene; sizes use physical units."""
+    """Content-fit publication settings, with legacy physical-size compatibility."""
+
+    canvas: Literal["fit", "fixed"] = "fit"
+    long_edge: int = Field(3000, ge=600, le=4000)
+    # Older clients may still send physical page dimensions.
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_canvas(cls, values):
+        if isinstance(values, dict) and "canvas" not in values and any(k in values for k in ("width", "height", "dpi")):
+            values = {**values, "canvas": "fixed"}
+        return values
 
     width: float = Field(180, ge=30, le=500)
     height: float = Field(100, ge=20, le=500)
@@ -206,7 +228,7 @@ class Scene3DSettings(BaseModel):
         "Times New Roman"
     )
     font_size: float = Field(10, ge=5, le=30)
-    background: str = Field("#ffffff", pattern=r"^#[0-9a-fA-F]{6}$")
+    background: str = Field("white", pattern=r"^(white|transparent|#[0-9a-fA-F]{6})$")
     show_axes: bool = True
     show_axis_labels: bool = True
     show_bounding_box: bool = True
@@ -214,7 +236,7 @@ class Scene3DSettings(BaseModel):
     @model_validator(mode="after")
     def pixels(self):
         # A WebGL figure is exported as a raster image, so cap the pixel budget.
-        if self.width * self.height * (self.dpi / 25.4) ** 2 > MAX_SCENE_PIXELS:
+        if self.canvas == "fixed" and self.width * self.height * (self.dpi / 25.4) ** 2 > MAX_SCENE_PIXELS:
             raise ValueError("3D export exceeds 24 megapixels. Reduce dimensions or DPI.")
         return self
 
@@ -258,6 +280,10 @@ class PickSegyRequest(BaseModel):
     xlbyte: int = Field(21, ge=1, le=237)
 
 
+class HorizonRenameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
 class LocalHorizonRequest(BaseModel):
     token: str
     inline_column: int = Field(default=0, ge=0)
@@ -266,6 +292,7 @@ class LocalHorizonRequest(BaseModel):
 
 
 class SceneExportRequest(BaseModel):
+    dpi: float | None = Field(None, ge=1, le=2000)
     png: str = Field(max_length=135_000_000)
     format: Literal["png", "pdf", "svg"]
     width: int = Field(ge=64, le=4000)
@@ -357,6 +384,8 @@ class Queue3DRequest(BaseModel):
     width_px: int = Field(ge=64, le=4000)
     height_px: int = Field(ge=64, le=4000)
     scale: int = Field(ge=1, le=4)
+    render_dpi: float | None = Field(None, ge=1, le=2000)
+    timings: dict[str, float] = Field(default_factory=dict, max_length=20)
     settings: Scene3DSettings = Field(default_factory=Scene3DSettings)
     state: ViewState3D
 

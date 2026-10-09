@@ -139,6 +139,9 @@ export default function HorizonMap({
     [drag, setDrag] = useState<"zoom" | "pan">("zoom");
   const [settings, setSettings] = useState<ExportDialogSettings>({
     format: "png",
+    canvas: "fit",
+    long_edge: 3000,
+    background: "white",
     width: 180,
     height: 140,
     dpi: 300,
@@ -163,6 +166,9 @@ export default function HorizonMap({
   const [profileExportBusy, setProfileExportBusy] = useState(false);
   const [profileSettings, setProfileSettings] = useState<ExportDialogSettings>({
     format: "png",
+    canvas: "fit",
+    long_edge: 3000,
+    background: "white",
     width: 180,
     height: 80,
     dpi: 300,

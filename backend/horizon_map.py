@@ -14,6 +14,7 @@ import contourpy
 from matplotlib import colormaps
 from matplotlib.colors import LinearSegmentedColormap, Normalize, to_hex
 from matplotlib.figure import Figure
+from backend.figure_export import figure_size, save_figure
 from matplotlib.cm import ScalarMappable
 from backend.models import HorizonMapExport, HorizonMapState
 from backend import resample
@@ -450,12 +451,15 @@ def render_profile(
     from backend.style import get_cmap, font_family
 
     d = _profile_data(survey, state, horizons, a, b)
+    ratio = d["amplitude"].shape[1] / d["amplitude"].shape[0]
     fig = Figure(
-        figsize=(settings.width / 25.4, settings.height / 25.4),
+        figsize=figure_size(settings, ratio),
         dpi=settings.dpi,
         layout="constrained",
     )
     ax = fig.subplots()
+    if settings.canvas == "fit":
+        ax.set_box_aspect(1 / ratio)
     extent = [
         float(d["distance"][0]),
         float(d["distance"][-1]),
@@ -465,7 +469,7 @@ def render_profile(
     canvas_w, canvas_h = settings.canvas_pixels()
     blend = "nearest" if d["amplitude"].size >= canvas_w * canvas_h else "bilinear"
     cmap = get_cmap(colormap, reverse_colormap)
-    ax.imshow(
+    image = ax.imshow(
         d["amplitude"],
         extent=extent,
         aspect="auto",
@@ -511,18 +515,19 @@ def render_profile(
         ax.legend(loc="lower right", fontsize=settings.font_size, framealpha=0.85)
     if settings.show_title:
         ax.set_title("A–B Profile")
+    colorbars = []
     if state.colorbar:
         norm = Normalize(-d["vmax"], d["vmax"])
         cb = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax)
         cb.set_label("Amplitude")
         cb.solids.set_rasterized(False)
+        colorbars.append((cb, ax))
     from matplotlib.text import Text
 
     for text in fig.findobj(Text):
         text.set_fontfamily(font_family(settings.font))
         text.set_fontsize(settings.font_size)
-    out = io.BytesIO()
-    fig.savefig(out, format=settings.format, dpi=settings.dpi)
+    content = save_figure(fig, settings, [(image, d["amplitude"])], colorbars)
     info = dict(
         a=list(a) if not isinstance(a, (list, tuple)) else [float(a[0]), float(a[1])],
         b=[float(b[0]), float(b[1])],
@@ -533,7 +538,7 @@ def render_profile(
         curves=[c["name"] for c in d["curves"]],
         vmax=d["vmax"],
     )
-    return out.getvalue(), info
+    return content, info
 
 
 def map_scalar(survey, horizon, state, horizons=None) -> HorizonMapData:
@@ -638,7 +643,10 @@ def map_data(survey, horizon, state, horizons=None):
 
 def render_map(survey, horizon, state, settings, horizons=None):
     data, lo, hi, vmin, vmax, cmap, levels = map_values(survey, horizon, state, horizons)
-    fig = Figure(figsize=(settings.width / 25.4, settings.height / 25.4), dpi=settings.dpi, layout='constrained')
+    xr = state.x_range or [float(data.x[0]) - .5, float(data.x[-1]) + .5]
+    yr = state.y_range or [float(data.y[0]) - .5, float(data.y[-1]) + .5]
+    ratio = abs(xr[1] - xr[0]) / max(abs(yr[1] - yr[0]), 1e-9)
+    fig = Figure(figsize=figure_size(settings, ratio), dpi=settings.dpi, layout='constrained')
     ax = fig.subplots()
     norm = Normalize(vmin, vmax, clip=True)
     masked = np.ma.masked_invalid(data.scalar)
@@ -657,14 +665,14 @@ def render_map(survey, horizon, state, settings, horizons=None):
         ax.set_xlabel('Crossline'); ax.set_ylabel('Inline')
     if settings.show_title:
         ax.set_title(horizon.name)
+    colorbars = []
     if state.colorbar:
         cb = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax)
         cb.set_label(data.label)
         cb.solids.set_rasterized(False)
+        colorbars.append((cb, ax))
     from matplotlib.text import Text
     for text in fig.findobj(Text):
         text.set_fontfamily(font_family(settings.font))
         text.set_fontsize(settings.font_size)
-    out = io.BytesIO()
-    fig.savefig(out, format=settings.format, dpi=settings.dpi)
-    return out.getvalue()
+    return save_figure(fig, settings, colorbars=colorbars)

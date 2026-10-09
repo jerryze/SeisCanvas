@@ -1,9 +1,9 @@
 """Publication 2D rendering: matplotlib figures assembled from survey sections."""
 
-import io
 import numpy as np
 from matplotlib.figure import Figure
 from backend import resample
+from backend.figure_export import figure_size, save_figure
 from backend.style import get_cmap, font_family
 
 #: A viewer-sized render grid, used when an export reuses the view resolution.
@@ -85,9 +85,17 @@ def render(survey, horizons, state, settings):
     # Amplitude clipping always comes from the original section: the colour
     # range must not change with the interpolation mode or the zoom window.
     z, lo, hi = amplitude(z, state.seismic)
-    raster, extent, source_shape = display_raster(x, t, z, state, settings)
+    if settings.canvas == "fit":
+        x0, x1 = window_indices(x, state.x_range)
+        t0, t1 = window_indices(t, state.time_range)
+        raster = z[t0:t1 + 1, x0:x1 + 1]
+        extent = (float(x[x0]) - .5, float(x[x1]) + .5, float(t[t0]) - .5, float(t[t1]) + .5)
+    else:
+        raster, extent, _ = display_raster(x, t, z, state, settings)
+    ratio = (state.aspect_ratio_2d[0] / state.aspect_ratio_2d[1]
+             if state.aspect_ratio_2d else raster.shape[1] / raster.shape[0])
     fig = Figure(
-        figsize=(settings.width / 25.4, settings.height / 25.4),
+        figsize=figure_size(settings, ratio),
         dpi=settings.dpi,
         layout="constrained",
     )
@@ -95,6 +103,8 @@ def render(survey, horizons, state, settings):
     if state.aspect_ratio_2d is not None:
         horizontal, vertical = state.aspect_ratio_2d
         ax.set_box_aspect(vertical / horizontal)
+    if settings.canvas == "fit":
+        ax.set_box_aspect(1 / ratio)
     cmap = get_cmap(state.seismic.colormap, state.seismic.reverse_colormap)
     canvas_width, canvas_height = settings.canvas_pixels()
     # The raster is normally already at the output resolution, so let Agg blit
@@ -104,7 +114,7 @@ def render(survey, horizons, state, settings):
         if raster.size >= canvas_width * canvas_height
         else "bilinear"
     )
-    ax.imshow(
+    image = ax.imshow(
         raster,
         cmap=cmap,
         vmin=lo,
@@ -178,6 +188,4 @@ def render(survey, horizons, state, settings):
     ]:
         txt.set_fontfamily(font_family(settings.font))
         txt.set_fontsize(settings.font_size)
-    out = io.BytesIO()
-    fig.savefig(out, format=settings.format, dpi=settings.dpi)
-    return out.getvalue()
+    return save_figure(fig, settings, [(image, raster)])

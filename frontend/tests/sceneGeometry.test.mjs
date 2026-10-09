@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import ts from 'typescript';
-const source=await readFile(new URL('../src/components/SeismicViewer3D/sceneGeometry.ts',import.meta.url),'utf8');
+let source=await readFile(new URL('../src/components/SeismicViewer3D/sceneGeometry.ts',import.meta.url),'utf8');
+const styleSource = await readFile(new URL('../src/components/plotStyle.ts', import.meta.url), 'utf8');
+const styleModule = ts.transpileModule(styleSource, {compilerOptions:{module:ts.ModuleKind.ESNext}}).outputText;
+source = source.replace('"../plotStyle"', JSON.stringify('data:text/javascript;base64,' + Buffer.from(styleModule).toString('base64')));
 const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
 const {buildTraces,buildLayout}=await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'));
 const colors={seismic:[[0,'#000000'],[1,'#ffffff']]};
@@ -60,4 +63,11 @@ test('surface colors use independent native TWT ranges and stay separate from se
   d.horizons.b.mesh=mesh(700,700);
   const flat=buildTraces(d,v,colors).filter(t=>t.type==='mesh3d')[1];
   assert.ok(flat.cmin<700&&flat.cmax>700);assert.equal((700-flat.cmin)/(flat.cmax-flat.cmin),.5);
+});
+test('interactive scenes can cache an invisible bounding-box actor for export without changing other traces',()=>{
+  const v=state(),d=data();
+  const traces=buildTraces(d,v,colors,undefined,true);
+  assert.equal(traces.length,4);
+  assert.equal(traces.at(-1).meta.exportRole,'boundingBox');
+  assert.equal(traces.at(-1).meta.interactiveVisible,false);
 });

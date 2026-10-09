@@ -245,7 +245,7 @@ def test_horizon_local_cache_and_invalidation(tmp_path, monkeypatch):
     p.write_text('1 2 1234\n3 4 200\n')
     assert not Horizon(p).cache_hit
     assert not Horizon(p, columns=(1, 0, 2)).cache_hit
-    monkeypatch.setattr(server, 'choose_segy', lambda kind: str(p))
+    monkeypatch.setattr(server, 'choose_segy', lambda kind, multiple=False: [str(p)] if multiple else str(p))
     c = TestClient(server.app)
     selection = c.post('/api/horizons/pick').json()
     response = c.post('/api/horizons/local', json={'token': selection['token']})

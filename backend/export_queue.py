@@ -9,6 +9,10 @@ from __future__ import annotations
 
 import atexit
 import json
+import io
+import re
+import xml.etree.ElementTree as ET
+from PIL import Image
 import os
 import shutil
 import tempfile
@@ -130,7 +134,7 @@ class ExportSession:
         fmt = item["format"].upper()
         if item["pixel_size"]:
             width, height = item["pixel_size"]
-            return f"{fmt} · {width} × {height} px · {item['scale']}×"
+            return f"{fmt} · {width} × {height} px" + ("" if item["render"].get("canvas") == "fit" else f" · {item['scale']}×")
         return (
             f"{fmt} · {naming.number(item['width_mm'])} × "
             f"{naming.number(item['height_mm'])} mm · {naming.number(item['dpi'])} dpi"
@@ -170,6 +174,34 @@ class ExportSession:
         if free < len(data) + 64 * 1024 * 1024:
             raise ValueError("Not enough temporary disk space for another figure.")
 
+        if render and render.get("canvas") == "fit":
+            fmt = Path(filename).suffix.lower()
+            if fmt == ".png":
+                with Image.open(io.BytesIO(data)) as image:
+                    pixel_size = image.size
+                    dpi = image.info.get("dpi", (300, 300))[0]
+                width_mm, height_mm = [n / dpi * 25.4 for n in pixel_size]
+            else:
+                if fmt == ".svg":
+                    root = ET.fromstring(data)
+                    w = float(root.attrib["width"].removesuffix("px").removesuffix("pt"))
+                    h = float(root.attrib["height"].removesuffix("px").removesuffix("pt"))
+                    units = 96 if root.attrib["width"].endswith("px") else 72
+                else:
+                    match = re.search(rb"/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]", data)
+                    if not match:
+                        raise ValueError("Export PDF has no page bounds.")
+                    x0, y0, x1, y1 = map(float, match.groups())
+                    w, h, units = x1 - x0, y1 - y0, 72
+                width_mm, height_mm = w / units * 25.4, h / units * 25.4
+                factor = render["long_edge"] / max(w, h)
+                pixel_size = (round(w * factor), round(h * factor))
+                dpi = render["long_edge"] / (max(width_mm, height_mm) / 25.4)
+            scale = 1
+            filename = re.sub(r"_[\d.]+x[\d.]+mm_[\d.]+dpi(?=\.)",
+                              f"_{pixel_size[0]}x{pixel_size[1]}px", filename)
+            render = {**render, "pixel_size": list(pixel_size), "width": width_mm,
+                      "height": height_mm, "dpi": dpi}
         filename = self._unique(filename)
         self._counter += 1
         serial = self._counter

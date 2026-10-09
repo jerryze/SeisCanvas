@@ -138,7 +138,7 @@ def test_export(cube, tmp_path, fmt, magic):
         from PIL import Image
 
         im = Image.open(io.BytesIO(data))
-        assert abs(im.width - 180 / 25.4 * 300) < 2
+        assert max(im.size) == 3000
     if fmt == "svg":
         assert b"Inline 12" in data and b"TWT (ms)" in data
 

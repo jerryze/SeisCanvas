@@ -13,6 +13,8 @@ export function applyDepthLayers(element: any) {
         const draw = object[method];
         if (typeof draw !== "function") continue;
         object[method] = function (...args: any[]) {
+          if (trace.data?.meta?.exportRole === "boundingBox" &&
+              !(object._exportVisible ?? trace.data.meta.interactiveVisible)) return;
           const layer = trace.data?.meta?.depthLayer;
           if (!layer) return draw.apply(this, args);
           const enabled = gl.isEnabled(gl.POLYGON_OFFSET_FILL);

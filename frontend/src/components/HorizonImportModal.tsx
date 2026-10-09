@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 export type HorizonImportState = {
   token: string;
   filename: string;
+  filenames: string[];
   columns: { index: number; name: string }[];
   rows: string[][];
   inline_column: number;
@@ -45,7 +46,17 @@ export default function HorizonImportModal({
           </button>
         </div>
 
-        <div className="import-file-name">{state.filename}</div>
+        <div className="import-file-name">
+          已选择 {state.filenames.length} 个文件，以第一个文件 {state.filename}{" "}
+          为例设置。
+          <p>以下列映射将应用于全部文件，请确保各文件列布局一致。</p>
+          <details>
+            <summary>查看文件列表</summary>
+            {state.filenames.map((name, i) => (
+              <div key={i}>{name}</div>
+            ))}
+          </details>
+        </div>
 
         <div className="column-selects">
           {(
@@ -58,6 +69,7 @@ export default function HorizonImportModal({
             <label className="field" key={key}>
               {label}
               <select
+                disabled={!!busy}
                 value={state[key]}
                 onChange={(e) => onColumn(key, Number(e.target.value))}
               >
@@ -115,7 +127,7 @@ export default function HorizonImportModal({
             }
             onClick={onImport}
           >
-            {busy || "确认并导入"}
+            {busy || `确认并导入 ${state.filenames.length} 个文件`}
           </button>
         </div>
       </div>

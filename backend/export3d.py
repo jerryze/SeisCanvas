@@ -6,6 +6,8 @@ The request schema (``SceneExportRequest``) lives in ``backend.models``.
 import base64
 import binascii
 import io
+import struct
+import zlib
 import numpy as np
 from PIL import Image, UnidentifiedImageError
 from matplotlib.figure import Figure
@@ -30,7 +32,13 @@ def decode_scene_png(req):
             if any(abs(size - want) > 2 for size, want in zip(image.size, expected)):
                 raise ValueError("PNG dimensions do not match the export settings.")
             size = image.size
-            pixels = np.asarray(image.convert("RGBA"))
+            if req.format == "pdf":
+                pixels = np.asarray(image.convert("RGBA"))
+            else:
+                # PNG/SVG use the renderer's encoded stream directly. Verify
+                # chunk checksums without decoding millions of RGBA pixels.
+                image.verify()
+                pixels = None
     except (binascii.Error, UnidentifiedImageError, OSError) as e:
         raise ValueError("Invalid PNG rendering.") from e
     return raw, pixels, size
@@ -38,16 +46,35 @@ def decode_scene_png(req):
 
 def encode_scene(req, raw, pixels, size):
     if req.format == "png":
+        if req.dpi is not None:
+            # Insert pHYs metadata without decompressing/recompressing IDAT.
+            ppm = round(req.dpi / 0.0254)
+            chunk = b"pHYs" + struct.pack(">IIB", ppm, ppm, 1)
+            phys = struct.pack(">I", 9) + chunk + struct.pack(">I", zlib.crc32(chunk) & 0xffffffff)
+            parts = [raw[:8]]
+            offset = 8
+            while offset < len(raw):
+                length = struct.unpack(">I", raw[offset:offset + 4])[0]
+                end = offset + length + 12
+                kind = raw[offset + 4:offset + 8]
+                if kind != b"pHYs":
+                    parts.append(raw[offset:end])
+                if kind == b"IHDR":
+                    parts.append(phys)
+                offset = end
+            return b"".join(parts)
         return raw
     if req.format == "svg":
         # WebGL content is an embedded high-resolution image, not vector geometry.
         payload = base64.b64encode(raw).decode("ascii")
         width, height = size
+        svg_width = f"{width / req.dpi * 72}pt" if req.dpi else f"{width}px"
+        svg_height = f"{height / req.dpi * 72}pt" if req.dpi else f"{height}px"
         return (
-            f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{width}px" height="{height}px" viewBox="0 0 {width} {height}">'
+            f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{svg_width}" height="{svg_height}" viewBox="0 0 {width} {height}">'
             f'<title>SeisCanvas 3D scene</title><image width="{width}" height="{height}" xlink:href="data:image/png;base64,{payload}"/></svg>'
         ).encode()
-    dpi = 96 * req.scale
+    dpi = req.dpi or 96 * req.scale
     width, height = size
     fig = Figure(figsize=(width / dpi, height / dpi), dpi=dpi)
     fig.figimage(pixels, origin="upper")

@@ -90,6 +90,9 @@ const initial: VS = {
 };
 
 const initialExport: ExportDialogSettings = {
+  canvas: "fit",
+  long_edge: 3000,
+  background: "white",
   width: 180,
   height: 100,
   dpi: 300,
@@ -127,7 +130,9 @@ export default function App() {
   /* ------------------------------------------------------------------------ */
 
   const [sceneReady, setSceneReady] = useState(false);
-  const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
+  const [importProgress, setImportProgress] = useState<ImportProgress | null>(
+    null,
+  );
   const [mapReady, setMapReady] = useState(false);
 
   const [meta, setMeta] = useState<Meta | null>(null);
@@ -149,8 +154,9 @@ export default function App() {
 
   const [selected, setSelected] = useState("");
 
-  const [horizonImport, setHorizonImport] =
-    useState<HorizonImportState | null>(null);
+  const [horizonImport, setHorizonImport] = useState<HorizonImportState | null>(
+    null,
+  );
 
   const [exportOpen, setExportOpen] = useState(false);
   const [settings, setSettings] = useState<ExportDialogSettings>(initialExport);
@@ -160,7 +166,11 @@ export default function App() {
 
   const [drag, setDrag] = useState<"zoom" | "pan">("zoom");
 
-  const { reading: probe, probe: runProbe, reset: resetProbe } = useOriginalProbe();
+  const {
+    reading: probe,
+    probe: runProbe,
+    reset: resetProbe,
+  } = useOriginalProbe();
 
   const [sidebar, setSidebar] = useState(true);
 
@@ -297,7 +307,11 @@ export default function App() {
   function openSegy() {
     task("正在导入 SEG-Y…", async () => {
       const job_id = crypto.randomUUID();
-      setImportProgress({ percent: 0, stage: "请在系统窗口选择文件", status: "waiting" });
+      setImportProgress({
+        percent: 0,
+        stage: "请在系统窗口选择文件",
+        status: "waiting",
+      });
       let active = true;
       let timer: ReturnType<typeof setTimeout>;
       const poll = async () => {
@@ -312,12 +326,24 @@ export default function App() {
       };
       timer = setTimeout(poll, 300);
       try {
-        const r = await api("/segy/pick", json({ job_id, ilbyte: bytes.il, xlbyte: bytes.xl, geometry_mode: geometryMode }));
+        const r = await api(
+          "/segy/pick",
+          json({
+            job_id,
+            ilbyte: bytes.il,
+            xlbyte: bytes.xl,
+            geometry_mode: geometryMode,
+          }),
+        );
         const result = await r.json();
         active = false;
         if (!result.cancelled) {
           loaded(result);
-          setImportProgress({ percent: 100, stage: "导入完成", status: "done" });
+          setImportProgress({
+            percent: 100,
+            stage: "导入完成",
+            status: "done",
+          });
         } else setImportProgress(null);
       } catch (e) {
         active = false;
@@ -336,12 +362,15 @@ export default function App() {
 
   function uploadHorizons() {
     task("读取层位列…", async () => {
-      const preview = await (await api("/horizons/pick", { method: "POST" })).json();
+      const preview = await (
+        await api("/horizons/pick", { method: "POST" })
+      ).json();
       if (preview.cancelled) return;
 
       setHorizonImport({
         token: preview.token,
         filename: preview.filename,
+        filenames: preview.filenames,
         columns: preview.columns,
         rows: preview.rows,
         inline_column: preview.suggestions.inline,
@@ -376,6 +405,24 @@ export default function App() {
 
       setRevision((v) => v + 1);
       setHorizonImport(null);
+    });
+  }
+
+  function renameHorizon(h: HS, name: string) {
+    task("修改层位名…", async () => {
+      const result = await (
+        await api(`/horizons/${h.id}`, {
+          ...json({ name }),
+          method: "PATCH",
+        })
+      ).json();
+      setView((v) => ({
+        ...v,
+        horizons: v.horizons.map((a) =>
+          a.id === h.id ? { ...a, name: result.name } : a,
+        ),
+      }));
+      setRevision((v) => v + 1);
     });
   }
 
@@ -414,18 +461,15 @@ export default function App() {
     // expires and the viewport-matched window arrives.
     const timer = setTimeout(async () => {
       try {
-        const r = await api(
-          "/section",
-          {
-            ...json({
-              ...viewRef.current,
-              quality: "interactive",
-              target_width: box ? Math.round(box.clientWidth * ratio) : null,
-              target_height: box ? Math.round(box.clientHeight * ratio) : null,
-            }),
-            signal: abort.signal,
-          },
-        );
+        const r = await api("/section", {
+          ...json({
+            ...viewRef.current,
+            quality: "interactive",
+            target_width: box ? Math.round(box.clientWidth * ratio) : null,
+            target_height: box ? Math.round(box.clientHeight * ratio) : null,
+          }),
+          signal: abort.signal,
+        });
 
         const s = await r.json();
 
@@ -552,7 +596,9 @@ export default function App() {
   const colors = maps[view.seismic.colormap] || [];
 
   const preview = useMemo(() => {
-    const values = (view.seismic.reverse_colormap ? [...colors].reverse() : colors)
+    const values = (
+      view.seismic.reverse_colormap ? [...colors].reverse() : colors
+    )
       .filter((_, i) => i % 16 === 0)
       .map((c) => c[1])
       .join(",");
@@ -574,8 +620,10 @@ export default function App() {
   async function add3DToQueue(settings3D: any) {
     setExportOpen(false);
     await task("正在渲染三维图片并加入导出队列…", async () => {
+      const exportStarted = performance.now();
       if (!sceneRef.current) throw new Error("三维场景未就绪");
-      const capture = await sceneRef.current.captureFigure(settings3D);
+      const capture = await sceneRef.current.captureFigure(settings3D, setBusy);
+      setBusy(`封装 ${capture.format.toUpperCase()} 并加入队列…`);
       await queueItem({
         kind: "3d",
         dataset,
@@ -584,20 +632,29 @@ export default function App() {
         width_px: capture.width_px,
         height_px: capture.height_px,
         scale: capture.scale,
+        render_dpi: capture.render_dpi,
+        timings: capture.timings,
         settings: settings3D,
-        // The captured texture was resampled with the export interpolation, so
-        // the recorded state must match what was actually drawn.
+        // Export uses the current cached textures and actual renderer camera.
         state: {
           ...view,
-          seismic: { ...view.seismic, interpolation: settings3D.interpolation },
+          scene: { ...view.scene, camera: capture.camera },
         },
       });
+      console.info("SeisCanvas 3D Add to Export total " + JSON.stringify({
+        total: performance.now() - exportStarted, format: capture.format,
+      }));
     });
   }
 
   async function addMapToQueue(payload: { state: unknown; settings: unknown }) {
     await task("正在绘制层位地图并加入导出队列…", async () => {
-      await queueItem({ kind: "map", dataset, state: payload.state, settings: payload.settings });
+      await queueItem({
+        kind: "map",
+        dataset,
+        state: payload.state,
+        settings: payload.settings,
+      });
     });
   }
 
@@ -623,7 +680,9 @@ export default function App() {
         <div className="brand">
           <img
             className="brand-mark"
-            src={new URL("./assets/seiscanvas-symbol.svg", import.meta.url).href}
+            src={
+              new URL("./assets/seiscanvas-symbol.svg", import.meta.url).href
+            }
             alt=""
             width={44}
             height={44}
@@ -631,7 +690,9 @@ export default function App() {
 
           <img
             className="brand-wordmark"
-            src={new URL("./assets/seiscanvas-wordmark.svg", import.meta.url).href}
+            src={
+              new URL("./assets/seiscanvas-wordmark.svg", import.meta.url).href
+            }
             alt="SeisCanvas"
             width={140}
             height={24}
@@ -724,23 +785,22 @@ export default function App() {
             </div>
 
             {view.view_mode === "map" && <div id="horizon-map-controls" />}
-            {view.view_mode === "3d" &&
-              meta && (
-                <>
-                  <SliceManager
-                    key={meta.filename + revision}
-                    meta={meta}
-                    slices={view.slices}
-                    disabled={!!busy}
-                    onChange={(slices) => setView((v) => ({ ...v, slices }))}
-                  />
+            {view.view_mode === "3d" && meta && (
+              <>
+                <SliceManager
+                  key={meta.filename + revision}
+                  meta={meta}
+                  slices={view.slices}
+                  disabled={!!busy}
+                  onChange={(slices) => setView((v) => ({ ...v, slices }))}
+                />
 
-                  <SceneControls
-                    scene={view.scene}
-                    onChange={(scene) => setView((v) => ({ ...v, scene }))}
-                  />
-                </>
-              )}
+                <SceneControls
+                  scene={view.scene}
+                  onChange={(scene) => setView((v) => ({ ...v, scene }))}
+                />
+              </>
+            )}
 
             {meta && view.view_mode === "2d" && (
               <SectionPanel
@@ -755,7 +815,12 @@ export default function App() {
             )}
 
             {meta && view.view_mode !== "map" && (
-              <SeismicPanel view={view} maps={maps} preview={preview} onSeismic={seismic} />
+              <SeismicPanel
+                view={view}
+                maps={maps}
+                preview={preview}
+                onSeismic={seismic}
+              />
             )}
 
             {meta && (
@@ -767,6 +832,7 @@ export default function App() {
                 meta={meta}
                 onStyle={style}
                 onPatch={setView}
+                onRename={renameHorizon}
                 onDelete={deleteHorizon}
                 onAdd={uploadHorizons}
               />
@@ -785,7 +851,11 @@ export default function App() {
               title="收起或展开控制面板"
               onClick={() => setSidebar((s) => !s)}
             >
-              {sidebar ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}
+              {sidebar ? (
+                <PanelLeftClose size={17} />
+              ) : (
+                <PanelLeftOpen size={17} />
+              )}
             </button>
           </div>
 
@@ -820,6 +890,7 @@ export default function App() {
             />
           ) : view.view_mode === "3d" && meta ? (
             <Scene3D
+              busy={busy}
               ref={sceneRef}
               view={view}
               meta={meta}
@@ -905,7 +976,11 @@ export default function App() {
                       <p>导入 SEG-Y 文件，或加载 F3 示例数据。</p>
 
                       <div className="empty-actions">
-                        <button className="primary" disabled={!!busy} onClick={openSegy}>
+                        <button
+                          className="primary"
+                          disabled={!!busy}
+                          onClick={openSegy}
+                        >
                           <Upload size={15} />
                           导入 SEG-Y
                         </button>
@@ -969,15 +1044,11 @@ export default function App() {
                     {view.view_type === "inline"
                       ? `Inline ${view.section_number}`
                       : `Crossline ${view.section_number}`}
-
                     <span className="dot-separator">·</span>
-
                     {view.view_type === "inline"
                       ? `Crossline ${meta.crosslines[0]}–${meta.crosslines.at(-1)}`
                       : `Inline ${meta.inlines[0]}–${meta.inlines.at(-1)}`}
-
                     <span className="dot-separator">·</span>
-
                     TWT {meta.time_range[0]}–{meta.time_range[1]} ms
                   </span>
                 ) : (
@@ -1004,19 +1075,18 @@ export default function App() {
       {/* 3D export                                                          */}
       {/* ------------------------------------------------------------------ */}
 
-      {exportOpen &&
-        view.view_mode === "3d" && (
-          <Export3DDialog
-            scene={view.scene}
-            busy={busy}
-            error={error}
-            dataset={dataset}
-            datasetPlaceholder={datasetPlaceholder}
-            onDataset={setDataset}
-            onClose={() => setExportOpen(false)}
-            onExport={add3DToQueue}
-          />
-        )}
+      {exportOpen && view.view_mode === "3d" && (
+        <Export3DDialog
+          scene={view.scene}
+          busy={busy}
+          error={error}
+          dataset={dataset}
+          datasetPlaceholder={datasetPlaceholder}
+          onDataset={setDataset}
+          onClose={() => setExportOpen(false)}
+          onExport={add3DToQueue}
+        />
+      )}
 
       {/* ------------------------------------------------------------------ */}
       {/* 2D export                                                          */}

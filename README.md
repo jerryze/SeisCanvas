@@ -124,22 +124,26 @@ npm run dev
 - 每次 `Add to Export` 立即渲染最终文件并写入本次会话的临时目录，不触发浏览器下载；加入后继续修改 inline、crossline、色标、层位、相机等设置都不会改变已暂存的图片。
 - 顶栏 `Export Queue · N` 打开导出队列，支持 Preview、Rename、Delete、Clear Queue、Export All；Preview 显示的正是 ZIP 中的最终文件。
 - `Export All` 只整理已渲染文件和生成 `export_manifest.json`，不重复执行 Matplotlib 或三维高分辨率渲染，最后打包为 `SeisCanvas_{Dataset}_Export_{YYYYMMDD_HHmm}.zip`（多数据集时为 `SeisCanvas_BatchExport_YYYYMMDD_HHmm.zip`）。
-- 文件名为自描述式科研命名 `{Dataset}_{View}_{Location/Target}_{Content}_{KeyStyle}_{Size}_{DPI}`，例如 `F3_2D_Inline_IL0350_Horizons6_Seismic_180x100mm_600dpi.png`；同名文件自动追加 `_02`、`_03`。
+- 文件名为自描述式科研命名 `{Dataset}_{View}_{Location/Target}_{Content}_{KeyStyle}_{Width}x{Height}px`，例如 `F3_2D_Inline_IL0350_Horizons6_Seismic_3000x1700px.png`；同名文件自动追加 `_02`、`_03`。
 - 一个 ZIP 可混合 PNG、PDF、SVG，并按 `2D/Inline`、`2D/Crossline`、`3D`、`HorizonMap`、`HorizonProfile` 自动分类；根目录包含 `export_manifest.json`，记录数据集、完整 ViewState 与绘图参数（振幅范围、裁剪百分位、色标、层位颜色与线型、字体、三维相机、光照、透明度、垂向夸张、等值线间隔等）。
 - 暂存文件保存在 `/tmp/seiscanvas/session_xxxxxx/`（Windows 使用系统临时目录），包含 `manifest.json` 和 `figures/`；会话结束或超出保留数量后自动清理。
 
 ### 二维导出
 
 - 支持 PNG、PDF、SVG。
-- 设置图片宽高（毫米）与 300 / 600 DPI。
-- 渲染质量：插值方式默认 Bicubic；分辨率默认 Match Export Resolution，按输出像素对原始剖面重新重采样后再叠加层位与坐标轴，导出图不是浏览器截图的放大；选择 Use View Resolution 时复用交互渲染网格。
+- 默认 Canvas 为 Fit to Content，Long Edge 为 3000 px（600–4000 px）；短边按内容比例计算，保留少量安全边距。PNG 支持 White / Transparent 背景。
+- 固定 High 质量：先测量完整的坐标轴、标题、图例和色标边界，再按最终像素对原始剖面进行 Bicubic 重采样。SVG/PDF 保留文字、线条及等值线矢量元素，地震栅格按最终分辨率嵌入。
+- 剖面优先使用用户设置的图面比例，否则采用可见数据的样本比例；地图保持坐标等比例，色标与实际地图高度对齐。A–B 剖面采用同一套内容适配流程。
 - 设置字体、字号，以及标题和坐标轴标签的显示状态。
 
 ### 三维导出
 
 - 支持 PNG、PDF、SVG。
-- 与二维一致，设置图片宽高（毫米）与 300 / 600 DPI；内部据此换算光栅像素（300 DPI 采用 3×、600 DPI 采用 4× 采样），单图上限约 2400 万像素。
-- 渲染质量：导出前按最高纹理精度与所选插值方式（默认 Bicubic）重新读取切片，而不是放大交互预览。
+- 与二维一致，默认 Fit to Content / Long Edge 3000 px。复用当前 Plotly/WebGL 场景与 Camera，以 actor 的投影边界计算画布；仅临时调整渲染缓冲分辨率，高清绘制一次、读取一次，再进行一次像素裁边，随后恢复交互分辨率。最终比例来自内容，不采用浏览器窗口比例。
+- 导出复用已加载的切片纹理、层位几何、色标与 GPU 对象，不请求 `/scene`，不读取 SEG-Y、不重新插值或三角化。数据细节与当前交互场景一致；需要更多几何细节时，先调整场景精度再导出。PNG 长边默认 3000 px，按目标分辨率绘制，不先放大再缩小。
+- 导出中显示阶段与像素尺寸；浏览器控制台和队列清单记录场景准备、GPU 绘制、图像读取、裁边、PNG 编码、PDF/SVG 封装及总耗时。PNG 写入 DPI 元数据时保留原始压缩像素数据。
+- 渲染适配器使用已锁定的 Plotly 3.7.0 内部 WebGL 接口；升级此依赖时需运行适配器测试并实测三种格式。
+- WebGL 场景含三维轴文字仍为栅格；SVG/PDF 嵌入同一张高清场景图，不会将三维几何伪装为可编辑矢量。PNG 可选透明背景，SVG/PDF 使用白底。
 - 设置字体与字号，以及背景、坐标轴、轴标签和包围盒的显示状态；导出文字为纯黑 `#000000`（界面预览仍使用界面配色）。
 
 二维、三维与层位地图导出统一提供 DejaVu Sans、DejaVu Serif、Arial、Times New Roman 字体选项及 5–30 pt 字号设置，默认使用 Times New Roman。DejaVu 字体随应用提供，Arial 和 Times New Roman 使用系统字体；系统缺少所选字体时自动回退到对应的衬线或无衬线字体。

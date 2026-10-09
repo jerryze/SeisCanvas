@@ -24,6 +24,7 @@ from backend.models import (
     HorizonMapState,
     HorizonProfileRequest,
     LocalHorizonRequest,
+    HorizonRenameRequest,
     LocalSegyRequest,
     PickSegyRequest,
     QueueAddRequest,
@@ -267,19 +268,20 @@ horizon_selections = {}
 @app.post("/api/horizons/pick")
 def pick_horizon():
     try:
-        path = choose_segy("Horizon")
-        if not path:
+        paths = choose_segy("Horizon", multiple=True)
+        if not paths:
             return {"cancelled": True}
-        path = Path(path)
-        if path.suffix.lower() not in HORIZON_SUFFIXES:
-            raise ValueError("Horizon files must use .txt or .dat extension.")
-        preview = horizon_preview(path)
+        paths = [Path(path) for path in paths]
+        for path in paths:
+            if path.suffix.lower() not in HORIZON_SUFFIXES:
+                raise ValueError(f"{path.name}: Horizon files must use .txt or .dat extension.")
+        preview = horizon_preview(paths[0])
         token = uuid4().hex
         with lock:
             if len(horizon_selections) >= 32:
                 horizon_selections.pop(next(iter(horizon_selections)))
-            horizon_selections[token] = path
-        return {**preview, "token": token, "filename": path.name}
+            horizon_selections[token] = paths
+        return {**preview, "token": token, "filename": paths[0].name, "filenames": [path.name for path in paths]}
     except (ValueError, OSError) as e:
         raise error(e)
 
@@ -288,12 +290,12 @@ def pick_horizon():
 def local_horizon(req: LocalHorizonRequest):
     try:
         with lock:
-            path = horizon_selections.get(req.token)
-        if path is None:
+            paths = horizon_selections.get(req.token)
+        if paths is None:
             raise ValueError("请重新选择层位文件。")
-        h = Horizon(path, columns=(req.inline_column, req.xline_column, req.time_column))
+        pending = [Horizon(path, columns=(req.inline_column, req.xline_column, req.time_column)) for path in paths]
         with lock:
-            result = [add_horizon(h)]
+            result = [add_horizon(h) for h in pending]
             horizon_selections.pop(req.token, None)
         return result
     except (ValueError, OSError) as e:
@@ -344,6 +346,18 @@ def upload_horizons(
     finally:
         for file in files:
             file.file.close()
+
+
+@app.patch("/api/horizons/{key}")
+def rename_horizon(key: str, req: HorizonRenameRequest):
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "层位名不能为空。")
+    with lock:
+        if key not in horizons:
+            raise HTTPException(404, "Horizon not found.")
+        horizons[key].name = name
+    return {"id": key, "name": name}
 
 
 @app.delete("/api/horizons/{key}")

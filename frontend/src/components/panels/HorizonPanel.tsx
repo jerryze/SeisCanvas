@@ -14,6 +14,7 @@ type Props = {
   onPatch: (update: (v: VS) => VS) => void;
   /** Delete a horizon (backend + state); the app wraps it with busy handling. */
   onDelete: (h: HS) => void;
+  onRename: (h: HS, name: string) => void;
   onAdd: () => void;
 };
 
@@ -28,6 +29,7 @@ export default function HorizonPanel({
   onPatch,
   onDelete,
   onAdd,
+  onRename,
 }: Props) {
   const active = view.horizons.find((h) => h.id === selected);
 
@@ -37,7 +39,9 @@ export default function HorizonPanel({
         {view.horizons.map((h) => (
           <div
             key={h.id}
-            className={`horizon-row ` + `${selected === h.id ? "selected" : ""}`}
+            className={
+              `horizon-row ` + `${selected === h.id ? "selected" : ""}`
+            }
           >
             <input
               aria-label={`显示 ${h.name}`}
@@ -70,7 +74,11 @@ export default function HorizonPanel({
         ))}
       </div>
 
-      <button className="secondary full" disabled={!meta || !!busy} onClick={onAdd}>
+      <button
+        className="secondary full"
+        disabled={!meta || !!busy}
+        onClick={onAdd}
+      >
         <Plus size={14} />
         添加层位
       </button>
@@ -87,6 +95,29 @@ export default function HorizonPanel({
               onChange={(e) => onStyle({ color: e.target.value })}
             />
           </div>
+
+          <label className="field">
+            层位名
+            <input
+              key={`${active.id}:${active.name}`}
+              aria-label="层位名"
+              defaultValue={active.name}
+              maxLength={200}
+              disabled={!!busy}
+              onBlur={(e) => {
+                const name = e.target.value.trim();
+                e.target.value = active.name;
+                if (name && name !== active.name) onRename(active, name);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+                if (e.key === "Escape") {
+                  e.currentTarget.value = active.name;
+                  e.currentTarget.blur();
+                }
+              }}
+            />
+          </label>
 
           {view.view_mode === "3d" && (
             <Horizon3DControls horizon={active} onChange={onStyle} />
@@ -114,9 +145,11 @@ export default function HorizonPanel({
                       })
                     }
                   >
-                    {["solid", "dashed", "dotted", "dashdot", "none"].map((v) => (
-                      <option key={v}>{v}</option>
-                    ))}
+                    {["solid", "dashed", "dotted", "dashdot", "none"].map(
+                      (v) => (
+                        <option key={v}>{v}</option>
+                      ),
+                    )}
                   </select>
                 </label>
 
@@ -127,7 +160,9 @@ export default function HorizonPanel({
                     min={0.2}
                     max={6}
                     step={0.1}
-                    onChange={(width) => onStyle({ line: { ...active.line, width } })}
+                    onChange={(width) =>
+                      onStyle({ line: { ...active.line, width } })
+                    }
                   />
                 </label>
               </div>
@@ -171,7 +206,9 @@ export default function HorizonPanel({
                     value={active.marker.size}
                     min={1}
                     max={15}
-                    onChange={(size) => onStyle({ marker: { ...active.marker, size } })}
+                    onChange={(size) =>
+                      onStyle({ marker: { ...active.marker, size } })
+                    }
                   />
                 </label>
               </div>

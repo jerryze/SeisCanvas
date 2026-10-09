@@ -1,3 +1,4 @@
+import { captureScene, type Timing } from "./captureScene";
 import {
   forwardRef,
   useState,
@@ -14,7 +15,7 @@ import {
   Orbit,
   Box,
 } from "lucide-react";
-import { VS, Meta, Camera, Export3D, perspective, exportPixels, MAX_SCENE_PIXELS } from "../../types";
+import { VS, Meta, Camera, Export3D, perspective } from "../../types";
 import { SceneData, buildTraces, buildLayout } from "./sceneGeometry";
 import { useOriginalProbe, ProbeReadout } from "../Probe";
 import { api } from "../../api/client";
@@ -27,15 +28,19 @@ export type Scene3DCapture = {
   height_px: number;
   scale: number;
   pixel_size: [number, number];
+  render_dpi?: number;
+  camera: Camera;
+  timings: Timing;
 };
 export type Scene3DHandle = {
-  captureFigure: (settings: Export3D) => Promise<Scene3DCapture>;
+  captureFigure: (settings: Export3D, onStatus?: (message: string) => void) => Promise<Scene3DCapture>;
 };
 type Props = {
   view: VS;
   meta: Meta;
   maps: Record<string, any[]>;
   revision: number;
+  busy?: string;
   onCamera: (camera: Camera) => void;
   onError: (message: string) => void;
   onReady: (ready: boolean) => void;
@@ -62,7 +67,7 @@ const presets: Record<string, Camera> = {
   },
 };
 const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
-  { view, meta, maps, revision, onCamera, onError, onReady },
+  { view, meta, maps, revision, busy = "", onCamera, onError, onReady },
   ref,
 ) {
   const plot = useRef<HTMLDivElement>(null),
@@ -81,6 +86,8 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
   dataRef.current = data;
   const renderQueue = useRef(Promise.resolve());
   const renderVersion = useRef(0);
+  const exporting = useRef(false);
+  const [exportStatus, setExportStatus] = useState("");
   const displayedCamera = useRef("");
   // Saving an orbit must not rebuild surfaces or temporarily cover the canvas.
   const sceneStyle = JSON.stringify({
@@ -112,6 +119,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
       vmin: view.seismic.vmin,
       vmax: view.seismic.vmax,
       reverse_polarity: view.seismic.reverse_polarity,
+      interpolation: view.seismic.interpolation,
     },
     quality: view.scene.quality,
   });
@@ -165,7 +173,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
         el.removeAllListeners?.("plotly_hover");
         await Plotly.react(
           el,
-          buildTraces(data, latest.current.view, maps),
+          buildTraces(data, latest.current.view, maps, undefined, true),
           buildLayout(data, latest.current.view, drag) as any,
           {
             responsive: true,
@@ -229,7 +237,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
         // Mouse orbit events already update displayedCamera and skip this path.
         const current = latest.current.view;
         const next = { ...current, scene: { ...current.scene, camera: requestedCamera } };
-        await Plotly.react(el, buildTraces(data, next, maps),
+        await Plotly.react(el, buildTraces(data, next, maps, undefined, true),
           buildLayout(data, next, drag) as any, {
             responsive: true, displayModeBar: false, scrollZoom: true,
             plotGlPixelRatio: Math.min(window.devicePixelRatio, 2),
@@ -246,7 +254,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
     const el = plot.current;
     if (!el) return;
     const observer = new ResizeObserver(() => {
-      if ((el as any).data) Plotly.Plots.resize(el);
+      if ((el as any).data && !exporting.current) Plotly.Plots.resize(el);
     });
     observer.observe(el);
     return () => {
@@ -258,76 +266,23 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
   useImperativeHandle(
     ref,
     () => ({
-      captureFigure: async (settings) => {
-        if (!dataRef.current || loading || rendering)
-          throw new Error("请等待三维场景加载完成。");
-        const { width, height, scale, pixels } = exportPixels(settings);
-        if (pixels[0] * pixels[1] > MAX_SCENE_PIXELS)
-          throw new Error(
-            `三维栅格渲染上限为 ${MAX_SCENE_PIXELS / 1_000_000} 百万像素，请减小尺寸或降低 DPI。`,
-          );
-        const el = document.createElement("div");
-        el.style.cssText = `position:fixed;left:-20000px;top:0;width:${width}px;height:${height}px;`;
-        document.body.appendChild(el);
+      captureFigure: async (settings, onStatus) => {
+        if (!dataRef.current || loading || rendering || exporting.current)
+          throw new Error("请等待三维场景加载或导出完成。");
+        exporting.current = true;
         try {
-          await document.fonts.load(
-            `${(settings.font_size * 4) / 3}px "${settings.font}"`,
-          );
-          const current = latest.current.view;
-          // Publication capture re-reads the slices at the best texture quality
-          // and with the requested interpolation instead of reusing the
-          // interactive texture. Falls back to the browsed scene on failure.
-          let scene = dataRef.current;
-          const publication = {
-            ...current,
-            scene: { ...current.scene, quality: 512 as const },
-            seismic: { ...current.seismic, interpolation: settings.interpolation },
-          };
-          if (
-            current.scene.quality < 512 ||
-            current.seismic.interpolation !== settings.interpolation
-          ) {
-            try {
-              scene = await (
-                await api("/scene", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify(publication),
-                })
-              ).json();
-            } catch {
-              /* Keep the browsed texture when the extra read fails. */
-            }
-          }
-          await Plotly.newPlot(
-            el,
-            buildTraces(scene, current, maps, settings),
-            {
-              ...buildLayout(scene, current, drag, settings),
-              width,
-              height,
-              autosize: false,
-            } as any,
-            { displayModeBar: false, plotGlPixelRatio: scale },
-          );
-          applyDepthLayers(el);
-          const png = await Plotly.toImage(el, {
-            format: "png",
-            width,
-            height,
-            scale,
+          await renderQueue.current;
+          // Capture and interactive style/camera updates share one serialized
+          // queue. GPU state is restored before subsequent edits can render.
+          const capture = captureScene(plot.current, settings, message => {
+            setExportStatus(message);
+            onStatus?.(message);
           });
-          return {
-            png,
-            format: settings.format,
-            width_px: width,
-            height_px: height,
-            scale,
-            pixel_size: [width * scale, height * scale] as [number, number],
-          };
+          renderQueue.current = capture.then(() => {}, () => {});
+          return await capture;
         } finally {
-          Plotly.purge(el);
-          el.remove();
+          exporting.current = false;
+          setExportStatus("");
         }
       },
     }),
@@ -382,10 +337,10 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
         </div>
         <div className="plot-wrap scene-plot-wrap">
           <div ref={plot} className="plot" />
-          {(loading || rendering) && (
-            <div className="loading">
+          {(loading || rendering || exportStatus || busy) && (
+            <div className="loading" role="status" aria-live="polite">
               <LoaderCircle className="spin" size={16} />
-              {loading ? "正在提取切片与层位…" : "正在绘制三维场景…"}
+              {exportStatus || busy || (loading ? "正在提取切片与层位…" : "正在绘制三维场景…")}
             </div>
           )}
           {!loading && !data && (

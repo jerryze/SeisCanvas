@@ -11,6 +11,9 @@ The queue request schemas (``Queue2DRequest``/``QueueMapRequest``/
 
 from __future__ import annotations
 
+from time import perf_counter
+import logging
+
 from backend import naming
 from backend.export3d import decode_scene_png, encode_scene
 from backend.export_queue import session
@@ -221,6 +224,7 @@ def add_profile(survey, horizons, req: QueueProfileRequest) -> dict:
 
 
 def add_3d(survey, req: Queue3DRequest) -> dict:
+    started = perf_counter()
     state, settings = req.state, req.settings
     dataset = dataset_label(survey, req.dataset)
     slice_positions = {
@@ -258,15 +262,24 @@ def add_3d(survey, req: Queue3DRequest) -> dict:
             req.format,
         )
     request = SceneExportRequest(
+        dpi=(req.render_dpi or 300) if settings.canvas == "fit" else None,
         png=req.png,
         format=req.format,
         width=req.width_px,
         height=req.height_px,
         scale=req.scale,
     )
+    phase = perf_counter()
     raw, pixels, size = decode_scene_png(request)
+    timings = {**req.timings, "server_image_validation": (perf_counter() - phase) * 1000}
+    phase = perf_counter()
     data = encode_scene(request, raw, pixels, size)
+    timings["pdf_svg_generation" if req.format != "png" else "png_metadata"] = (perf_counter() - phase) * 1000
+    timings["server_packaging"] = (perf_counter() - started) * 1000
+    timings["total"] = req.timings.get("total", 0) + timings["server_packaging"]
+    logging.getLogger(__name__).info("3D export timings (ms): %s", timings)
     summary = {
+        "export_timings_ms": timings,
         "slices": slice_positions,
         "interpolation": state.seismic.interpolation,
         "horizons": [h.model_dump() for h in state.horizons],
