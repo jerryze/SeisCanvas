@@ -17,7 +17,7 @@ import logging
 from backend import naming
 from backend.export3d import decode_scene_png, encode_scene
 from backend.export_queue import session
-from backend.horizon_map import render_map, render_profile
+from backend.horizon_map import difference_horizons, render_map, render_profile
 from backend.models import (
     Queue2DRequest,
     Queue3DRequest,
@@ -102,20 +102,34 @@ def add_map(survey, horizons, req: QueueMapRequest) -> dict:
         raise ValueError("Horizon not found.")
     horizon = horizons[state.horizon]
     dataset = dataset_label(survey, req.dataset)
-    #: Filename scalar position names the active color variable.
+    # Difference filenames identify the pair; the manifest keeps the scalar.
     scalar = {"twt": "TWT", "amplitude": "Amplitude", "difference": "Diff"}[state.color_by]
+    content = scalar
+    difference = None
+    if state.color_by == "difference":
+        reference, comparison = difference_horizons(state, horizons)
+        content = naming.comparison_label(comparison.name, reference.name)
+        difference = {
+            "reference": state.difference_reference,
+            "reference_name": reference.name,
+            "comparison": state.difference_comparison,
+            "comparison_name": comparison.name,
+            "type": state.difference_type,
+            "operation": "comparison - reference",
+        }
     display = naming.display_label(state.display)
     colormap = naming.colormap_label(state.colormap, "Petrel")
     filename = naming.horizon_map_name(
         dataset,
         horizon.name,
-        scalar,
+        content,
         display,
         colormap,
         settings.width,
         settings.height,
         settings.dpi,
         settings.format,
+        difference_type=state.difference_type if difference is not None else None,
     )
     data = render_map(survey, horizon, state, settings, horizons)
     summary = {
@@ -123,15 +137,7 @@ def add_map(survey, horizons, req: QueueMapRequest) -> dict:
         "color_by": state.color_by,
         "clip_percentile": state.clip_percentile,
         "scalar": scalar,
-        "difference": (
-            {
-                "reference": state.difference_reference,
-                "comparison": state.difference_comparison,
-                "type": state.difference_type,
-            }
-            if state.color_by == "difference"
-            else None
-        ),
+        "difference": difference,
         "display": state.display,
         "colormap": state.colormap,
         "reverse_colormap": state.reverse_colormap,

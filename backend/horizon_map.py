@@ -32,6 +32,7 @@ __all__ = [
     "sample_seismic_line",
     "sample_amplitude",
     "sample_difference",
+    "difference_horizons",
     "resample_to_grid",
     "difference_statistics",
 ]
@@ -151,6 +152,17 @@ def resample_to_grid(src_x, src_y, grid, dst_x, dst_y):
     return resampled
 
 
+def difference_horizons(state, horizons):
+    """Resolve the same reference/comparison pair for data and export labels."""
+    if not horizons:
+        raise ValueError("Difference needs the loaded horizons.")
+    reference = horizons.get(state.difference_reference or "")
+    comparison = horizons.get(state.difference_comparison or "")
+    if reference is None or comparison is None:
+        raise ValueError("Difference needs a reference and a comparison horizon.")
+    return reference, comparison
+
+
 def _signed_difference(horizon, state, horizons):
     """Comparison minus reference, bilinearly resampled onto this grid.
 
@@ -158,12 +170,7 @@ def _signed_difference(horizon, state, horizons):
     different spacing still line up.  The result only depends on the horizon
     pair, so it is cached on the geometry horizon like the other lazy grids.
     """
-    if not horizons:
-        raise ValueError("Difference needs the loaded horizons.")
-    reference = horizons.get(state.difference_reference or "")
-    comparison = horizons.get(state.difference_comparison or "")
-    if reference is None or comparison is None:
-        raise ValueError("Difference needs a reference and a comparison horizon.")
+    reference, comparison = difference_horizons(state, horizons)
     x, y, _ = horizon_grid(horizon)
     cached = getattr(horizon, "_difference3d", None)
     if cached is not None and cached[:4] == (x, y, state.difference_reference, state.difference_comparison):
@@ -664,7 +671,17 @@ def render_map(survey, horizon, state, settings, horizons=None):
     if settings.show_axes and settings.show_labels:
         ax.set_xlabel('Crossline'); ax.set_ylabel('Inline')
     if settings.show_title:
-        ax.set_title(horizon.name)
+        if state.color_by == "difference":
+            reference, comparison = difference_horizons(state, horizons)
+            expression = f"{comparison.name} − {reference.name}"
+            title = (
+                f"Absolute Difference: |{expression}|"
+                if state.difference_type == "absolute"
+                else f"Signed Difference: {expression}"
+            )
+            ax.set_title(title)
+        else:
+            ax.set_title(horizon.name)
     colorbars = []
     if state.colorbar:
         cb = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax)

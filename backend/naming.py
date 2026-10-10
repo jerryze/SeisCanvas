@@ -105,6 +105,11 @@ def horizons_label(names):
     return f"Horizons{len(cleaned)}"
 
 
+def comparison_label(comparison, reference):
+    """Ordered pair: the difference is comparison minus reference."""
+    return f"{sanitize(comparison, 'Comparison')}-vs-{sanitize(reference, 'Reference')}"
+
+
 def _range(values, prefix, pad=0, suffix=""):
     points = sorted({float(v) for v in values})
     if not points:
@@ -194,14 +199,20 @@ def horizon_surface_name(dataset, content, scalar, colormap, width, height, dpi,
     )
 
 
-def horizon_map_name(dataset, horizon, scalar, display, colormap, width, height, dpi, ext="png"):
+def horizon_map_name(
+    dataset, horizon, scalar, display, colormap, width, height, dpi, ext="png",
+    *, difference_type=None,
+):
     # ``Amplitude`` maps carry no display segment, a contour-only map is not
-    # filled (so the colormap adds nothing), and a difference map names its own
-    # comparison and error display.
+    # filled (so the colormap adds nothing). Difference type and rendering
+    # display are separate: signed/absolute must not replace filled/contour.
     segments = [] if str(scalar) == "Amplitude" else [display]
+    if difference_type is not None:
+        difference = {"signed": "SignedDifference", "absolute": "AbsoluteError"}[difference_type]
+        segments.insert(0, difference)
     optional = [] if str(display) == "Contour" else [colormap]
     return _assemble(
-        [dataset, "HorizonMap", horizon, scalar, *segments],
+        [dataset, "HorizonMap", sanitize(horizon, "Horizon"), scalar, *segments],
         optional,
         [size_segment(width, height, dpi)],
         ext,

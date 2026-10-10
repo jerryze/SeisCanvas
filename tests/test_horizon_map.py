@@ -280,6 +280,32 @@ def test_difference_publication_render(tmp_path):
     assert content.startswith(b"\x89PNG")
 
 
+@pytest.mark.parametrize("difference_type,show_title,expected", [
+    ("signed", True, "Signed Difference: Prediction − Reference"),
+    ("absolute", True, "Absolute Difference: |Prediction − Reference|"),
+    ("signed", False, None),
+])
+def test_difference_export_title_uses_the_actual_pair(tmp_path, difference_type, show_title, expected):
+    import xml.etree.ElementTree as ET
+
+    grid = grid_horizon(tmp_path, "Unrelated.txt", lambda y, x: 200 + y + x)
+    reference = grid_horizon(tmp_path, "Reference.txt", lambda y, x: 200 + y + x)
+    comparison = grid_horizon(tmp_path, "Prediction.txt", lambda y, x: 202 + y + x)
+    content = render_map(
+        None, grid,
+        difference_state("grid", "ref", "comp", difference_type=difference_type, display="filled"),
+        Settings(canvas="fit", format="svg", long_edge=600, show_title=show_title),
+        {"grid": grid, "ref": reference, "comp": comparison},
+    )
+    root = ET.fromstring(content)
+    texts = ["".join(node.itertext()) for node in root.iter("{http://www.w3.org/2000/svg}text")]
+    assert "Unrelated" not in texts
+    if expected is not None:
+        assert expected in texts
+    else:
+        assert not any("Difference:" in text for text in texts)
+
+
 def test_difference_map_api(client, tmp_path):
     import backend.main as server
     from backend.core import Horizon as H

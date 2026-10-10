@@ -8,6 +8,7 @@ import {
 } from "react";
 import Plotly from "plotly.js-dist-min";
 import { applyDepthLayers } from "./depthLayers";
+import { applySurfaceLighting } from "./surfaceLighting";
 import {
   LoaderCircle,
   RotateCcw,
@@ -183,6 +184,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
           },
         );
         if (version !== renderVersion.current) return;
+        applySurfaceLighting(el);
         applyDepthLayers(el);
         displayedCamera.current = JSON.stringify(latest.current.view.scene.camera);
         el.on("plotly_relayout", (event: any) => {
@@ -242,6 +244,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
             responsive: true, displayModeBar: false, scrollZoom: true,
             plotGlPixelRatio: Math.min(window.devicePixelRatio, 2),
           });
+        applySurfaceLighting(el);
         applyDepthLayers(el);
         displayedCamera.current = requestedKey;
       })

@@ -125,6 +125,7 @@ npm run dev
 - 顶栏 `Export Queue · N` 打开导出队列，支持 Preview、Rename、Delete、Clear Queue、Export All；Preview 显示的正是 ZIP 中的最终文件。
 - `Export All` 只整理已渲染文件和生成 `export_manifest.json`，不重复执行 Matplotlib 或三维高分辨率渲染，最后打包为 `SeisCanvas_{Dataset}_Export_{YYYYMMDD_HHmm}.zip`（多数据集时为 `SeisCanvas_BatchExport_YYYYMMDD_HHmm.zip`）。
 - 文件名为自描述式科研命名 `{Dataset}_{View}_{Location/Target}_{Content}_{KeyStyle}_{Width}x{Height}px`，例如 `F3_2D_Inline_IL0350_Horizons6_Seismic_3000x1700px.png`；同名文件自动追加 `_02`、`_03`。
+- 层位差值图的文件名包含网格层位、`对比层位-vs-参考层位`、差值类型（`SignedDifference` / `AbsoluteError`）及绘制方式；差值方向固定为“对比 − 参考”。例如 `F3_HorizonMap_H1_Pred-vs-Ref_SignedDifference_FilledContour_RdBu_3000x2700px.png`。图内标题显示实际层位名称及减法方向，清单同时保存层位 ID 和名称。
 - 一个 ZIP 可混合 PNG、PDF、SVG，并按 `2D/Inline`、`2D/Crossline`、`3D`、`HorizonMap`、`HorizonProfile` 自动分类；根目录包含 `export_manifest.json`，记录数据集、完整 ViewState 与绘图参数（振幅范围、裁剪百分位、色标、层位颜色与线型、字体、三维相机、光照、透明度、垂向夸张、等值线间隔等）。
 - 暂存文件保存在 `/tmp/seiscanvas/session_xxxxxx/`（Windows 使用系统临时目录），包含 `manifest.json` 和 `figures/`；会话结束或超出保留数量后自动清理。
 
@@ -155,6 +156,7 @@ npm run dev
 - 层位面板和三维图例显示实际 TWT 范围，范围不随预览精度改变；恒定时间层位使用色带中间颜色。
 - 曲面默认开启平滑着色和相机光照，透明度为 1，网格边关闭；平滑着色与光照可独立切换。
 - 光照使用环境光 0.80、漫反射 0.20、高光 0.05 和粗糙度 0.55，以柔和明暗表现起伏，减少色带变暗。
+- 光源、顶点和法线统一在世界坐标系中计算光照，并修正 TWT 反向轴造成的法线朝向翻转，避免凸起显示成凹陷；相机旋转及导出复用同一修正。
 - 三维预览与导出共用曲面着色和平滑、光照设置。
 
 ## Horizon Map

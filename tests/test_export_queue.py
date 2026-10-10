@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from backend import export_queue, naming
+from backend.core import Horizon
 import backend.main as server
 
 
@@ -234,6 +235,95 @@ def test_horizon_map_is_queued_with_its_contour_parameters(client):
         "settings": {"format": "png"},
     }
     assert client.post("/api/export/queue", json=manifest_body).status_code == 400
+
+
+@pytest.fixture
+def difference_export_pair(client, tmp_path):
+    for key, name, offset in [("ref", "Ref H/1", 0), ("comp", "Pred:H2", 3)]:
+        path = tmp_path / f"{key}.txt"
+        path.write_text(
+            "\n".join(f"{y} {x} {204 + y + x + offset}" for y in (10, 12) for x in (30, 33))
+        )
+        server.horizons[key] = Horizon(path, name)
+    # The geometry horizon is independent of both members of the pair.
+    server.horizons["h"].name = "Grid/H 1"
+    yield
+    server.horizons.pop("ref", None)
+    server.horizons.pop("comp", None)
+
+
+def difference_queue_body(**state):
+    return {
+        "kind": "map",
+        "dataset": "F3",
+        "state": {
+            "horizon": "h",
+            "color_by": "difference",
+            "difference_reference": "ref",
+            "difference_comparison": "comp",
+            "display": "filled_contour",
+            "colormap": "RdBu",
+            **state,
+        },
+        "settings": {"canvas": "fixed", "format": "png", "width": 60, "height": 50, "dpi": 300},
+    }
+
+
+@pytest.mark.parametrize("difference_type,label,colormap", [
+    ("signed", "SignedDifference", "RdBu"),
+    ("absolute", "AbsoluteError", "viridis"),
+])
+@pytest.mark.parametrize("display,label_display", [
+    ("filled", "Filled"), ("contour", "Contour"), ("filled_contour", "FilledContour"),
+])
+def test_difference_export_names_the_pair_type_and_display(
+    client, difference_export_pair, difference_type, label, colormap, display, label_display,
+):
+    response = client.post("/api/export/queue", json=difference_queue_body(
+        difference_type=difference_type, colormap=colormap, display=display,
+    ))
+    assert response.status_code == 200, response.text
+    item = response.json()
+    color = "" if display == "contour" else f"_{naming.colormap_label(colormap)}"
+    assert item["filename"] == (
+        f"F3_HorizonMap_Grid-H-1_Pred-H2-vs-Ref-H-1_{label}_{label_display}{color}_60x50mm_300dpi.png"
+    )
+    assert client.get(f"/api/export/queue/{item['id']}/file").content.startswith(b"\x89PNG")
+    manifest = export_queue.session().manifest()["figures"][0]
+    assert manifest["name"] == item["filename"]
+    assert manifest["horizon"] == "Grid/H 1"
+    assert manifest["display"] == display
+    assert manifest["difference"] == {
+        "reference": "ref", "reference_name": "Ref H/1",
+        "comparison": "comp", "comparison_name": "Pred:H2",
+        "type": difference_type, "operation": "comparison - reference",
+    }
+
+
+def test_difference_export_swap_duplicate_and_renamed_horizon(client, difference_export_pair):
+    first = client.post("/api/export/queue", json=difference_queue_body()).json()
+    swapped = client.post("/api/export/queue", json=difference_queue_body(
+        difference_reference="comp", difference_comparison="ref",
+    )).json()
+    assert "_Ref-H-1-vs-Pred-H2_SignedDifference_" in swapped["filename"]
+    assert not swapped["filename"].endswith("_02.png")
+    duplicate = client.post("/api/export/queue", json=difference_queue_body()).json()
+    assert duplicate["filename"] == first["filename"].removesuffix(".png") + "_02.png"
+
+    assert client.patch("/api/horizons/comp", json={"name": "Updated Prediction"}).status_code == 200
+    renamed = client.post("/api/export/queue", json=difference_queue_body()).json()
+    assert "_Updated-Prediction-vs-Ref-H-1_" in renamed["filename"]
+    figures = export_queue.session().manifest()["figures"]
+    assert figures[0]["name"] == first["filename"]
+    assert figures[0]["difference"]["comparison_name"] == "Pred:H2"
+    assert figures[-1]["difference"]["comparison_name"] == "Updated Prediction"
+
+
+@pytest.mark.parametrize("missing", ["difference_reference", "difference_comparison"])
+def test_difference_export_rejects_a_missing_pair(client, difference_export_pair, missing):
+    response = client.post("/api/export/queue", json=difference_queue_body(**{missing: "missing"}))
+    assert response.status_code == 400
+    assert client.get("/api/export/queue").json()["count"] == 0
 
 
 def test_three_dimensional_items_keep_their_own_format(client):

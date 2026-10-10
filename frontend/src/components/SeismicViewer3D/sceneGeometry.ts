@@ -220,7 +220,8 @@ export function buildTraces(
                 roughness: 0.55, fresnel: 0,
               },
           // gl-mesh3d unprojects this position by inverse projection/view/model
-          // every frame, so the light remains attached to the camera during orbit.
+          // every frame. surfaceLighting keeps its vectors in world space and
+          // corrects mirrored TWT normals, keeping this camera light on the front.
           lightposition: { x: 0, y: 0, z: -1 },
           showscale: false,
           showlegend: false,
