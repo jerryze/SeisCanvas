@@ -1,0 +1,98 @@
+/* Shared by seismic, map, profile and fixed horizon palettes; portal uses root tokens. */
+.colormap-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 4px;
+}
+.colormap-label {
+  color: #475569;
+  font-size: var(--ui-label-size);
+  font-weight: 400;
+}
+.colormap-trigger,
+.colormap-option {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) var(--ui-icon-size);
+  align-items: center;
+  gap: 8px;
+  height: var(--ui-control-height);
+  padding: 0 7px;
+  font-size: var(--ui-label-size);
+  font-weight: 400;
+  text-align: left;
+}
+.colormap-trigger {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--ui-radius);
+  color: var(--text);
+  background: var(--surface);
+}
+.colormap-trigger:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+.colormap-trigger[aria-expanded="true"] {
+  border-color: #94a3b8;
+}
+.colormap-trigger > svg {
+  color: var(--text-muted);
+}
+.colormap-trigger:focus-visible {
+  outline: 2px solid #315f9e55;
+  outline-offset: 2px;
+}
+.colormap-swatch {
+  display: block;
+  width: 64px;
+  height: 11px;
+  border: 1px solid #18223014;
+  border-radius: 3px;
+  background-color: var(--surface-hover);
+  /* Cover the border box once; repeating a padding-box gradient wraps the
+     opposite endpoint into the translucent border. */
+  background-origin: border-box;
+  background-repeat: no-repeat;
+}
+.colormap-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.colormap-range {
+  color: #64748b;
+  font-size: var(--ui-meta-size);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.colormap-menu {
+  position: fixed;
+  z-index: 1100;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  padding: 3px 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  background: var(--surface);
+  font-size: var(--ui-label-size);
+}
+.colormap-option {
+  width: 100%;
+  border-radius: 0;
+  cursor: pointer;
+}
+.colormap-option:hover,
+.colormap-option.is-active {
+  background: var(--surface-hover);
+}
+.colormap-option[aria-selected="true"] {
+  background: var(--primary-soft);
+}
+.colormap-option > svg {
+  color: var(--primary);
+}

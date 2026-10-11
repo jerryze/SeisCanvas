@@ -30,6 +30,7 @@ export type MapWorkspace = {
   profileOn: boolean;
   profileA: [number, number] | null;
   profileB: [number, number] | null;
+  profileShare: number;
   profileSettings: ExportDialogSettings;
   drag: "zoom" | "pan";
 };
@@ -49,7 +50,7 @@ export function initialMapWorkspace(): MapWorkspace {
       contours: true, interval_auto: true, interval: 10, line_width: 0.5,
       labels: false, colorbar: true, x_range: null, y_range: null,
     },
-    settings, profileOn: false, profileA: null, profileB: null, drag: "zoom",
+    settings, profileOn: false, profileA: null, profileB: null, profileShare: 45, drag: "zoom",
     profileSettings: { ...settings, height: 80, show_curves: true, show_legend: true, show_ab: true },
   };
 }
@@ -85,6 +86,22 @@ export type WorkspaceResponse = {
   source?: { ilbyte: number; xlbyte: number; geometry_mode: string };
   issues: { horizon_id: string | null; message: string }[];
 };
+
+/** Never silently replace a deleted member of a scientific comparison. */
+export function reconcileMapWorkspace(map: MapWorkspace, horizons: Pick<HS, "id">[]): MapWorkspace {
+  const ids = new Set(horizons.map(h => h.id));
+  const horizon = ids.has(map.state.horizon) ? map.state.horizon : horizons[0]?.id || "";
+  const reference = ids.has(map.state.difference_reference || "") ? map.state.difference_reference : null;
+  const comparison = ids.has(map.state.difference_comparison || "") ? map.state.difference_comparison : null;
+  if (horizon === map.state.horizon && reference === map.state.difference_reference && comparison === map.state.difference_comparison) return map;
+  return {
+    ...map,
+    state: {
+      ...map.state, horizon, difference_reference: reference, difference_comparison: comparison,
+      range_mode: "auto", vmin: null, vmax: null, x_range: null, y_range: null,
+    },
+  };
+}
 
 /** New defaults survive upgrades while persisted source IDs stay authoritative. */
 export function restoreState(defaults: WorkspaceState, saved: WorkspaceState | null, horizons: HS[]): WorkspaceState {

@@ -86,7 +86,7 @@ export function projectedBounds(
             ]);
       }
   }
-  if (!points.length) throw new Error("场景没有可导出的可见内容。");
+  if (!points.length) throw new Error("场景没有可保存的可见内容。");
   const xs = points.map((p) => p[0]),
     ys = points.map((p) => p[1]);
   const x = Math.min(...xs) - padding,
@@ -161,10 +161,10 @@ export async function captureScene(
     !renderer.cameraParams?.projection ||
     typeof renderer.redraw !== "function"
   )
-    throw new Error("当前三维渲染器不支持直接导出，请刷新页面后重试。");
+    throw new Error("当前三维渲染器无法生成图件，请刷新页面后重试。");
   if (renderer.contextLost || renderer.gl.isContextLost())
     throw new Error("三维显卡上下文已丢失，请重新加载场景。");
-  status("准备三维导出…");
+  status("准备三维图件…");
   await document.fonts.load(
     `${(settings.font_size * 4) / 3}px "${settings.font}"`,
   );
@@ -230,7 +230,7 @@ export async function captureScene(
     gl.getParameter(gl.MAX_TEXTURE_SIZE),
   );
   if (width > limit || height > limit)
-    throw new Error("导出尺寸超出显卡支持范围，请减小长边。");
+    throw new Error("图件尺寸超出显卡支持范围，请减小长边。");
   const projection = cropProjection(
     originalProjection,
     rect,
@@ -350,7 +350,7 @@ export async function captureScene(
       if (!blob) return reject(new Error("PNG 编码失败。"));
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result as string);
-      reader.onerror = () => reject(new Error("读取导出图片失败。"));
+      reader.onerror = () => reject(new Error("读取图件失败。"));
       reader.readAsDataURL(blob);
     }, "image/png"),
   );

@@ -1,5 +1,7 @@
 import ExportDialog from "../ExportDialog";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useModalFocus } from "../../hooks/useModalFocus";
 import {
   Plus,
   Trash2,
@@ -8,8 +10,11 @@ import {
   Download,
   X,
   LoaderCircle,
+  ChevronDown,
 } from "lucide-react";
-import { Num, Toggle, Group } from "../Controls";
+import { Num, Toggle, Group, OpacityControl, StrokeControl, Select } from "../Controls";
+import { PETREL_COLORMAP } from "./sceneGeometry";
+import ColormapSelect from "../ColormapSelect";
 import {
   VS,
   Meta,
@@ -46,7 +51,12 @@ export function SliceManager({
       meta.time_range[0] +
       Math.round((meta.samples - 1) / 2) * meta.sample_interval,
   });
+  const [pendingDelete, setPendingDelete] = useState<{ kind: SliceKind; slice: Slice } | null>(null);
+  const deleteDialog = useRef<HTMLDivElement>(null);
+  useModalFocus(deleteDialog, !!pendingDelete, () => setPendingDelete(null), !disabled);
   const [message, setMessage] = useState("");
+  const [addKind, setAddKind] = useState<SliceKind>("inline");
+  const allSlices = Object.values(slices).flat();
   const positions = (kind: SliceKind) =>
     kind === "inline"
       ? meta.inlines
@@ -70,158 +80,217 @@ export function SliceManager({
   function add(kind: SliceKind) {
     const pos = snap(kind, draft[kind]);
     if (slices[kind].some((s) => s.position === pos)) {
-      setMessage("该位置已经存在，可在下方调整或显示。");
+      setMessage("该位置已经存在，可在列表中调整或显示。");
       return;
     }
     setMessage("");
     onChange({ ...slices, [kind]: [...slices[kind], makeSlice(pos)] });
   }
   return (
-    <Group icon={<Layers size={16} />} title="三维切片">
-      {(["inline", "crossline", "time"] as const).map((kind) => (
-        <div className="slice-family" key={kind}>
-          <div className="slice-family-heading">
-            {titles[kind]}
-            <span>{slices[kind].length}</span>
+    <Group
+      icon={<Layers size={16} />}
+      title="三维切片"
+      hint={`${allSlices.filter((slice) => slice.visible).length} / ${allSlices.length} 显示`}
+    >
+      {pendingDelete && createPortal(
+        <div className="modal-backdrop" onClick={() => !disabled && setPendingDelete(null)}>
+          <div ref={deleteDialog} tabIndex={-1} className="modal delete-horizon-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-slice-title" onClick={(event) => event.stopPropagation()}>
+            <h2 id="delete-slice-title">移除切片 {prefixes[pendingDelete.kind]} {pendingDelete.slice.position}{pendingDelete.kind === "time" ? " ms" : ""}？</h2>
+            <p>将从当前场景移除此切片及其样式，地震数据会保留，可通过“添加切片”重新添加。</p>
+            <div className="import-actions">
+              <button className="secondary" disabled={disabled} onClick={() => setPendingDelete(null)}>取消</button>
+              <button className="danger-button" disabled={disabled} onClick={() => {
+                onChange({ ...slices, [pendingDelete.kind]: slices[pendingDelete.kind].filter((slice) => slice.id !== pendingDelete.slice.id) });
+                setPendingDelete(null);
+              }}>确认移除</button>
+            </div>
           </div>
-          <div className="slice-add">
-            <label>
-              {kind === "time" ? "时间 · ms" : "位置"}
-              <Num
-                value={draft[kind]}
-                min={positions(kind)[0]}
-                max={positions(kind).at(-1)}
-                step={kind === "time" ? meta.sample_interval : 1}
-                onChange={(n) =>
-                  setDraft((v) => ({ ...v, [kind]: snap(kind, n) }))
-                }
-              />
-            </label>
-            <button
-              className="secondary"
-              title={`添加 ${titles[kind]}`}
-              disabled={
-                disabled ||
-                slices[kind].length >= 12 ||
-                Object.values(slices).flat().length >= 18
-              }
-              onClick={() => add(kind)}
+        </div>, document.body,
+      )}
+      <div className="slice-list">
+        {(["inline", "crossline", "time"] as const).flatMap((kind) =>
+          slices[kind].map((slice) => (
+            <details
+              className={`slice-item ${slice.visible ? "" : "slice-hidden"}`}
+              key={slice.id}
             >
-              <Plus size={14} />
-              添加
-            </button>
-          </div>
-          {slices[kind].map((slice) => (
-            <details className="slice-item" key={slice.id}>
               <summary>
                 <input
                   aria-label={`显示 ${prefixes[kind]} ${slice.position}`}
                   type="checkbox"
+                  disabled={disabled}
                   checked={slice.visible}
                   onClick={(e) => e.stopPropagation()}
                   onChange={(e) =>
                     update(kind, slice.id, { visible: e.target.checked })
                   }
                 />
-                <span>
-                  {prefixes[kind]} {slice.position}
+                <span className="slice-kind" title={titles[kind]}>
+                  {prefixes[kind]}
+                </span>
+                <span className="slice-position">
+                  {slice.position}
                   {kind === "time" ? " ms" : ""}
                 </span>
                 <span className="slice-opacity">
                   {Math.round(slice.opacity * 100)}%
                 </span>
+                <ChevronDown
+                  className="slice-chevron"
+                  size={16}
+                  strokeWidth={1.75}
+                />
+                <button
+                  type="button"
+                  className="icon delete"
+                  title={`删除 ${prefixes[kind]} ${slice.position} 切片`}
+                  aria-label={`删除 ${prefixes[kind]} ${slice.position} 切片`}
+                  disabled={disabled}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setPendingDelete({ kind, slice });
+                  }}
+                >
+                  <Trash2 size={13} />
+                </button>
               </summary>
               <div className="slice-body">
-                <label className="field">
-                  位置
+                <div
+                  className="range-number"
+                  role="group"
+                  aria-label={`${prefixes[kind]} 切片位置`}
+                >
+                  <span>位置</span>
+                  <input
+                    aria-label={`${prefixes[kind]} ${slice.position} 位置滑块`}
+                    type="range"
+                    disabled={disabled}
+                    min={0}
+                    max={positions(kind).length - 1}
+                    value={positions(kind).indexOf(slice.position)}
+                    onChange={(e) =>
+                      update(kind, slice.id, {
+                        position: positions(kind)[+e.target.value],
+                      })
+                    }
+                  />
                   <Num
+                    label={`${prefixes[kind]} 切片位置${kind === "time" ? "（ms）" : ""}`}
+                    disabled={disabled}
                     value={slice.position}
                     min={positions(kind)[0]}
                     max={positions(kind).at(-1)}
                     step={kind === "time" ? meta.sample_interval : 1}
-                    onChange={(position) =>
-                      update(kind, slice.id, { position: snap(kind, position) })
-                    }
+                    onChange={(position) => {
+                      const snapped = snap(kind, position);
+                      update(kind, slice.id, { position: snapped });
+                      return snapped;
+                    }}
                   />
-                </label>
-                <input
-                  aria-label={`${prefixes[kind]} ${slice.position} 位置滑块`}
-                  type="range"
-                  min={0}
-                  max={positions(kind).length - 1}
-                  value={positions(kind).indexOf(slice.position)}
-                  onChange={(e) =>
-                    update(kind, slice.id, {
-                      position: positions(kind)[+e.target.value],
-                    })
-                  }
-                />
-                <label className="field">
-                  透明度
-                  <Num
-                    value={slice.opacity}
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    onChange={(opacity) => update(kind, slice.id, { opacity })}
-                  />
-                </label>
-                <Toggle
-                  label="切片边框"
-                  checked={slice.border.visible}
-                  onChange={(visible) =>
+                </div>
+                <StrokeControl
+                  label="边框"
+                  disabled={disabled}
+                  visible={slice.border.visible}
+                  color={slice.border.color}
+                  width={slice.border.width}
+                  onVisible={(visible) =>
                     update(kind, slice.id, {
                       border: { ...slice.border, visible },
                     })
                   }
-                />
-                <div className="field-row">
-                  <label>
-                    边框颜色
-                    <input
-                      aria-label={`${prefixes[kind]} ${slice.position} 边框颜色`}
-                      type="color"
-                      value={slice.border.color}
-                      onChange={(e) =>
-                        update(kind, slice.id, {
-                          border: { ...slice.border, color: e.target.value },
-                        })
-                      }
-                    />
-                  </label>
-                  <label>
-                    边框宽度 · pt
-                    <Num
-                      value={slice.border.width}
-                      min={0.2}
-                      max={6}
-                      step={0.1}
-                      onChange={(width) =>
-                        update(kind, slice.id, {
-                          border: { ...slice.border, width },
-                        })
-                      }
-                    />
-                  </label>
-                </div>
-                <button
-                  className="secondary full"
-                  onClick={() =>
-                    onChange({
-                      ...slices,
-                      [kind]: slices[kind].filter((s) => s.id !== slice.id),
+                  onColor={(color) =>
+                    update(kind, slice.id, {
+                      border: { ...slice.border, color },
                     })
                   }
-                >
-                  <Trash2 size={12} />
-                  移除此切片
-                </button>
+                  onWidth={(width) =>
+                    update(kind, slice.id, {
+                      border: { ...slice.border, width },
+                    })
+                  }
+                />
+                <OpacityControl
+                  label={`${prefixes[kind]} 切片透明度`}
+                  disabled={disabled}
+                  value={slice.opacity}
+                  onChange={(opacity) => update(kind, slice.id, { opacity })}
+                />
               </div>
             </details>
-          ))}
+          )),
+        )}
+      </div>
+      <details
+        className="subsettings slice-create"
+        open={allSlices.length === 0 ? true : undefined}
+      >
+        <summary className="panel-action">
+          <Plus size={14} />
+          <span>添加切片</span>
+        </summary>
+        <div className="subsettings-body">
+          <label className="field">
+            <span>方向</span>
+            <Select aria-label="新切片方向" value={addKind} disabled={disabled} onChange={(event) => {
+              setAddKind(event.target.value as SliceKind);
+              setMessage("");
+            }}>
+              <option value="inline">Inline</option>
+              <option value="crossline">Crossline</option>
+              <option value="time">时间</option>
+            </Select>
+          </label>
+            <label className="section-number">
+              <span title={addKind === "time" ? "时间（ms）" : "剖面编号"}>
+                {addKind === "time" ? "时间（ms）" : "编号"}
+              </span>
+              <Num
+                label={`新 ${titles[addKind]} 位置`}
+                value={draft[addKind]}
+                disabled={disabled}
+                min={positions(addKind)[0]}
+                max={positions(addKind).at(-1)}
+                step={addKind === "time" ? meta.sample_interval : 1}
+                onChange={(n) => {
+                  const snapped = snap(addKind, n);
+                  setDraft((v) => ({ ...v, [addKind]: snapped }));
+                  setMessage("");
+                  return snapped;
+                }}
+              />
+            </label>
+          <div className="slice-create-footer">
+            <span className="control-note">
+              范围 {positions(addKind)[0]}–{positions(addKind).at(-1)}
+              {addKind === "time" ? " ms" : ""}
+            </span>
+            <button
+              className="secondary"
+              title={`添加 ${titles[addKind]}`}
+              disabled={
+                disabled ||
+                slices[addKind].length >= 12 ||
+                allSlices.length >= 18
+              }
+              onClick={() => add(addKind)}
+            >
+              <Plus size={14} />
+              添加
+            </button>
+          </div>
+
+          {message && (
+            <div className="control-note" role="status">
+              {message}
+            </div>
+          )}
+          {(slices[addKind].length >= 12 || allSlices.length >= 18) && (
+            <div className="control-note">已达到切片数量上限。</div>
+          )}
         </div>
-      ))}
-      {message && <div className="control-note">{message}</div>}
+      </details>
     </Group>
   );
 }
@@ -234,21 +303,21 @@ export function SceneControls({
 }) {
   const patch = (p: Partial<SceneSettings>) => onChange({ ...scene, ...p });
   return (
-    <Group
-      icon={<Box size={16} />}
-      title="场景设置"
-      defaultOpen={false}
-    >
-      <Toggle
-        label="显示坐标轴"
-        checked={scene.show_axes}
-        onChange={(show_axes) => patch({ show_axes })}
-      />
-      <Toggle
-        label="显示坐标轴标签"
-        checked={scene.show_axis_labels}
-        onChange={(show_axis_labels) => patch({ show_axis_labels })}
-      />
+    <Group icon={<Box size={16} />} title="场景设置" defaultOpen={false}>
+      <div className="check-row">
+        <Toggle
+          label="坐标轴"
+          title="显示坐标轴"
+          checked={scene.show_axes}
+          onChange={(show_axes) => patch({ show_axes })}
+        />
+        <Toggle
+          label="轴标签"
+          title="显示坐标轴标签"
+          checked={scene.show_axis_labels}
+          onChange={(show_axis_labels) => patch({ show_axis_labels })}
+        />
+      </div>
       <Toggle
         label="显示包围盒"
         checked={scene.show_bounding_box}
@@ -263,11 +332,17 @@ export function SceneControls({
           onChange={(e) => patch({ background: e.target.value })}
         />
       </label>
-      <div className="field-row">
-        {["X 比例", "Y 比例", "Z 比例"].map((name, index) => (
+      <div
+        className="field-row field-row--inline"
+        role="group"
+        aria-label="场景显示比例"
+      >
+        {["X", "Y", "Z"].map((name, index) => (
           <label key={name}>
             {name}
             <Num
+              label={`${name} 比例`}
+              title={`${name} 显示比例`}
               value={scene.aspect_ratio[index]}
               min={0.1}
               max={5}
@@ -287,7 +362,7 @@ export function SceneControls({
       </div>
       <label className="field">
         场景精度
-        <select
+        <Select
           value={scene.quality}
           onChange={(e) =>
             patch({ quality: Number(e.target.value) as 128 | 256 | 512 })
@@ -296,7 +371,7 @@ export function SceneControls({
           <option value={128}>快速 · 128</option>
           <option value={256}>均衡 · 256</option>
           <option value={512}>精细 · 512</option>
-        </select>
+        </Select>
       </label>
     </Group>
   );
@@ -310,61 +385,74 @@ export function Horizon3DControls({
 }) {
   return (
     <div className="horizon-3d-controls">
-      <div className="field-row">
-        <label className="field">
-          三维显示
-          <select
-            value={h.display_mode}
-            onChange={(e) =>
-              onChange({ display_mode: e.target.value as HS["display_mode"] })
-            }
-          >
-            <option value="full_surface">完整曲面</option>
-            <option value="slice_intersections">
-              切片交线
-            </option>
-          </select>
-        </label>
-        <label className="field">
-          透明度
-          <Num
-            value={h.opacity}
-            min={0}
-            max={1}
-            step={0.05}
-            onChange={(opacity) => onChange({ opacity })}
-          />
-        </label>
-      </div>
+      <label className="field">
+        三维显示
+        <Select
+          aria-label="三维显示"
+          value={h.display_mode}
+          onChange={(e) =>
+            onChange({ display_mode: e.target.value as HS["display_mode"] })
+          }
+        >
+          <option value="full_surface">完整曲面</option>
+          <option value="slice_intersections">切片交线</option>
+        </Select>
+      </label>
+      <OpacityControl
+        label="层位透明度"
+        value={h.opacity}
+        onChange={(opacity) => onChange({ opacity })}
+      />
       {h.display_mode === "full_surface" ? (
         <>
-          <div className="field-row">
+          <label className="field">
+            着色依据
+            <Select
+              aria-label="着色依据"
+              value={h.color_by || "twt"}
+              onChange={(e) =>
+                onChange({ color_by: e.target.value as HS["color_by"] })
+              }
+            >
+              <option value="twt">TWT 时间</option>
+              <option value="solid">单色</option>
+            </Select>
+          </label>
+          {h.color_by === "solid" ? (
             <label className="field">
-              着色依据
-              <select value={h.color_by || "twt"}
-                onChange={(e) => onChange({ color_by: e.target.value as HS["color_by"] })}>
-                <option value="twt">TWT · 层位时间</option>
-                <option value="solid">单色</option>
-              </select>
+              曲面颜色
+              <input
+                type="color"
+                aria-label="曲面颜色"
+                value={h.color}
+                onChange={(e) => onChange({ color: e.target.value })}
+              />
             </label>
-            {h.color_by !== "solid" && (
-              <label className="field">
-                层位色标
-                <select value={h.horizon_colormap || "petrel"}
-                  onChange={() => onChange({ horizon_colormap: "petrel" })}>
-                  <option value="petrel">Petrel</option>
-                </select>
-                <span style={{ display: "block", height: 8, background: "linear-gradient(to right, #ff0000, #ff8000, #ffff00, #00c040, #00ffff, #0000ff, #8000c0, #ff00ff)" }} />
-              </label>
-            )}
-          </div>
+          ) : (
+            <ColormapSelect
+              label="层位色标"
+              value="petrel"
+              options={[
+                { value: "petrel", label: "Petrel", colors: PETREL_COLORMAP },
+              ]}
+              range={
+                h.twt_range
+                  ? `${Number(h.twt_range[0].toFixed(1))}–${Number(h.twt_range[1].toFixed(1))} ms`
+                  : undefined
+              }
+            />
+          )}
           <div className="check-row">
-            <Toggle label="平滑着色"
+            <Toggle
+              label="平滑着色"
               checked={h.smooth_shading !== false}
-              onChange={(smooth_shading) => onChange({ smooth_shading })} />
-            <Toggle label="柔和光照"
+              onChange={(smooth_shading) => onChange({ smooth_shading })}
+            />
+            <Toggle
+              label="柔和光照"
               checked={h.lighting !== false}
-              onChange={(lighting) => onChange({ lighting })} />
+              onChange={(lighting) => onChange({ lighting })}
+            />
           </div>
         </>
       ) : (
@@ -407,8 +495,19 @@ export function Export3DDialog({
 }) {
   const patch = (p: Partial<ExportDialogSettings>) =>
     onSettings({ ...settings, ...(p as Partial<Export3D>) });
-  return <ExportDialog title="三维场景 · 加入导出" scene settings={settings}
-    onChange={patch} onClose={onClose} onExport={() => onExport(settings)}
-    dataset={dataset} onDataset={onDataset} datasetPlaceholder={datasetPlaceholder}
-    busy={!!busy} error={error} />;
+  return (
+    <ExportDialog
+      title="三维场景 · 保存图件"
+      scene
+      settings={settings}
+      onChange={patch}
+      onClose={onClose}
+      onExport={() => onExport(settings)}
+      dataset={dataset}
+      onDataset={onDataset}
+      datasetPlaceholder={datasetPlaceholder}
+      busy={!!busy}
+      error={error}
+    />
+  );
 }

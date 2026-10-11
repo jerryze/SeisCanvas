@@ -1,6 +1,21 @@
-import { ChevronRight, Layers, Plus, Trash2 } from "lucide-react";
+import { useState } from "react";
+import {
+  ChevronRight,
+  Layers,
+  Plus,
+  SlidersHorizontal,
+  Trash2,
+} from "lucide-react";
 import { HS, Meta, VS } from "../../types";
-import { Group, Num, Toggle } from "../Controls";
+import {
+  Group,
+  Num,
+  Toggle,
+  SubsectionSummary,
+  StrokeControl,
+  Select,
+  TextInput,
+} from "../Controls";
 import { Horizon3DControls } from "../SeismicViewer3D/Controls3D";
 
 type Props = {
@@ -32,9 +47,14 @@ export default function HorizonPanel({
   onRename,
 }: Props) {
   const active = view.horizons.find((h) => h.id === selected);
+  const [styleOpen, setStyleOpen] = useState(false);
 
   return (
-    <Group icon={<Layers size={16} />} title={`层位 · ${view.horizons.length}`}>
+    <Group
+      icon={<Layers size={20} />}
+      title="层位"
+      count={view.horizons.length}
+    >
       <div className="horizon-list">
         {view.horizons.map((h) => (
           <div
@@ -57,7 +77,15 @@ export default function HorizonPanel({
               }
             />
 
-            <button className="horizon-select" onClick={() => onSelect(h.id)}>
+            <button
+              className="horizon-select"
+              title={`设置 ${h.name}`}
+              aria-pressed={selected === h.id}
+              onClick={() => {
+                onSelect(h.id);
+                setStyleOpen(true);
+              }}
+            >
               <i style={{ background: h.color }} />
               <span>{h.name}</span>
               <ChevronRight size={13} />
@@ -66,6 +94,7 @@ export default function HorizonPanel({
             <button
               className="icon delete"
               title={`删除 ${h.name}`}
+              disabled={!!busy}
               onClick={() => onDelete(h)}
             >
               <Trash2 size={13} />
@@ -75,7 +104,7 @@ export default function HorizonPanel({
       </div>
 
       <button
-        className="secondary full"
+        className="panel-action full"
         disabled={!meta || !!busy}
         onClick={onAdd}
       >
@@ -84,60 +113,47 @@ export default function HorizonPanel({
       </button>
 
       {active && (
-        <div className="style-editor">
-          <div className="style-title">
-            <span>{active.name}</span>
+        <details
+          className="style-editor"
+          open={styleOpen}
+          onToggle={(e) => setStyleOpen(e.currentTarget.open)}
+        >
+          <summary>
+            <SlidersHorizontal size={14} />
+            <span>层位样式</span>
+            <small className="group-summary-hint" title={active.name}>
+              {active.name}
+            </small>
+            <ChevronRight size={13} />
+          </summary>
+          <div className="style-body">
+            {view.view_mode === "3d" && (
+              <Horizon3DControls horizon={active} onChange={onStyle} />
+            )}
 
-            <input
-              aria-label="层位颜色"
-              type="color"
-              value={active.color}
-              onChange={(e) => onStyle({ color: e.target.value })}
-            />
-          </div>
+            {(view.view_mode === "2d" ||
+              active.display_mode === "slice_intersections") && (
+              <>
+                <StrokeControl
+                  label={view.view_mode === "3d" ? "交线" : "线条"}
+                  visible={active.line.visible}
+                  color={active.color}
+                  width={active.line.width}
+                  disableColorWhenHidden={false}
+                  onVisible={(visible) =>
+                    onStyle({ line: { ...active.line, visible } })
+                  }
+                  onColor={(color) => onStyle({ color })}
+                  onWidth={(width) =>
+                    onStyle({ line: { ...active.line, width } })
+                  }
+                />
 
-          <label className="field">
-            层位名
-            <input
-              key={`${active.id}:${active.name}`}
-              aria-label="层位名"
-              defaultValue={active.name}
-              maxLength={200}
-              disabled={!!busy}
-              onBlur={(e) => {
-                const name = e.target.value.trim();
-                e.target.value = active.name;
-                if (name && name !== active.name) onRename(active, name);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") e.currentTarget.blur();
-                if (e.key === "Escape") {
-                  e.currentTarget.value = active.name;
-                  e.currentTarget.blur();
-                }
-              }}
-            />
-          </label>
-
-          {view.view_mode === "3d" && (
-            <Horizon3DControls horizon={active} onChange={onStyle} />
-          )}
-
-          {(view.view_mode === "2d" ||
-            active.display_mode === "slice_intersections") && (
-            <>
-              <Toggle
-                label="显示线条"
-                checked={active.line.visible}
-                onChange={(visible) =>
-                  onStyle({ line: { ...active.line, visible } })
-                }
-              />
-
-              <div className="field-row">
-                <label>
+                <label className="field">
                   线型
-                  <select
+                  <Select
+                    aria-label="线型"
+                    disabled={!active.line.visible}
                     value={active.line.style}
                     onChange={(e) =>
                       onStyle({
@@ -145,96 +161,140 @@ export default function HorizonPanel({
                       })
                     }
                   >
-                    {["solid", "dashed", "dotted", "dashdot", "none"].map(
-                      (v) => (
-                        <option key={v}>{v}</option>
-                      ),
-                    )}
-                  </select>
-                </label>
-
-                <label>
-                  线宽 · pt
-                  <Num
-                    value={active.line.width}
-                    min={0.2}
-                    max={6}
-                    step={0.1}
-                    onChange={(width) =>
-                      onStyle({ line: { ...active.line, width } })
-                    }
-                  />
-                </label>
-              </div>
-
-              <Toggle
-                label="显示标记点"
-                checked={active.marker.visible}
-                onChange={(visible) =>
-                  onStyle({ marker: { ...active.marker, visible } })
-                }
-              />
-
-              <div className="field-row">
-                <label>
-                  点形
-                  <select
-                    value={active.marker.shape}
-                    onChange={(e) =>
-                      onStyle({
-                        marker: { ...active.marker, shape: e.target.value },
-                      })
-                    }
-                  >
                     {[
-                      "circle",
-                      "square",
-                      "triangle",
-                      "diamond",
-                      "cross",
-                      "plus",
-                      "none",
-                    ].map((v) => (
-                      <option key={v}>{v}</option>
+                      ["solid", "实线"],
+                      ["dashed", "虚线"],
+                      ["dotted", "点线"],
+                      ["dashdot", "点划线"],
+                      ["none", "无"],
+                    ].map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
                     ))}
-                  </select>
+                  </Select>
                 </label>
 
-                <label>
-                  大小 · pt
-                  <Num
-                    value={active.marker.size}
-                    min={1}
-                    max={15}
-                    onChange={(size) =>
-                      onStyle({ marker: { ...active.marker, size } })
-                    }
+                <details className="subsettings">
+                  <SubsectionSummary title="标记与描边" />
+                  <div className="subsettings-body">
+                    <Toggle
+                      label="显示标记点"
+                      checked={active.marker.visible}
+                      onChange={(visible) =>
+                        onStyle({ marker: { ...active.marker, visible } })
+                      }
+                    />
+
+                    <div className="field-row field-row--select-number">
+                      <label>
+                        点形
+                        <Select
+                          aria-label="点形"
+                          disabled={!active.marker.visible}
+                          value={active.marker.shape}
+                          onChange={(e) =>
+                            onStyle({
+                              marker: {
+                                ...active.marker,
+                                shape: e.target.value,
+                              },
+                            })
+                          }
+                        >
+                          {[
+                            ["circle", "圆形"],
+                            ["square", "方形"],
+                            ["triangle", "三角形"],
+                            ["diamond", "菱形"],
+                            ["cross", "叉形"],
+                            ["plus", "十字"],
+                            ["none", "无"],
+                          ].map(([value, label]) => (
+                            <option key={value} value={value}>
+                              {label}
+                            </option>
+                          ))}
+                        </Select>
+                      </label>
+
+                      <label>
+                        大小 · pt
+                        <Num
+                          disabled={!active.marker.visible}
+                          value={active.marker.size}
+                          min={1}
+                          max={15}
+                          onChange={(size) =>
+                            onStyle({ marker: { ...active.marker, size } })
+                          }
+                        />
+                      </label>
+                    </div>
+
+                    <div className="section-number">
+                      <Toggle
+                        label="黑色描边"
+                        checked={active.outline.enabled}
+                        onChange={(enabled) =>
+                          onStyle({ outline: { ...active.outline, enabled } })
+                        }
+                      />
+
+                      <Num
+                        label="描边宽度"
+                        disabled={!active.outline.enabled}
+                        value={active.outline.width}
+                        min={0}
+                        max={4}
+                        step={0.1}
+                        onChange={(width) =>
+                          onStyle({ outline: { ...active.outline, width } })
+                        }
+                      />
+                    </div>
+                  </div>
+                </details>
+              </>
+            )}
+            <details className="subsettings">
+              <SubsectionSummary title="名称与图例颜色" />
+              <div className="subsettings-body">
+                <label className="field">
+                  层位名
+                  <TextInput
+                    key={`${active.id}:${active.name}`}
+                    aria-label="层位名"
+                    defaultValue={active.name}
+                    maxLength={200}
+                    disabled={!!busy}
+                    onBlur={(e) => {
+                      const name = e.target.value.trim();
+                      e.target.value = active.name;
+                      if (name && name !== active.name) onRename(active, name);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") e.currentTarget.blur();
+                      if (e.key === "Escape") {
+                        e.currentTarget.value = active.name;
+                        e.currentTarget.blur();
+                      }
+                    }}
+                  />
+                </label>
+                <label className="field">
+                  图例颜色
+                  <input
+                    aria-label="图例颜色"
+                    type="color"
+                    value={active.color}
+                    onChange={(e) => onStyle({ color: e.target.value })}
                   />
                 </label>
               </div>
-
-              <div className="section-number">
-                <Toggle
-                  label="黑色描边"
-                  checked={active.outline.enabled}
-                  onChange={(enabled) =>
-                    onStyle({ outline: { ...active.outline, enabled } })
-                  }
-                />
-
-                <Num
-                  value={active.outline.width}
-                  min={0}
-                  max={4}
-                  step={0.1}
-                  onChange={(width) =>
-                    onStyle({ outline: { ...active.outline, width } })
-                  }
-                />
-              </div>
-            </>
-          )}
-        </div>
+            </details>
+          </div>
+        </details>
       )}
     </Group>
   );

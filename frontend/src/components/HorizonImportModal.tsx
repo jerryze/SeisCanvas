@@ -1,4 +1,6 @@
 import { X } from "lucide-react";
+import { useRef } from "react";
+import { useModalFocus } from "../hooks/useModalFocus";
 
 /** Pending horizon-column mapping between the file picker preview and import. */
 export type HorizonImportState = {
@@ -30,26 +32,28 @@ export default function HorizonImportModal({
   onColumn,
   onImport,
 }: Props) {
+  const dialog = useRef<HTMLDivElement>(null);
+  useModalFocus(dialog, true, onClose, !busy);
   return (
     <div className="modal-backdrop" onClick={() => !busy && onClose()}>
       <div
         className="modal horizon-import-modal"
+        ref={dialog}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label="选择层位列"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-heading">
-          <h2>选择层位列</h2>
-          <button className="icon" disabled={!!busy} onClick={onClose}>
+          <h2>层位列映射{state.filenames.length > 1 ? "（全部文件）" : ""}</h2>
+          <button className="icon" title="关闭层位导入" disabled={!!busy} onClick={onClose}>
             <X size={20} />
           </button>
         </div>
 
         <div className="import-file-name">
-          已选择 {state.filenames.length} 个文件，以第一个文件 {state.filename}{" "}
-          为例设置。
-          <p>以下列映射将应用于全部文件，请确保各文件列布局一致。</p>
+          {state.filenames.length} 个文件 · {state.filename}
           <details>
             <summary>查看文件列表</summary>
             {state.filenames.map((name, i) => (

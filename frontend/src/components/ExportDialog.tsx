@@ -1,4 +1,6 @@
 import { LoaderCircle, Plus, X } from "lucide-react";
+import { useRef } from "react";
+import { useModalFocus } from "../hooks/useModalFocus";
 import { Num, Toggle } from "./Controls";
 import { ExportDialogSettings } from "../types";
 
@@ -39,11 +41,15 @@ export default function ExportDialog({
   onDataset,
   datasetPlaceholder,
 }: Props) {
+  const dialog = useRef<HTMLDivElement>(null);
+  useModalFocus(dialog, true, onClose, !busy);
   const axes = s.show_axes !== false;
   return (
     <div className="modal-backdrop" onClick={() => !busy && onClose()}>
       <div
         className="modal export-dialog"
+        ref={dialog}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -55,7 +61,7 @@ export default function ExportDialog({
           </div>
           <button
             className="icon"
-            title="关闭导出"
+            title="关闭保存图件"
             disabled={busy}
             onClick={onClose}
           >
@@ -74,6 +80,7 @@ export default function ExportDialog({
                 <button
                   key={format}
                   aria-pressed={s.format === format}
+                  title={scene && format !== "png" ? "内嵌高清位图" : undefined}
                   className={s.format === format ? "active" : ""}
                   onClick={() => patch({ format })}
                 >
@@ -110,10 +117,6 @@ export default function ExportDialog({
                 </label>
               )}
             </div>
-            <p className="export-hint">画布自适应内容，保留标注与安全边距。</p>
-            {scene && s.format !== "png" && (
-              <p className="export-hint">三维场景以高清图片嵌入文件。</p>
-            )}
             <label className="field export-dataset">
               项目 / 数据集名称
               <input
@@ -236,7 +239,7 @@ export default function ExportDialog({
             ) : (
               <Plus size={16} />
             )}{" "}
-            {busy ? "正在渲染…" : "加入导出"}
+            {busy ? "正在保存…" : "保存到队列"}
           </button>
         </div>
       </div>

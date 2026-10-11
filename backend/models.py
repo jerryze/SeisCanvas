@@ -136,6 +136,10 @@ class ExportRequest(BaseModel):
     settings: Settings
 
 
+class QueueArchiveRequest(BaseModel):
+    item_ids: list[str] = Field(min_length=1, max_length=1000)
+
+
 class SliceBorder(BaseModel):
     visible: bool = True
     color: str = Field("#000000", pattern=r"^#[0-9a-fA-F]{6}$")

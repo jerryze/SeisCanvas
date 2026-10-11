@@ -5,7 +5,7 @@ import ts from 'typescript';
 
 const source = await readFile(new URL('../src/workspace.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
-const { initialMapWorkspace, initialExport3D, restoreState, readDraft } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'));
+const { initialMapWorkspace, initialExport3D, reconcileMapWorkspace, restoreState, readDraft } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'));
 
 function defaults() {
   return {
@@ -77,4 +77,31 @@ test('edits during an interrupted save recover only against its acknowledged bod
   const otherTab = structuredClone(inflight);
   otherTab.dataset = 'Other tab';
   assert.equal(readDraft(storage, 'project-1', 5, otherTab), null);
+});
+
+test('deleting a comparison clears its reference without silently choosing another horizon', () => {
+  const map = initialMapWorkspace();
+  map.state = { ...map.state, horizon: 'grid', color_by: 'difference', difference_reference: 'ref', difference_comparison: 'comp', range_mode: 'manual', vmin: -8, vmax: 8, x_range: [1, 5] };
+  const before = structuredClone(map);
+  const result = reconcileMapWorkspace(map, [{ id: 'grid' }, { id: 'ref' }, { id: 'other' }]);
+  assert.equal(result.state.color_by, 'difference');
+  assert.equal(result.state.difference_reference, 'ref');
+  assert.equal(result.state.difference_comparison, null);
+  assert.equal(result.state.range_mode, 'auto');
+  assert.equal(result.state.x_range, null);
+  assert.deepEqual(map, before);
+});
+
+test('removing an output grid keeps an intact comparison and handles an empty workspace', () => {
+  const map = initialMapWorkspace();
+  map.state = { ...map.state, horizon: 'grid', color_by: 'difference', difference_reference: 'ref', difference_comparison: 'comp' };
+  const result = reconcileMapWorkspace(map, [{ id: 'ref' }, { id: 'comp' }]);
+  assert.equal(result.state.horizon, 'ref');
+  assert.equal(result.state.difference_reference, 'ref');
+  assert.equal(result.state.difference_comparison, 'comp');
+  assert.equal(reconcileMapWorkspace(result, [{ id: 'ref' }, { id: 'comp' }]), result);
+  const empty = reconcileMapWorkspace(result, []);
+  assert.equal(empty.state.horizon, '');
+  assert.equal(empty.state.difference_reference, null);
+  assert.equal(empty.state.difference_comparison, null);
 });

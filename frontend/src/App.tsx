@@ -1,11 +1,12 @@
 import ExportDialog from "./components/ExportDialog";
 import ExportQueue from "./components/ExportQueue";
 import HorizonMap from "./components/HorizonMap";
+import { mapSelectionError } from "./components/horizonMapLogic";
 import HorizonImportModal, {
   HorizonImportState,
 } from "./components/HorizonImportModal";
 import DataPanel, { ImportProgress } from "./components/panels/DataPanel";
-import SectionPanel from "./components/panels/SectionPanel";
+import SectionPanel, { SectionNavigation } from "./components/panels/SectionPanel";
 import SeismicPanel from "./components/panels/SeismicPanel";
 import HorizonPanel from "./components/panels/HorizonPanel";
 import SectionPlot from "./components/SeismicViewer2D/SectionPlot";
@@ -47,7 +48,8 @@ import {
 } from "./components/SeismicViewer3D/Controls3D";
 import { useExportQueue } from "./hooks/useExportQueue";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence";
-import { initialMapWorkspace, initialExport3D, restoreState, readDraft, type WorkspaceResponse, type WorkspaceState } from "./workspace";
+import { useModalFocus } from "./hooks/useModalFocus";
+import { initialMapWorkspace, initialExport3D, reconcileMapWorkspace, restoreState, readDraft, type WorkspaceResponse, type WorkspaceState } from "./workspace";
 
 /* -------------------------------------------------------------------------- */
 /* Initial state                                                              */
@@ -134,6 +136,7 @@ export default function App() {
 
   const sceneRef = useRef<Scene3DHandle>(null);
   const plotWrap = useRef<HTMLDivElement>(null);
+  const deleteDialog = useRef<HTMLDivElement>(null);
 
   const requestId = useRef(0);
 
@@ -154,6 +157,7 @@ export default function App() {
   const viewRef = useRef(view);
 
   const [maps, setMaps] = useState<Record<string, any[]>>({});
+  const [mapColors, setMapColors] = useState<Record<string, any[]>>({});
 
   const [busy, setBusy] = useState("正在恢复上次工作…");
   const [loading, setLoading] = useState(false);
@@ -165,6 +169,8 @@ export default function App() {
   const [bytes, setBytes] = useState({ il: 189, xl: 21 });
 
   const [selected, setSelected] = useState("");
+  const [horizonToDelete, setHorizonToDelete] = useState<HS | null>(null);
+  const [mapControlsHost, setMapControlsHost] = useState<HTMLDivElement | null>(null);
 
   const [horizonImport, setHorizonImport] = useState<HorizonImportState | null>(
     null,
@@ -191,6 +197,7 @@ export default function App() {
   const [sidebar, setSidebar] = useState(true);
 
   const [revision, setRevision] = useState(0);
+  useModalFocus(deleteDialog, !!horizonToDelete, () => setHorizonToDelete(null), !busy);
 
   viewRef.current = view;
 
@@ -254,7 +261,7 @@ export default function App() {
   useEffect(() => {
     api("/catalog")
       .then((r) => r.json())
-      .then((c) => setMaps(c.colormaps))
+      .then((c) => { setMaps(c.colormaps); setMapColors(c.map_colormaps || c.colormaps); })
       .catch((e) => setError(e.message));
   }, []);
 
@@ -300,7 +307,7 @@ export default function App() {
     rename: renameQueueItem,
     remove: deleteQueueItem,
     clear: clearQueue,
-    exportAll,
+    exportItems,
   } = useExportQueue({ task, notify: setNotice, onError: setError });
 
   /* ------------------------------------------------------------------------ */
@@ -476,11 +483,19 @@ export default function App() {
   function deleteHorizon(h: HS) {
     task("删除层位…", async () => {
       await api(`/horizons/${h.id}`, { method: "DELETE" });
-
+      const remaining = viewRef.current.horizons.filter(a => a.id !== h.id);
+      const next = remaining[Math.min(viewRef.current.horizons.findIndex(a => a.id === h.id), remaining.length - 1)]?.id || remaining[0]?.id || "";
       setView((v) => ({
         ...v,
         horizons: v.horizons.filter((a) => a.id !== h.id),
+        view_mode: v.view_mode === "map" && !remaining.length ? "2d" : v.view_mode,
       }));
+      setSelected(current => current === h.id ? next : current);
+      setMapWorkspace(current => reconcileMapWorkspace(current, remaining));
+      setHorizonToDelete(null);
+      setExportOpen(false);
+      setRevision(v => v + 1);
+      setNotice(`已移除层位 ${h.name}`);
     });
   }
 
@@ -584,6 +599,7 @@ export default function App() {
       x_range: null,
       time_range: null,
     }));
+    return nearest;
   }
 
   function changeMode(mode: "inline" | "crossline") {
@@ -603,6 +619,22 @@ export default function App() {
       time_range: null,
     }));
   }
+
+  useEffect(() => {
+    const navigate = (event: KeyboardEvent) => {
+      if (view.view_mode !== "2d" || busy || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.defaultPrevented) return;
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      if (document.querySelector('[aria-modal="true"]') ||
+          (event.target instanceof HTMLElement && event.target.closest('input, select, textarea, [contenteditable="true"]'))) return;
+      const index = sections.indexOf(view.section_number);
+      if (index < 0) return;
+      event.preventDefault();
+      const next = sections[index + (event.key === "ArrowRight" ? 1 : -1)];
+      if (next !== undefined) changeSection(next);
+    };
+    window.addEventListener("keydown", navigate);
+    return () => window.removeEventListener("keydown", navigate);
+  }, [sections, view.section_number, view.view_mode, busy]);
 
   /* ------------------------------------------------------------------------ */
   /* Seismic                                                                  */
@@ -659,14 +691,14 @@ export default function App() {
 
   function add2DToQueue() {
     setExportOpen(false);
-    task("正在渲染并加入导出队列…", async () => {
+    task("正在保存二维图件…", async () => {
       await queueItem({ kind: "2d", dataset, state: view, settings });
     });
   }
 
   async function add3DToQueue(settings3D: any) {
     setExportOpen(false);
-    await task("正在渲染三维图片并加入导出队列…", async () => {
+    await task("正在保存三维图件…", async () => {
       const exportStarted = performance.now();
       if (!sceneRef.current) throw new Error("三维场景未就绪");
       const capture = await sceneRef.current.captureFigure(settings3D, setBusy);
@@ -695,7 +727,7 @@ export default function App() {
   }
 
   async function addMapToQueue(payload: { state: unknown; settings: unknown }) {
-    await task("正在绘制层位地图并加入导出队列…", async () => {
+    await task("正在保存层位地图…", async () => {
       await queueItem({
         kind: "map",
         dataset,
@@ -708,7 +740,7 @@ export default function App() {
   async function addProfileToQueue(
     payload: Record<string, unknown> & { settings: unknown },
   ) {
-    await task("正在渲染 A–B 剖面并加入导出队列…", async () => {
+    await task("正在保存 A–B 剖面…", async () => {
       await queueItem({ kind: "profile", dataset, ...payload });
     });
   }
@@ -764,13 +796,13 @@ export default function App() {
             (view.view_mode === "2d"
               ? loading
               : view.view_mode === "map"
-                ? !mapReady
+                ? !mapReady || !!mapSelectionError(mapWorkspace.state, view.horizons)
                 : !sceneReady)
           }
           onClick={() => setExportOpen(true)}
         >
           <Plus size={15} />
-          加入导出
+          保存图件
         </button>
 
         <button
@@ -792,9 +824,9 @@ export default function App() {
         {/* Sidebar                                                          */}
         {/* ---------------------------------------------------------------- */}
 
-        {sidebar && (
-          <aside className="sidebar">
+          <aside className="sidebar" hidden={!sidebar}>
             <DataPanel
+              datasetName={dataset || datasetPlaceholder}
               progress={importProgress}
               busy={busy}
               onOpenSegy={openSegy}
@@ -810,31 +842,7 @@ export default function App() {
             {/* 2D / 3D / Map                                                */}
             {/* ------------------------------------------------------------ */}
 
-            <div className="view-mode-switch segmented" aria-label="视图模式">
-              <button
-                className={view.view_mode === "2d" ? "active" : ""}
-                onClick={() => setView((v) => ({ ...v, view_mode: "2d" }))}
-              >
-                2D
-              </button>
-
-              <button
-                disabled={!meta}
-                className={view.view_mode === "3d" ? "active" : ""}
-                onClick={() => setView((v) => ({ ...v, view_mode: "3d" }))}
-              >
-                3D
-              </button>
-              <button
-                disabled={!view.horizons.length}
-                className={view.view_mode === "map" ? "active" : ""}
-                onClick={() => setView((v) => ({ ...v, view_mode: "map" }))}
-              >
-                层位地图
-              </button>
-            </div>
-
-            {view.view_mode === "map" && <div id="horizon-map-controls" />}
+            <div id="horizon-map-controls" ref={setMapControlsHost} />
             {view.view_mode === "3d" && meta && (
               <>
                 <SliceManager
@@ -845,10 +853,6 @@ export default function App() {
                   onChange={(slices) => setView((v) => ({ ...v, slices }))}
                 />
 
-                <SceneControls
-                  scene={view.scene}
-                  onChange={(scene) => setView((v) => ({ ...v, scene }))}
-                />
               </>
             )}
 
@@ -864,15 +868,6 @@ export default function App() {
               />
             )}
 
-            {meta && view.view_mode !== "map" && (
-              <SeismicPanel
-                view={view}
-                maps={maps}
-                preview={preview}
-                onSeismic={seismic}
-              />
-            )}
-
             {meta && (
               <HorizonPanel
                 view={view}
@@ -883,12 +878,27 @@ export default function App() {
                 onStyle={style}
                 onPatch={setView}
                 onRename={renameHorizon}
-                onDelete={deleteHorizon}
+                onDelete={h => { setError(""); setHorizonToDelete(h); }}
                 onAdd={uploadHorizons}
               />
             )}
+
+            {meta && view.view_mode !== "map" && (
+              <SeismicPanel
+                key={view.view_mode}
+                view={view}
+                maps={maps}
+                onSeismic={seismic}
+              />
+            )}
+
+            {meta && view.view_mode === "3d" && (
+              <SceneControls
+                scene={view.scene}
+                onChange={(scene) => setView((v) => ({ ...v, scene }))}
+              />
+            )}
           </aside>
-        )}
 
         {/* ---------------------------------------------------------------- */}
         {/* Main                                                             */}
@@ -905,6 +915,7 @@ export default function App() {
             <button
               className="icon"
               title="收起或展开控制面板"
+              aria-expanded={sidebar}
               onClick={() => setSidebar((s) => !s)}
             >
               {sidebar ? (
@@ -913,6 +924,20 @@ export default function App() {
                 <PanelLeftOpen size={17} />
               )}
             </button>
+            <div className="view-mode-switch segmented" role="group" aria-label="视图模式">
+              {(["2d", "3d", "map"] as const).map(mode => (
+                <button
+                  key={mode}
+                  disabled={!!busy || (mode !== "2d" && !meta) || (mode === "map" && !view.horizons.length)}
+                  className={view.view_mode === mode ? "active" : ""}
+                  aria-pressed={view.view_mode === mode}
+                  onClick={() => { setExportOpen(false); setView(v => ({ ...v, view_mode: mode })); }}
+                >
+                  {mode === "map" ? "层位地图" : mode.toUpperCase()}
+                </button>
+              ))}
+            </div>
+            {meta && <span className="workspace-name" title={meta.filename}>{dataset || datasetPlaceholder}</span>}
           </div>
 
           {error && (
@@ -927,10 +952,12 @@ export default function App() {
 
           {view.view_mode === "map" ? (
             <HorizonMap
+              controlsHost={mapControlsHost}
               workspace={mapWorkspace}
               onWorkspace={setMapWorkspace}
               horizons={view.horizons}
               maps={maps}
+              mapColors={mapColors}
               seismic={view.seismic}
               aspect={view.aspect_ratio_2d}
               onSeismic={seismic}
@@ -974,7 +1001,10 @@ export default function App() {
 
               <div className="viewer-card">
                 <div className="viewer-toolbar">
-                  <div />
+                  <b>{meta ? `${view.view_type === "inline" ? "Inline" : "Crossline"} ${view.section_number}` : "二维剖面"}</b>
+
+                  {meta && <SectionNavigation sections={sections} value={view.section_number}
+                    disabled={!!busy} onChange={changeSection} />}
 
                   <div className="tools">
                     <button
@@ -1030,8 +1060,6 @@ export default function App() {
                       </div>
 
                       <h2>暂无地震数据</h2>
-
-                      <p>导入 SEG-Y 文件，或加载 F3 示例数据。</p>
 
                       <div className="empty-actions">
                         <button
@@ -1092,17 +1120,8 @@ export default function App() {
               </div>
 
               <div className="canvas-footer">
-                <span>
-                  <MousePointer2 size={12} />
-                  框选缩放 · 滚轮缩放 · 双击复位
-                </span>
-
                 {meta ? (
                   <span>
-                    {view.view_type === "inline"
-                      ? `Inline ${view.section_number}`
-                      : `Crossline ${view.section_number}`}
-                    <span className="dot-separator">·</span>
                     {view.view_type === "inline"
                       ? `Crossline ${meta.crosslines[0]}–${meta.crosslines.at(-1)}`
                       : `Inline ${meta.inlines[0]}–${meta.inlines.at(-1)}`}
@@ -1153,7 +1172,7 @@ export default function App() {
 
       {exportOpen && view.view_mode === "2d" && (
         <ExportDialog
-          title="二维剖面 · 加入导出"
+          title="二维剖面 · 保存图件"
           settings={settings}
           onChange={(p) => setSettings((s) => ({ ...s, ...p }))}
           onClose={() => setExportOpen(false)}
@@ -1180,7 +1199,7 @@ export default function App() {
         onRename={renameQueueItem}
         onDelete={deleteQueueItem}
         onClear={clearQueue}
-        onExportAll={exportAll}
+        onExport={exportItems}
       />
 
       {horizonImport && (
@@ -1195,6 +1214,23 @@ export default function App() {
           }
           onImport={importHorizon}
         />
+      )}
+
+      {horizonToDelete && (
+        <div className="modal-backdrop" onClick={() => !busy && setHorizonToDelete(null)}>
+          <div ref={deleteDialog} tabIndex={-1} className="modal delete-horizon-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-horizon-title" onClick={e => e.stopPropagation()}>
+            <h2 id="delete-horizon-title">移除层位 {horizonToDelete.name}？</h2>
+            <p>将从当前工作区移除该层位及其样式，原始数据文件会保留。</p>
+            {mapWorkspace.state.color_by === "difference" && (mapWorkspace.state.difference_reference === horizonToDelete.id || mapWorkspace.state.difference_comparison === horizonToDelete.id) && (
+              <p className="delete-horizon-impact">此层位用于差值计算，移除后需要重新选择参考或对比层位。</p>
+            )}
+            {error && <p className="error" role="alert">{error}</p>}
+            <div className="import-actions">
+              <button className="secondary" disabled={!!busy} onClick={() => setHorizonToDelete(null)}>取消</button>
+              <button className="danger-button" disabled={!!busy} onClick={() => deleteHorizon(horizonToDelete)}>{busy ? "正在移除…" : "确认移除"}</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -376,10 +376,10 @@ class ExportSession:
 
     # ----------------------------------------------------------------- manifest
 
-    def manifest(self) -> dict:
+    def manifest(self, items: list[dict] | None = None) -> dict:
         datasets: list[str] = []
         figures = []
-        for number, item in enumerate(self.items, 1):
+        for number, item in enumerate(self.items if items is None else items, 1):
             if item["dataset"] not in datasets:
                 datasets.append(item["dataset"])
             folder = naming.zip_folder(item["view_type"])
@@ -415,10 +415,19 @@ class ExportSession:
             "figures": figures,
         }
 
-    def archive(self) -> tuple[Path, str, dict]:
+    def archive(self, item_ids: list[str] | None = None) -> tuple[Path, str, dict]:
         if not self.items:
             raise ValueError("Export queue is empty.")
-        manifest = self.manifest()
+        if item_ids is None:
+            items = self.items
+        else:
+            if not item_ids or len(item_ids) != len(set(item_ids)):
+                raise ValueError("Select at least one figure, without duplicate items.")
+            for item_id in item_ids:
+                self._find(item_id)
+            selected = set(item_ids)
+            items = [item for item in self.items if item["id"] in selected]
+        manifest = self.manifest(items)
         dataset = manifest["dataset"]
         prefix = f"SeisCanvas_{dataset}_Export" if dataset else "SeisCanvas_BatchExport"
         filename = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M')}.zip"
@@ -427,8 +436,7 @@ class ExportSession:
             old.unlink(missing_ok=True)
         path = self.folder / f"_archive_{uuid4().hex[:8]}.zip"
         with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-            for figure in manifest["figures"]:
-                item = self.items[figure["id"] - 1]
+            for item, figure in zip(items, manifest["figures"]):
                 archive.write(self._stored(item), figure["file"])
             archive.writestr(
                 "export_manifest.json",

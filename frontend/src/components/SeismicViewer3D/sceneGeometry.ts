@@ -39,7 +39,7 @@ export type SceneData = {
   vmax: number;
 };
 // Shared by horizons only; seismic colors and amplitude clipping are independent.
-export const PETREL_COLORMAP = [
+export const PETREL_COLORMAP: [number, string][] = [
   [0, "#ff0000"], [1 / 7, "#ff8000"], [2 / 7, "#ffff00"],
   [3 / 7, "#00c040"], [4 / 7, "#00ffff"], [5 / 7, "#0000ff"],
   [6 / 7, "#8000c0"], [1, "#ff00ff"],

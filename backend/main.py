@@ -10,7 +10,7 @@ from threading import RLock
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Query
 from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
-from matplotlib.colors import to_hex
+from matplotlib.colors import LinearSegmentedColormap, to_hex
 from matplotlib import font_manager
 from backend.export3d import package_scene
 from backend.segy import Survey
@@ -28,6 +28,7 @@ from backend.models import (
     LocalSegyRequest,
     PickSegyRequest,
     QueueAddRequest,
+    QueueArchiveRequest,
     RenameRequest,
     SampleRequest,
     SceneExportRequest,
@@ -40,7 +41,7 @@ from backend.scene import slice_data, horizon_mesh, horizon_intersection, scene_
 from backend.section_service import interactive_section
 from backend.preview import preview_ids, read_samples
 
-from backend.horizon_map import map_data, map_profile, render_map
+from backend.horizon_map import PETREL, map_data, map_profile, render_map
 from backend import export_queue
 from backend.workspace import WorkspaceStore, source, check_source
 from backend.export_service import (
@@ -281,6 +282,12 @@ def horizon_map_export(req: HorizonMapExport):
 
 @app.get("/api/catalog")
 def catalog():
+    # Preview palette data only; keep the available seismic palettes unchanged.
+    map_palettes = {
+        name: LinearSegmentedColormap.from_list("petrel", PETREL, N=256)
+        if name == "petrel" else get_cmap(name)
+        for name in ("petrel", "turbo", "viridis", "cividis", "jet", "RdBu", "coolwarm", "seismic", "magma")
+    }
     return {
         "segy": [
             p.name
@@ -291,6 +298,10 @@ def catalog():
         "colormaps": {
             name: [[i / 255, to_hex(get_cmap(name)(i / 255))] for i in range(256)]
             for name in CMAPS
+        },
+        "map_colormaps": {
+            name: [[i / 255, to_hex(cmap(i / 255))] for i in range(256)]
+            for name, cmap in map_palettes.items()
         },
     }
 
@@ -696,10 +707,12 @@ def queue_clear():
 
 
 @app.post("/api/export/archive")
-def export_archive():
+def export_archive(request: QueueArchiveRequest | None = None):
     try:
         with lock:
-            path, filename, manifest = export_queue.session().archive()
+            path, filename, manifest = export_queue.session().archive(request.item_ids if request else None)
+    except KeyError:
+        raise HTTPException(404, "An export item no longer exists. Refresh the queue and select again.")
     except ValueError as e:
         raise error(e)
     return FileResponse(

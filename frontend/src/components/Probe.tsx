@@ -72,13 +72,7 @@ export function useOriginalProbe(delay = 60) {
 }
 
 export function ProbeReadout({ reading }: { reading: ProbeReading | null }) {
-  if (!reading) {
-    return (
-      <div className="probe-readout idle">
-        <span>悬停读取原始振幅</span>
-      </div>
-    );
-  }
+  if (!reading) return null;
   return (
     <div className="probe-readout" role="status" aria-live="polite">
       <span>
@@ -90,9 +84,8 @@ export function ProbeReadout({ reading }: { reading: ProbeReading | null }) {
       <span>
         TWT <b>{reading.time.toFixed(1)}</b> ms
       </span>
-      <span className="probe-amplitude">
+      <span className="probe-amplitude" title="原始 SEG-Y 振幅">
         振幅 <b>{reading.amplitude === null ? "—" : reading.amplitude.toPrecision(6)}</b>
-        <em>原始 SEG-Y</em>
       </span>
     </div>
   );

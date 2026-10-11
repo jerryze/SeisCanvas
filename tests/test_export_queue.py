@@ -505,6 +505,56 @@ def test_export_all_builds_a_categorised_zip_with_a_manifest(client):
             assert archive.read(figure["file"]) == preview
 
 
+def test_archive_selected_figures_keeps_queue_order_and_saved_bytes(client):
+    responses = [
+        client.post("/api/export/queue", json=queue_body(
+            state={"section_number": section}, dataset=dataset,
+            settings={"width": 40, "height": 30, "dpi": 300},
+        ))
+        for section, dataset in [(10, "F3"), (12, "XH"), (10, "F3")]
+    ]
+    assert all(response.status_code == 200 for response in responses), [r.text for r in responses]
+    items = [response.json() for response in responses]
+    original = client.get("/api/export/queue").json()
+    response = client.post("/api/export/archive", json={
+        "item_ids": [items[2]["id"], items[1]["id"]],
+    })
+    assert response.status_code == 200, response.text
+    assert response.headers["x-export-figures"] == "2"
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        manifest = json.loads(archive.read("export_manifest.json"))
+        assert manifest["figure_count"] == 2
+        assert manifest["dataset"] is None
+        assert manifest["datasets"] == ["XH", "F3"]
+        assert [figure["name"] for figure in manifest["figures"]] == [item["filename"] for item in items[1:]]
+        assert len(archive.namelist()) == 3
+        for figure, item in zip(manifest["figures"], items[1:]):
+            saved = client.get(f"/api/export/queue/{item['id']}/file").content
+            assert archive.read(figure["file"]) == saved
+
+    # Choosing one dataset uses that dataset's name, even in a mixed queue.
+    response = client.post("/api/export/archive", json={"item_ids": [items[2]["id"]]})
+    assert response.status_code == 200
+    assert response.headers["x-export-filename"].startswith("SeisCanvas_F3_Export_")
+    assert client.get("/api/export/queue").json() == original
+    assert json.loads((export_queue.session().folder / "manifest.json").read_text())["figure_count"] == 3
+
+
+@pytest.mark.parametrize("selection,status", [
+    ([], 422),
+    (["exp_missing"], 404),
+    (["exp_0001", "exp_missing"], 404),
+    (["exp_0001", "exp_0001"], 400),
+])
+def test_archive_rejects_invalid_selection_without_exporting_other_figures(client, selection, status):
+    response = client.post("/api/export/queue", json=queue_body(settings={"width": 40, "height": 30, "dpi": 300}))
+    assert response.status_code == 200, response.text
+    original = client.get("/api/export/queue").json()
+    response = client.post("/api/export/archive", json={"item_ids": selection})
+    assert response.status_code == status
+    assert client.get("/api/export/queue").json() == original
+
+
 def test_archive_uses_a_batch_name_for_multiple_datasets(client):
     client.post("/api/export/queue", json=queue_body(dataset="F3"))
     client.post(

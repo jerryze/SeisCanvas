@@ -271,7 +271,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
     () => ({
       captureFigure: async (settings, onStatus) => {
         if (!dataRef.current || loading || rendering || exporting.current)
-          throw new Error("请等待三维场景加载或导出完成。");
+          throw new Error("请等待三维场景加载或图件保存完成。");
         exporting.current = true;
         try {
           await renderQueue.current;
@@ -297,11 +297,21 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
   return (
     <>
       <div className="viewer-card scene-card">
-        <div className="viewer-toolbar">
+        <div className="viewer-toolbar scene-toolbar">
           <div className="viewer-label">
             <Box size={15} />
             <span>三维切片组合</span>
             <span className="tag">{count} 切片</span>
+          </div>
+          <div className="scene-presets" role="group" aria-label="三维视角">
+            {Object.keys(presets).map((name) => (
+              <button
+                key={name}
+                onClick={() => onCamera(structuredClone(presets[name]))}
+              >
+                {name}
+              </button>
+            ))}
           </div>
           <div className="tools">
             <button
@@ -327,17 +337,6 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
             </button>
           </div>
         </div>
-        <div className="scene-presets">
-          {Object.keys(presets).map((name) => (
-            <button
-              key={name}
-              onClick={() => onCamera(structuredClone(presets[name]))}
-            >
-              {name}
-            </button>
-          ))}
-          <span>X · Crossline / Y · Inline / Z · TWT ↓</span>
-        </div>
         <div className="plot-wrap scene-plot-wrap">
           <div ref={plot} className="plot" />
           {(loading || rendering || exportStatus || busy) && (
@@ -348,7 +347,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
           )}
           {!loading && !data && (
             <div className="scene-no-data">
-              场景加载失败，请检查提示并调整设置。
+              场景加载失败
             </div>
           )}
           {!loading &&
@@ -358,36 +357,34 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
               (h) => h.visible && h.display_mode === "full_surface",
             ) && (
               <div className="scene-hint">
-                从左侧添加切片，或启用完整层位曲面
+                暂无三维内容
               </div>
             )}
         </div>
-        <div className="viewer-bottom">
-          <ProbeReadout reading={probe} />
-
-          <div className="legend">
+        <div className="viewer-bottom scene-bottom">
+          <div className="scene-readouts">
+            <ProbeReadout reading={probe} />
+            {data && (
+              <div className="amplitude-key">
+                <b>共享振幅</b>
+                <span>
+                  {formatAmplitude(data.vmin)} … {formatAmplitude(data.vmax)}
+                </span>
+              </div>
+            )}
+          </div>
+          <div className="legend scene-legend" aria-label="三维层位图例">
             {view.horizons
               .filter((h) => h.visible)
               .map((h) => (
                 <span key={h.id}>
                   <i style={{ background: h.color }} />
-                  {h.name}{h.display_mode === "full_surface" && h.twt_range ? ` · ${h.twt_range[0].toFixed(1)}–${h.twt_range[1].toFixed(1)} ms` : ""} ·{" "}
+                  {h.name}{h.display_mode === "full_surface" && h.twt_range ? ` · ${Number(h.twt_range[0].toFixed(1))}–${Number(h.twt_range[1].toFixed(1))} ms` : ""} ·{" "}
                   {h.display_mode === "full_surface" ? "曲面" : "交线"}
                 </span>
               ))}
           </div>
-          {data && (
-            <div className="amplitude-key">
-              <span>
-                {formatAmplitude(data.vmin)} … {formatAmplitude(data.vmax)}
-              </span>
-              <b>共享振幅范围</b>
-            </div>
-          )}
         </div>
-      </div>
-      <div className="canvas-footer">
-        <span>拖动旋转 · 滚轮缩放 · 平移工具移动场景</span>
       </div>
     </>
   );

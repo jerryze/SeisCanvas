@@ -35,7 +35,7 @@ export function useExportQueue(opts: {
       const r = await api("/export/queue", json(body));
       const item: ExportItem = await r.json();
       await refresh();
-      notify(`已加入导出队列\n${item.filename}`);
+      notify(`已保存图件\n${item.filename}`);
       return item;
     },
     [refresh, notify],
@@ -43,7 +43,7 @@ export function useExportQueue(opts: {
 
   const rename = useCallback(
     (item: ExportItem, filename: string) =>
-      task("重命名导出文件…", async () => {
+      task("正在重命名图件…", async () => {
         await api(`/export/queue/${item.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -73,10 +73,10 @@ export function useExportQueue(opts: {
     [task, refresh, notify],
   );
 
-  const exportAll = useCallback(
-    () =>
+  const exportItems = useCallback(
+    (itemIds?: string[]) =>
       task("正在打包 ZIP…", async () => {
-        const r = await api("/export/archive", { method: "POST" });
+        const r = await api("/export/archive", itemIds ? json({ item_ids: itemIds }) : { method: "POST" });
         const header = r.headers.get("X-Export-Filename");
         let name = "SeisCanvas_Export.zip";
         if (header) {
@@ -97,5 +97,5 @@ export function useExportQueue(opts: {
     [task, notify],
   );
 
-  return { items, sessionId, refresh, addItem, rename, remove, clear, exportAll };
+  return { items, sessionId, refresh, addItem, rename, remove, clear, exportItems };
 }

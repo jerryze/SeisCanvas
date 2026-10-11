@@ -648,3 +648,22 @@ def test_render_profile_removable_furniture(cube, tmp_path, monkeypatch):
     ]
     assert overlay == []
     assert axes.get_legend() is None
+
+
+def test_colormap_menu_previews_match_map_renderer_without_expanding_seismic_choices(tmp_path):
+    from typing import get_args
+    from fastapi.testclient import TestClient
+    import backend.main as server
+    from backend.style import CMAPS
+
+    catalog = TestClient(server.app).get('/api/catalog').json()
+    assert list(catalog['colormaps']) == CMAPS
+    palettes = catalog['map_colormaps']
+    assert set(palettes) == set(get_args(HorizonMapState.model_fields['colormap'].annotation))
+    horizon = make_horizon(tmp_path)
+    for name, colors in palettes.items():
+        rendered = map_data(None, horizon, HorizonMapState(horizon='h', colormap=name))
+        assert colors == rendered['colorscale']
+        reversed_map = map_data(None, horizon, HorizonMapState(horizon='h', colormap=name, reverse_colormap=True))
+        assert colors[0][1] == reversed_map['colorscale'][-1][1]
+        assert colors[-1][1] == reversed_map['colorscale'][0][1]
