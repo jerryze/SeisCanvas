@@ -1,6 +1,7 @@
 import ExportDialog from "./ExportDialog";
 import { Layers, MousePointer2, Move, Palette, RotateCcw, ScanLine } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import type { HorizonMapState, MapWorkspace } from "../workspace";
 import { createPortal } from "react-dom";
 import Plotly from "plotly.js-dist-min";
 import type { HS } from "../types";
@@ -9,29 +10,7 @@ import { api } from "../api/client";
 import { formatAmplitude } from "../format";
 import { Group, Num, Toggle } from "./Controls";
 
-type State = {
-  horizon: string;
-  color_by: "twt" | "amplitude" | "difference";
-  display: string;
-  colormap: string;
-  reverse_colormap: boolean;
-  range_mode: string;
-  vmin: number | null;
-  vmax: number | null;
-  clip_percentile: number;
-  difference_reference: string | null;
-  difference_comparison: string | null;
-  difference_type: "signed" | "absolute";
-  show_statistics: boolean;
-  contours: boolean;
-  interval_auto: boolean;
-  interval: number;
-  line_width: number;
-  labels: boolean;
-  colorbar: boolean;
-  x_range: [number, number] | null;
-  y_range: [number, number] | null;
-};
+type State = HorizonMapState;
 type ProfileCurve = { id: string; name: string; values: (number | null)[] };
 type ProfileData = {
   distance: number[];
@@ -69,6 +48,8 @@ type Data = {
   statistics?: DifferenceStats;
 };
 export default function HorizonMap({
+  workspace,
+  onWorkspace,
   horizons,
   maps,
   seismic,
@@ -84,6 +65,8 @@ export default function HorizonMap({
   onDataset,
   onAddToExport,
 }: {
+  workspace: MapWorkspace;
+  onWorkspace: Dispatch<SetStateAction<MapWorkspace>>;
   horizons: HS[];
   maps: Record<string, any[]>;
   /** Shared with the 2D window: the profile reuses its display settings. */
@@ -109,78 +92,32 @@ export default function HorizonMap({
   onDataset: (value: string) => void;
   onAddToExport: (payload: { state: State; settings: Record<string, unknown> }) => Promise<void>;
 }) {
-  const [state, setState] = useState<State>({
-    horizon: horizons[0]?.id || "",
-    color_by: "twt",
-    difference_reference: null,
-    difference_comparison: null,
-    difference_type: "signed",
-    show_statistics: true,
-    display: "filled_contour",
-    colormap: "petrel",
-    reverse_colormap: false,
-    range_mode: "auto",
-    vmin: null,
-    vmax: null,
-    clip_percentile: 99,
-    contours: true,
-    interval_auto: true,
-    interval: 10,
-    line_width: 0.5,
-    labels: false,
-    colorbar: true,
-    x_range: null,
-    y_range: null,
-  });
+  const { state, settings, drag, profileOn, profileA, profileB, profileSettings } = workspace;
+  function update<K extends keyof MapWorkspace>(key: K, value: SetStateAction<MapWorkspace[K]>) {
+    onWorkspace(previous => ({ ...previous, [key]: typeof value === "function"
+      ? (value as (value: MapWorkspace[K]) => MapWorkspace[K])(previous[key]) : value }));
+  }
+  const setState = (value: SetStateAction<State>) => update("state", value);
+  const setSettings = (value: SetStateAction<ExportDialogSettings>) => update("settings", value);
+  const setDrag = (value: "zoom" | "pan") => update("drag", value);
+  const setProfileOn = (value: boolean) => update("profileOn", value);
+  const setProfileA = (value: [number, number] | null) => update("profileA", value);
+  const setProfileB = (value: [number, number] | null) => update("profileB", value);
+  const setProfileSettings = (value: SetStateAction<ExportDialogSettings>) => update("profileSettings", value);
   const [data, setData] = useState<Data | null>(null),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(false),
-    [saving, setSaving] = useState(false),
-    [drag, setDrag] = useState<"zoom" | "pan">("zoom");
-  const [settings, setSettings] = useState<ExportDialogSettings>({
-    format: "png",
-    canvas: "fit",
-    long_edge: 3000,
-    background: "white",
-    width: 180,
-    height: 140,
-    dpi: 300,
-    font: "Times New Roman",
-    font_size: 10,
-    show_axes: true,
-    show_labels: true,
-    show_title: true,
-  });
+    [saving, setSaving] = useState(false);
   const plot = useRef<HTMLDivElement>(null),
     queue = useRef(Promise.resolve()),
     version = useRef(0),
     latest = useRef(state);
   latest.current = state;
-  const [profileOn, setProfileOn] = useState(false);
-  const [profileA, setProfileA] = useState<[number, number] | null>(null);
-  const [profileB, setProfileB] = useState<[number, number] | null>(null);
   const [picking, setPicking] = useState<null | "a" | "b">(null);
   const [profileData, setProfileData] = useState<ProfileData | null>(null);
   const [profileError, setProfileError] = useState("");
   const [profileExportOpen, setProfileExportOpen] = useState(false);
   const [profileExportBusy, setProfileExportBusy] = useState(false);
-  const [profileSettings, setProfileSettings] = useState<ExportDialogSettings>({
-    format: "png",
-    canvas: "fit",
-    long_edge: 3000,
-    background: "white",
-    width: 180,
-    height: 80,
-    dpi: 300,
-    font: "Times New Roman",
-    font_size: 10,
-    show_axes: true,
-    show_labels: true,
-    show_title: true,
-    show_curves: true,
-    show_legend: true,
-    show_ab: true,
-  });
   const profileRef = useRef<HTMLDivElement>(null);
   const pickingRef = useRef(picking);
   pickingRef.current = picking;

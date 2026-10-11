@@ -241,6 +241,32 @@ class Scene3DSettings(BaseModel):
         return self
 
 
+class WorkspaceView(ViewState):
+    view_mode: Literal["2d", "3d", "map"] = "2d"
+    slices: Slices = Field(default_factory=Slices)
+    scene: SceneState = Field(default_factory=SceneState)
+    horizons: list[Horizon3DStyle] = Field(default_factory=list)
+
+
+class WorkspaceSave(BaseModel):
+    project_id: str
+    revision: int = Field(ge=0)
+    state: dict
+
+    @field_validator("state")
+    @classmethod
+    def valid_state(cls, state):
+        if state.get("version") != 1:
+            raise ValueError("Unsupported workspace state version.")
+        WorkspaceView.model_validate(state.get("view", {}))
+        return state
+
+
+class WorkspaceRelink(BaseModel):
+    project_id: str
+    horizon_id: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Endpoint request models, collected here so every API schema lives in one
 # module.  The endpoint behaviour stays in main.py and the export services.

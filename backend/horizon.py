@@ -72,6 +72,7 @@ def horizon_preview(path, sample_size=8):
 
 class Horizon:
     def __init__(self, path, name=None, columns=(0, 1, 2)):
+        self.path = Path(path).resolve()
         self.name = name or Path(path).stem
         try:
             columns = tuple(int(column) for column in columns)

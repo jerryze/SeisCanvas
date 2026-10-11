@@ -1,4 +1,4 @@
-"""Temporary export session: rendered figures, queue metadata and the ZIP builder.
+"""Persistent export session: rendered figures, queue metadata and the ZIP builder.
 
 Every ``Add to Export`` renders the final figure immediately and stores it in the
 session folder.  ``Export All`` therefore only reorganises files and compresses
@@ -13,9 +13,7 @@ import io
 import re
 import xml.etree.ElementTree as ET
 from PIL import Image
-import os
 import shutil
-import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -23,13 +21,11 @@ from threading import RLock
 from uuid import uuid4
 
 from backend import naming
+from backend.storage import state_dir, read_json, atomic_json
 
 
 def _default_root() -> Path:
-    """``/tmp/seiscanvas`` where available, otherwise the system temp folder."""
-    if os.name == "posix" and Path("/tmp").is_dir():
-        return Path("/tmp") / "seiscanvas"
-    return Path(tempfile.gettempdir()) / "seiscanvas"
+    return state_dir() / "exports"
 
 
 EXPORT_ROOT = _default_root()
@@ -66,8 +62,15 @@ def session() -> "ExportSession":
     with _lock:
         if _session is None:
             EXPORT_ROOT.mkdir(parents=True, exist_ok=True)
-            _prune()
-            _session = ExportSession()
+            saved = sorted(
+                (p for p in EXPORT_ROOT.glob("session_*") if (p / "queue.json").exists() or (p / "queue.json.bak").exists()),
+                key=lambda p: p.stat().st_mtime, reverse=True,
+            )
+            if saved:
+                _session = ExportSession.load(saved[0])
+            else:
+                _prune()
+                _session = ExportSession()
         return _session
 
 
@@ -81,9 +84,9 @@ def reset():
 
 
 def shutdown():
+    global _session
     with _lock:
         _session = None
-    shutil.rmtree(EXPORT_ROOT, ignore_errors=True)
 
 
 atexit.register(shutdown)
@@ -103,6 +106,33 @@ class ExportSession:
         self._counter = 0
         self._write_manifest()
 
+    @classmethod
+    def load(cls, folder):
+        def validate(value):
+            if value["version"] != 1 or value["id"] != folder.name:
+                raise ValueError("Unsupported export queue version.")
+            if not isinstance(value["items"], list):
+                raise ValueError("Invalid export queue.")
+            value["created_at"], value["dataset"]
+            int(value["counter"])
+            for item in value["items"]:
+                if Path(item["stored"]).name != item["stored"]:
+                    raise ValueError("Invalid figure path.")
+                for key in ("id", "filename", "serial", "size_bytes", "summary", "render", "view_state", "format", "view_type", "folder", "index", "width_mm", "height_mm", "dpi", "pixel_size", "scale", "created_at", "detail"):
+                    item[key]
+            return value
+        saved = read_json(folder / "queue.json", validate)
+        result = cls.__new__(cls)
+        result.id, result.folder = saved["id"], folder
+        result.created_at, result.dataset = saved["created_at"], saved["dataset"]
+        result.items = saved["items"]
+        for item in result.items:
+            item["temporary_path"] = str(folder / FIGURES / item["stored"])
+        result._counter = max(saved["counter"], max((h["serial"] for h in result.items), default=0))
+        result._names = {item["filename"].lower() for item in result.items}
+        result._bytes = sum(item["size_bytes"] for item in result.items)
+        return result
+
     # ------------------------------------------------------------------ helpers
 
     def _unique(self, filename: str, ignore: str | None = None) -> str:
@@ -121,14 +151,19 @@ class ExportSession:
         return self.folder / FIGURES / item["stored"]
 
     def _write_manifest(self) -> None:
-        """Keep ``manifest.json`` in the session folder in step with the queue."""
+        """Save the complete queue as well as the portable export manifest."""
+        saved = {
+            "version": 1, "id": self.id, "created_at": self.created_at,
+            "dataset": self.dataset, "counter": self._counter, "items": self.items,
+        }
+        atomic_json(self.folder / "queue.json", saved)
         try:
-            (self.folder / "manifest.json").write_text(
-                json.dumps(self.manifest(), ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except OSError:  # pragma: no cover - the ZIP manifest is authoritative
-            pass
+            # Mirror the committed queue: deleted files must not reappear from
+            # an old backup. The primary document is the transaction commit.
+            atomic_json(self.folder / "queue.json.bak", saved, backup=False)
+            atomic_json(self.folder / "manifest.json", self.manifest())
+        except OSError:
+            pass  # ZIP builds its manifest from the authoritative queue.
 
     def _detail(self, item: dict) -> str:
         fmt = item["format"].upper()
@@ -236,8 +271,18 @@ class ExportSession:
         }
         item["detail"] = self._detail(item)
         self.items.append(item)
+        previous_dataset = self.dataset
         self.dataset = dataset
-        self._write_manifest()
+        try:
+            self._write_manifest()
+        except OSError:
+            self.items.remove(item)
+            self._names.discard(filename.lower())
+            self._bytes -= len(data)
+            self._counter -= 1
+            self.dataset = previous_dataset
+            path.unlink(missing_ok=True)
+            raise
         return self.public(item)
 
     # -------------------------------------------------------------- operations
@@ -263,7 +308,8 @@ class ExportSession:
         candidate = self._unique(candidate, ignore=item["filename"])
         old = self._stored(item)
         new = self.folder / FIGURES / f"{item['serial']:03d}_{candidate}"
-        old.replace(new)
+        shutil.copyfile(old, new)
+        previous = dict(item)
         self._names.discard(item["filename"].lower())
         self._names.add(candidate.lower())
         item["filename"] = candidate
@@ -271,12 +317,21 @@ class ExportSession:
         item["temporary_path"] = str(new)
         item["format"] = ext
         item["detail"] = self._detail(item)
-        self._write_manifest()
+        try:
+            self._write_manifest()
+        except OSError:
+            self._names.discard(candidate.lower())
+            self._names.add(previous["filename"].lower())
+            item.clear()
+            item.update(previous)
+            new.unlink(missing_ok=True)
+            raise
+        old.unlink(missing_ok=True)
         return self.public(item)
 
     def delete(self, item_id: str) -> None:
         item = self._find(item_id)
-        self._stored(item).unlink(missing_ok=True)
+        previous_items = self.items[:]
         self._names.discard(item["filename"].lower())
         self._bytes -= item["size_bytes"]
         self.items.remove(item)
@@ -284,17 +339,31 @@ class ExportSession:
         # and only refresh the visible position of the remaining figures.
         for position, remaining in enumerate(self.items, 1):
             remaining["index"] = position
-        self._write_manifest()
+        try:
+            self._write_manifest()
+        except OSError:
+            self.items = previous_items
+            self._names.add(item["filename"].lower())
+            self._bytes += item["size_bytes"]
+            for position, remaining in enumerate(self.items, 1):
+                remaining["index"] = position
+            raise
+        self._stored(item).unlink(missing_ok=True)
 
     def clear(self) -> None:
-        shutil.rmtree(self.folder / FIGURES, ignore_errors=True)
-        (self.folder / FIGURES).mkdir(parents=True, exist_ok=True)
-        self.items.clear()
-        self._names.clear()
+        previous = (self.items, self._names, self._bytes, self._counter, self.dataset)
+        self.items = []
+        self._names = set()
         self._bytes = 0
         self._counter = 0
         self.dataset = None
-        self._write_manifest()
+        try:
+            self._write_manifest()
+        except OSError:
+            self.items, self._names, self._bytes, self._counter, self.dataset = previous
+            raise
+        shutil.rmtree(self.folder / FIGURES, ignore_errors=True)
+        (self.folder / FIGURES).mkdir(parents=True, exist_ok=True)
 
     def snapshot(self) -> dict:
         return {

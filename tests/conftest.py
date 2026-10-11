@@ -38,8 +38,16 @@ def horizon(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def clean_export_session():
-    """Every test starts and ends with an empty, removed export session."""
+def clean_export_session(tmp_path, monkeypatch):
+    """Keep tests isolated from the user's saved project and export queue."""
+    import backend.main as server
+    from backend.workspace import WorkspaceStore
+
+    monkeypatch.setattr(export_queue, "EXPORT_ROOT", tmp_path / "state/exports")
+    monkeypatch.setattr(server, "project", WorkspaceStore(tmp_path / "state"))
+    monkeypatch.setattr(server, "restored_project", None)
+    monkeypatch.setattr(server, "survey", None)
+    monkeypatch.setattr(server, "horizons", {})
     export_queue.reset()
     yield
     export_queue.reset()

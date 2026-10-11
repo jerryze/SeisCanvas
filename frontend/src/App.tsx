@@ -46,6 +46,8 @@ import {
   Export3DDialog,
 } from "./components/SeismicViewer3D/Controls3D";
 import { useExportQueue } from "./hooks/useExportQueue";
+import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence";
+import { initialMapWorkspace, initialExport3D, restoreState, readDraft, type WorkspaceResponse, type WorkspaceState } from "./workspace";
 
 /* -------------------------------------------------------------------------- */
 /* Initial state                                                              */
@@ -111,6 +113,16 @@ const initialExport: ExportDialogSettings = {
   resolution: "export",
 };
 
+function loadedView(meta: Meta, horizons: HS[]): VS {
+  const inline = meta.inlines[Math.floor(meta.inlines.length / 2)];
+  const crossline = meta.crosslines[Math.floor(meta.crosslines.length / 2)];
+  const time = meta.time_range[0] + Math.round((meta.samples - 1) / 2) * meta.sample_interval;
+  return {
+    ...initial, scene: structuredClone(defaultScene), horizons, section_number: inline,
+    slices: { inline: [makeSlice(inline)], crossline: [makeSlice(crossline)], time: [makeSlice(time)] },
+  };
+}
+
 /* -------------------------------------------------------------------------- */
 /* App                                                                        */
 /* -------------------------------------------------------------------------- */
@@ -143,7 +155,7 @@ export default function App() {
 
   const [maps, setMaps] = useState<Record<string, any[]>>({});
 
-  const [busy, setBusy] = useState("");
+  const [busy, setBusy] = useState("正在恢复上次工作…");
   const [loading, setLoading] = useState(false);
 
   const [error, setError] = useState("");
@@ -160,6 +172,10 @@ export default function App() {
 
   const [exportOpen, setExportOpen] = useState(false);
   const [settings, setSettings] = useState<ExportDialogSettings>(initialExport);
+  const [settings3D, setSettings3D] = useState(initialExport3D);
+  const [mapWorkspace, setMapWorkspace] = useState(initialMapWorkspace);
+  const [project, setProject] = useState<WorkspaceResponse | null>(null);
+  const [hydrated, setHydrated] = useState(false);
 
   const [queueOpen, setQueueOpen] = useState(false);
   const [dataset, setDataset] = useState("");
@@ -177,6 +193,59 @@ export default function App() {
   const [revision, setRevision] = useState(0);
 
   viewRef.current = view;
+
+  const workspaceState = useMemo<WorkspaceState>(() => ({
+    version: 1, view, map: mapWorkspace, settings, settings3D, dataset, selected,
+    bytes, geometryMode, sidebar, drag,
+  }), [view, mapWorkspace, settings, settings3D, dataset, selected, bytes, geometryMode, sidebar, drag]);
+  const saveStatus = useWorkspacePersistence(workspaceState, project, hydrated, setError);
+
+  function applyRecovered(result: WorkspaceResponse) {
+    setProject(result);
+    if (!result.project_id) return;
+    const defaults: WorkspaceState = {
+      version: 1, view: result.metadata ? loadedView(result.metadata, result.horizons) : initial,
+      map: initialMapWorkspace(), settings: initialExport, settings3D: initialExport3D,
+      dataset: "", selected: result.horizons[0]?.id || "", sidebar: true, drag: "zoom",
+      bytes: { il: result.source?.ilbyte || 189, xl: result.source?.xlbyte || 21 },
+      geometryMode: result.source?.geometry_mode || "auto",
+    };
+    let draft: WorkspaceState | null = null;
+    try { draft = readDraft(localStorage, result.project_id, result.revision, result.state); } catch { /* Storage may be disabled. */ }
+    const state = restoreState(defaults, result.issues.length ? result.state : draft || result.state, result.horizons);
+    requestId.current++;
+    setSection(null);
+    setMeta(result.metadata);
+    setView(result.metadata ? state.view : { ...state.view, view_mode: "2d" });
+    setMapWorkspace(state.map);
+    setSettings(state.settings);
+    setSettings3D(state.settings3D);
+    setDataset(state.dataset);
+    setSelected(state.selected);
+    setBytes(state.bytes);
+    setGeometryMode(state.geometryMode);
+    setSidebar(state.sidebar);
+    setDrag(state.drag);
+    setRevision(v => v + 1);
+    if (!result.issues.length) setNotice("已恢复上次工作");
+  }
+
+  useEffect(() => {
+    let active = true;
+    api("/workspace")
+      .then(r => r.json())
+      .then(result => { if (active) { applyRecovered(result); setHydrated(true); } })
+      .catch(e => { if (active) setError("恢复失败：" + e.message); })
+      .finally(() => { if (active) setBusy(""); });
+    return () => { active = false; };
+  }, []);
+
+  function relink(horizon_id: string | null) {
+    task("重新定位数据文件…", async () => {
+      const result = await (await api("/workspace/relink", json({ project_id: project?.project_id, horizon_id }))).json();
+      if (!result.cancelled) { applyRecovered(result); setHydrated(true); }
+    });
+  }
 
   /* ------------------------------------------------------------------------ */
   /* Load colormaps                                                           */
@@ -238,42 +307,20 @@ export default function App() {
   /* Dataset loaded                                                           */
   /* ------------------------------------------------------------------------ */
 
-  function loaded(result: { metadata: Meta; horizons: HS[] }) {
+  function loaded(result: WorkspaceResponse) {
+    if (!result.metadata) return;
     requestId.current++;
 
     setSection(null);
     setMeta(result.metadata);
     setDataset("");
     setSelected(result.horizons[0]?.id || "");
-
-    const centerInline =
-      result.metadata.inlines[Math.floor(result.metadata.inlines.length / 2)];
-
-    const centerCrossline =
-      result.metadata.crosslines[
-        Math.floor(result.metadata.crosslines.length / 2)
-      ];
-
-    const centerTime =
-      result.metadata.time_range[0] +
-      Math.round((result.metadata.samples - 1) / 2) *
-        result.metadata.sample_interval;
-
-    setView({
-      ...initial,
-
-      slices: {
-        inline: [makeSlice(centerInline)],
-        crossline: [makeSlice(centerCrossline)],
-        time: [makeSlice(centerTime)],
-      },
-
-      scene: structuredClone(defaultScene),
-
-      section_number: centerInline,
-
-      horizons: result.horizons,
-    });
+    setProject({ ...result, issues: [] });
+    setHydrated(true);
+    setView(loadedView(result.metadata, result.horizons));
+    const map = initialMapWorkspace();
+    map.state.horizon = result.horizons[0]?.id || "";
+    setMapWorkspace(map);
 
     setNotice("数据已加载");
   }
@@ -704,6 +751,9 @@ export default function App() {
         <div className="top-status">
           <span className="status-dot" />
           本地
+          <span className="autosave-status" role="status">
+            {busy === "正在恢复上次工作…" ? "恢复中…" : project?.issues.length ? "恢复待处理" : saveStatus === "saving" ? "保存中…" : saveStatus === "saved" ? "已保存" : saveStatus === "error" ? "保存失败" : ""}
+          </span>
         </div>
 
         <button
@@ -845,6 +895,12 @@ export default function App() {
         {/* ---------------------------------------------------------------- */}
 
         <main>
+          {project?.issues.map((issue, index) => (
+            <div className="error recovery-issue" role="alert" key={index}>
+              <span>{issue.message}。原来的工作记录已保留。</span>
+              <button className="secondary" disabled={!!busy} onClick={() => relink(issue.horizon_id)}>重新定位</button>
+            </div>
+          ))}
           <div className="breadcrumb">
             <button
               className="icon"
@@ -871,6 +927,8 @@ export default function App() {
 
           {view.view_mode === "map" ? (
             <HorizonMap
+              workspace={mapWorkspace}
+              onWorkspace={setMapWorkspace}
               horizons={view.horizons}
               maps={maps}
               seismic={view.seismic}
@@ -1077,7 +1135,8 @@ export default function App() {
 
       {exportOpen && view.view_mode === "3d" && (
         <Export3DDialog
-          scene={view.scene}
+          settings={settings3D}
+          onSettings={setSettings3D}
           busy={busy}
           error={error}
           dataset={dataset}

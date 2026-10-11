@@ -385,7 +385,8 @@ export function Horizon3DControls({
   );
 }
 export function Export3DDialog({
-  scene,
+  settings,
+  onSettings,
   busy,
   error,
   dataset,
@@ -394,7 +395,8 @@ export function Export3DDialog({
   onClose,
   onExport,
 }: {
-  scene: SceneSettings;
+  settings: Export3D;
+  onSettings: (s: Export3D) => void;
   busy: string;
   error: string;
   dataset: string;
@@ -403,23 +405,8 @@ export function Export3DDialog({
   onClose: () => void;
   onExport: (s: Export3D) => void;
 }) {
-  const [settings, setSettings] = useState<Export3D>({
-    format: "png",
-    font: "Times New Roman",
-    font_size: 10,
-    canvas: "fit",
-    long_edge: 3000,
-    background: "white",
-    width: 180,
-    height: 120,
-    dpi: 300,
-    show_axes: scene.show_axes,
-    show_axis_labels: scene.show_axis_labels,
-    show_bounding_box: scene.show_bounding_box,
-    interpolation: "bicubic",
-  });
   const patch = (p: Partial<ExportDialogSettings>) =>
-    setSettings((s) => ({ ...s, ...(p as Partial<Export3D>) }));
+    onSettings({ ...settings, ...(p as Partial<Export3D>) });
   return <ExportDialog title="三维场景 · 加入导出" scene settings={settings}
     onChange={patch} onClose={onClose} onExport={() => onExport(settings)}
     dataset={dataset} onDataset={onDataset} datasetPlaceholder={datasetPlaceholder}

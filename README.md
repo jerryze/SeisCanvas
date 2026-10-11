@@ -80,6 +80,15 @@ npm run dev
 - 批量导入 `.txt` / `.dat` 层位文件，支持空格或 Tab 分隔及可选表头。
 - 预览层位文件，手动指定 Inline、Crossline、Time 列；时间单位为毫秒。
 
+## 自动保存与恢复
+
+- 自动保存最后一个工作项目，刷新页面或重启后端后自动恢复。包含数据来源与导入参数、层位 ID/名称/样式、2D 剖面与缩放范围、3D 相机与切片、地图配色及差值层位配对、A–B 剖面端点、各类导出设置和项目名称。
+- 绘图设置停止变化约 500 ms 后写入磁盘，页面显示“保存中 / 已保存 / 保存失败”。浏览器保存轻量草稿，覆盖快速刷新时尚未完成的保存；项目恢复完成前暂停写入，避免默认值覆盖历史记录。
+- 本地打开的 SEG-Y 和层位文件保留绝对路径及文件大小、修改时间；上传的文件保存持久副本。原文件丢失或变化时保留原项目，显示“重新定位”入口，沿用原导入参数和层位 ID。
+- 默认保存目录：macOS 为 `~/Library/Application Support/SeisCanvas`；Windows 为 `%LOCALAPPDATA%/SeisCanvas`；Linux 为 `$XDG_DATA_HOME/seiscanvas`（默认 `~/.local/share/seiscanvas`）。可通过环境变量 `SEISCANVAS_STATE_DIR` 指定其他持久目录。
+- `workspace.json` 保存工作状态，`imports/` 保存上传副本，`exports/` 保存导出队列。JSON 使用原子替换并保留 `.bak` 备份；旧页面的过期保存请求会被拒绝。导出队列在重启后可继续预览、重命名和打包。
+- 当前实现恢复最后工作现场；最近项目列表和可回退历史版本属于后续功能。
+
 ## 二维剖面
 
 - 浏览 Inline、Crossline 剖面，通过编号输入或滑块切换位置。
@@ -121,13 +130,13 @@ npm run dev
 调整视图 → Add to Export（按当前导出参数完成最终渲染）→ Export Queue 管理 → Export All 生成 ZIP
 ```
 
-- 每次 `Add to Export` 立即渲染最终文件并写入本次会话的临时目录，不触发浏览器下载；加入后继续修改 inline、crossline、色标、层位、相机等设置都不会改变已暂存的图片。
+- 每次 `Add to Export` 立即渲染最终文件并写入持久保存目录，不触发浏览器下载；加入后继续修改 inline、crossline、色标、层位、相机等设置都不会改变已暂存的图片。
 - 顶栏 `Export Queue · N` 打开导出队列，支持 Preview、Rename、Delete、Clear Queue、Export All；Preview 显示的正是 ZIP 中的最终文件。
 - `Export All` 只整理已渲染文件和生成 `export_manifest.json`，不重复执行 Matplotlib 或三维高分辨率渲染，最后打包为 `SeisCanvas_{Dataset}_Export_{YYYYMMDD_HHmm}.zip`（多数据集时为 `SeisCanvas_BatchExport_YYYYMMDD_HHmm.zip`）。
 - 文件名为自描述式科研命名 `{Dataset}_{View}_{Location/Target}_{Content}_{KeyStyle}_{Width}x{Height}px`，例如 `F3_2D_Inline_IL0350_Horizons6_Seismic_3000x1700px.png`；同名文件自动追加 `_02`、`_03`。
 - 层位差值图的文件名包含网格层位、`对比层位-vs-参考层位`、差值类型（`SignedDifference` / `AbsoluteError`）及绘制方式；差值方向固定为“对比 − 参考”。例如 `F3_HorizonMap_H1_Pred-vs-Ref_SignedDifference_FilledContour_RdBu_3000x2700px.png`。图内标题显示实际层位名称及减法方向，清单同时保存层位 ID 和名称。
 - 一个 ZIP 可混合 PNG、PDF、SVG，并按 `2D/Inline`、`2D/Crossline`、`3D`、`HorizonMap`、`HorizonProfile` 自动分类；根目录包含 `export_manifest.json`，记录数据集、完整 ViewState 与绘图参数（振幅范围、裁剪百分位、色标、层位颜色与线型、字体、三维相机、光照、透明度、垂向夸张、等值线间隔等）。
-- 暂存文件保存在 `/tmp/seiscanvas/session_xxxxxx/`（Windows 使用系统临时目录），包含 `manifest.json` 和 `figures/`；会话结束或超出保留数量后自动清理。
+- 队列文件保存在应用保存目录的 `exports/session_xxxxxx/`，包含可恢复的 `queue.json`、`manifest.json` 和 `figures/`；关闭程序后保留，删除图片或清空队列会移除对应文件。
 
 ### 二维导出
 

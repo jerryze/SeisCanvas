@@ -33,6 +33,8 @@ from backend.models import (
     SceneExportRequest,
     SectionRequest,
     ViewState3D,
+    WorkspaceSave,
+    WorkspaceRelink,
 )
 from backend.scene import slice_data, horizon_mesh, horizon_intersection, scene_data
 from backend.section_service import interactive_section
@@ -40,6 +42,7 @@ from backend.preview import preview_ids, read_samples
 
 from backend.horizon_map import map_data, map_profile, render_map
 from backend import export_queue
+from backend.workspace import WorkspaceStore, source, check_source
 from backend.export_service import (
     add_2d,
     add_3d,
@@ -53,7 +56,7 @@ HORIZON_SUFFIXES = {".txt", ".dat"}
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Drop the temporary export session on any graceful shutdown."""
+    """Release process state while keeping the saved project and figures."""
     yield
     export_queue.shutdown()
 
@@ -64,6 +67,8 @@ lock = RLock()
 workspace = tempfile.TemporaryDirectory(prefix="seiscanvas-")
 survey = None
 horizons = {}
+project = WorkspaceStore()
+restored_project = None
 COLORS = ["#f5b942", "#42ddbc", "#ff6b86", "#69acff", "#d593ff", "#ff9559"]
 
 
@@ -73,13 +78,157 @@ def require_survey():
     return survey
 
 
-def add_horizon(h):
-    key = uuid4().hex
-    horizons[key] = h
+def horizon_style(key, h, index):
     return Horizon3DStyle(
-        id=key, name=h.name, color=COLORS[(len(horizons) - 1) % len(COLORS)],
+        id=key, name=h.name, color=COLORS[index % len(COLORS)],
         twt_range=(float(h.data[:, 2].min()), float(h.data[:, 2].max()))
     ).model_dump()
+
+
+def add_horizons(pending):
+    added = {uuid4().hex: h for h in pending}
+    styles = [horizon_style(key, h, len(horizons) + index) for index, (key, h) in enumerate(added.items())]
+    persist_horizons(added=added)
+    horizons.update(added)
+    return styles
+
+
+def add_horizon(h):
+    return add_horizons([h])[0]
+
+
+def horizon_entry(key, h, style):
+    return {**source(h.path, columns=list(h.columns)), "id": key, "name": h.name, "style": style}
+
+
+def persist_horizons(removed=(), added=None, renamed=None):
+    document = project.read()
+    if document is None:
+        return
+    old = {h["id"]: h for h in document["horizons"]}
+    entries = [
+        {**item, "name": renamed[item["id"]]} if renamed and item["id"] in renamed else item
+        for item in document["horizons"] if item["id"] not in removed
+    ]
+    entries.extend(
+        horizon_entry(key, h, horizon_style(key, h, len(horizons) + index))
+        for index, (key, h) in enumerate((added or {}).items()) if key not in old
+    )
+    project.update_horizons(entries)
+
+
+def activate_survey(new, ilbyte, xlbyte, geometry_mode="auto", imported=()):
+    global survey, restored_project
+    pending = {uuid4().hex: h for h in imported}
+    styles = [horizon_style(key, h, i) for i, (key, h) in enumerate(pending.items())]
+    document = project.new(
+        source(new.path, ilbyte=ilbyte, xlbyte=xlbyte, geometry_mode=geometry_mode),
+        [horizon_entry(style["id"], pending[style["id"]], style) for style in styles],
+    )
+    survey = new
+    horizons.clear()
+    horizons.update(pending)
+    restored_project = document["id"]
+    return {"metadata": new.metadata(), "horizons": styles, "project_id": document["id"], "revision": document["revision"]}
+
+
+def restore_workspace(force=False):
+    global survey, restored_project
+    document = project.read()
+    if document is None:
+        return {"project_id": None, "metadata": None, "horizons": [], "state": None, "issues": []}
+    issues = []
+    if not force and restored_project == document["id"]:
+        for item in [document["source"], *document["horizons"]]:
+            try:
+                check_source(item)
+            except (ValueError, OSError):
+                force = True
+                break
+    if force or restored_project != document["id"]:
+        loaded_survey = None
+        loaded_horizons = {}
+        try:
+            item = document["source"]
+            loaded_survey = Survey(check_source(item), item["ilbyte"], item["xlbyte"], geometry_mode=item["geometry_mode"])
+        except (ValueError, OSError, RuntimeError, IndexError, MemoryError) as e:
+            issues.append({"horizon_id": None, "message": str(e)})
+        for item in document["horizons"]:
+            try:
+                loaded_horizons[item["id"]] = Horizon(check_source(item), item["name"], columns=item["columns"])
+            except (ValueError, OSError) as e:
+                issues.append({"horizon_id": item["id"], "message": str(e)})
+        survey = loaded_survey
+        horizons.clear()
+        horizons.update(loaded_horizons)
+        # Retry failed restores on the next request; never rewrite the project.
+        restored_project = document["id"] if not issues else None
+    saved = (document.get("state") or {}).get("view", {}).get("horizons", [])
+    styles = {h["id"]: h for h in saved}
+    return {
+        "project_id": document["id"], "revision": document["revision"],
+        "updated_at": document["updated_at"], "state": document["state"],
+        "metadata": survey.metadata() if survey else None,
+        "horizons": [{**styles.get(h["id"], h["style"]), "name": h["name"]} for h in document["horizons"] if h["id"] in horizons],
+        "source": {k: document["source"][k] for k in ("ilbyte", "xlbyte", "geometry_mode")},
+        "issues": issues,
+    }
+
+
+@app.get("/api/workspace")
+def workspace_current():
+    try:
+        with lock:
+            return restore_workspace()
+    except (ValueError, OSError) as e:
+        raise error(e)
+
+
+@app.put("/api/workspace")
+def workspace_save(req: WorkspaceSave):
+    with lock:
+        try:
+            if restored_project != req.project_id:
+                raise ValueError("项目尚未完整恢复，已保留原来的保存记录。")
+            document = project.save_state(req.project_id, req.revision, req.state)
+            return {"revision": document["revision"], "updated_at": document["updated_at"]}
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        except OSError as e:
+            raise error(e)
+
+
+@app.post("/api/workspace/relink")
+def workspace_relink(req: WorkspaceRelink):
+    from copy import deepcopy
+    try:
+        with lock:
+            document = project.read()
+            if document is None or document["id"] != req.project_id:
+                raise ValueError("项目已切换，请刷新页面。")
+            document = deepcopy(document)
+            item = document["source"] if req.horizon_id is None else next(
+                h for h in document["horizons"] if h["id"] == req.horizon_id
+            )
+        path = choose_segy("Horizon" if req.horizon_id else "SEG-Y")
+        if not path:
+            return {"cancelled": True}
+        if req.horizon_id:
+            Horizon(path, item["name"], columns=item["columns"])
+        else:
+            Survey(path, item["ilbyte"], item["xlbyte"], geometry_mode=item["geometry_mode"])
+        with lock:
+            if project.read()["id"] != req.project_id:
+                raise ValueError("项目已切换，请刷新页面。")
+            document = deepcopy(project.read())
+            item = document["source"] if req.horizon_id is None else next(
+                h for h in document["horizons"] if h["id"] == req.horizon_id
+            )
+            item.update(source(path))
+            project.commit(document)
+            return restore_workspace(force=True)
+    except (ValueError, OSError, RuntimeError, IndexError, StopIteration) as e:
+        raise error(str(e) or "找不到需要重新定位的层位。")
 
 
 def error(e):
@@ -160,10 +309,7 @@ def example(ilbyte: int = 189, xlbyte: int = 21):
         new = Survey(paths[0], ilbyte, xlbyte)
         hs = [Horizon(p) for p in sorted((ROOT / "data/horizons").glob("*.txt"))]
         with lock:
-            survey = new
-            horizons.clear()
-            styles = [add_horizon(h) for h in hs]
-            return {"metadata": new.metadata(), "horizons": styles}
+            return activate_survey(new, ilbyte, xlbyte, imported=hs)
     except (ValueError, OSError, RuntimeError, IndexError) as e:
         raise error(e)
 
@@ -222,11 +368,10 @@ def open_local_segy(req: LocalSegyRequest, progress=None):
         new = Survey(path, req.ilbyte, req.xlbyte, progress=progress, geometry_mode=req.geometry_mode)
         with lock:
             old = survey
-            survey = new
-            horizons.clear()
+            result = activate_survey(new, req.ilbyte, req.xlbyte, req.geometry_mode)
             if old and old.path != path and Path(workspace.name) in old.path.parents:
                 shutil.rmtree(old.path.parent, ignore_errors=True)
-            return {"metadata": new.metadata(), "horizons": []}
+            return result
     except (ValueError, OSError, RuntimeError, IndexError, MemoryError) as e:
         raise error(str(e) or "内存不足，请关闭其他大型数据后重试。")
 
@@ -238,8 +383,7 @@ def upload_segy(
     global survey
     if Path(file.filename or "").suffix.lower() not in [".sgy", ".segy"]:
         raise HTTPException(400, "Choose a .sgy or .segy file.")
-    folder = Path(workspace.name) / uuid4().hex
-    folder.mkdir()
+    folder = project.asset_folder()
     path = folder / Path(file.filename).name
     try:
         if file.size and shutil.disk_usage(folder).free < file.size + 256 * 1024 * 1024:
@@ -249,11 +393,10 @@ def upload_segy(
         new = Survey(path, ilbyte, xlbyte)
         with lock:
             old = survey
-            survey = new
-            horizons.clear()
+            result = activate_survey(new, ilbyte, xlbyte)
             if old and Path(workspace.name) in old.path.parents:
                 shutil.rmtree(old.path.parent)
-            return {"metadata": new.metadata(), "horizons": []}
+            return result
     except (ValueError, OSError, RuntimeError, IndexError) as e:
         shutil.rmtree(folder, ignore_errors=True)
         raise error(e)
@@ -295,7 +438,7 @@ def local_horizon(req: LocalHorizonRequest):
             raise ValueError("请重新选择层位文件。")
         pending = [Horizon(path, columns=(req.inline_column, req.xline_column, req.time_column)) for path in paths]
         with lock:
-            result = [add_horizon(h) for h in pending]
+            result = add_horizons(pending)
             horizon_selections.pop(req.token, None)
         return result
     except (ValueError, OSError) as e:
@@ -327,21 +470,25 @@ def upload_horizons(
     time_column: int = Form(2),
 ):
     pending = []
+    folders = []
     try:
         columns = (inline_column, xline_column, time_column)
         for file in files:
             if Path(file.filename or "").suffix.lower() not in HORIZON_SUFFIXES:
                 raise ValueError("Horizon files must use .txt or .dat extension.")
-            with tempfile.NamedTemporaryFile(dir=workspace.name, suffix=".txt") as tmp:
-                shutil.copyfileobj(file.file, tmp)
-                tmp.flush()
-                pending.append(
-                    Horizon(tmp.name, Path(file.filename).stem, columns=columns)
-                )
+            folder = project.asset_folder()
+            folders.append(folder)
+            path = folder / Path(file.filename).name
+            with path.open("wb") as output:
+                shutil.copyfileobj(file.file, output)
+            pending.append(Horizon(path, Path(file.filename).stem, columns=columns))
         with lock:
             require_survey()
-            return [add_horizon(h) for h in pending]
+            result = add_horizons(pending)
+            return result
     except (ValueError, OSError, UnicodeError) as e:
+        for folder in folders:
+            shutil.rmtree(folder, ignore_errors=True)
         raise error(e)
     finally:
         for file in files:
@@ -356,6 +503,10 @@ def rename_horizon(key: str, req: HorizonRenameRequest):
     with lock:
         if key not in horizons:
             raise HTTPException(404, "Horizon not found.")
+        try:
+            persist_horizons(renamed={key: name})
+        except OSError as e:
+            raise error(e)
         horizons[key].name = name
     return {"id": key, "name": name}
 
@@ -363,6 +514,10 @@ def rename_horizon(key: str, req: HorizonRenameRequest):
 @app.delete("/api/horizons/{key}")
 def delete_horizon(key: str):
     with lock:
+        try:
+            persist_horizons(removed=(key,))
+        except OSError as e:
+            raise error(e)
         horizons.pop(key, None)
     return {"ok": True}
 
@@ -490,13 +645,18 @@ def queue_add(req: QueueAddRequest):
 
 @app.get("/api/export/queue")
 def queue_list():
-    return export_queue.session().snapshot()
+    try:
+        with lock:
+            return export_queue.session().snapshot()
+    except (ValueError, OSError) as e:
+        raise error(e)
 
 
 @app.patch("/api/export/queue/{item_id}")
 def queue_rename(item_id: str, req: RenameRequest):
     try:
-        return export_queue.session().rename(item_id, req.filename)
+        with lock:
+            return export_queue.session().rename(item_id, req.filename)
     except KeyError:
         raise HTTPException(404, "Export item not found.")
     except (ValueError, OSError) as e:
@@ -516,22 +676,30 @@ def queue_file(item_id: str):
 @app.delete("/api/export/queue/{item_id}")
 def queue_delete(item_id: str):
     try:
-        export_queue.session().delete(item_id)
+        with lock:
+            export_queue.session().delete(item_id)
     except KeyError:
         raise HTTPException(404, "Export item not found.")
+    except (ValueError, OSError) as e:
+        raise error(e)
     return {"ok": True}
 
 
 @app.delete("/api/export/queue")
 def queue_clear():
-    export_queue.session().clear()
+    try:
+        with lock:
+            export_queue.session().clear()
+    except (ValueError, OSError) as e:
+        raise error(e)
     return {"ok": True}
 
 
 @app.post("/api/export/archive")
 def export_archive():
     try:
-        path, filename, manifest = export_queue.session().archive()
+        with lock:
+            path, filename, manifest = export_queue.session().archive()
     except ValueError as e:
         raise error(e)
     return FileResponse(

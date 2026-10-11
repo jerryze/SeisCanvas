@@ -166,7 +166,7 @@ export default function ExportQueue({
               </button>
             </>
           )}
-          <span className="queue-session">临时文件仅保留在本次会话</span>
+          <span className="queue-session">已自动保存，重启后可继续导出</span>
         </footer>
       </aside>
 
