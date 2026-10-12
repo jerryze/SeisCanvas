@@ -1,6 +1,11 @@
-# SeisCanvas
+<p>
+  <img src="frontend/src/assets/seiscanvas-symbol.svg" alt="SeisCanvas 品牌图标" height="48" align="middle" />
+  <img src="frontend/src/assets/seiscanvas-wordmark.svg" alt="SeisCanvas" height="30" align="middle" />
+</p>
 
 SeisCanvas 是本地运行的地震数据可视化工具，支持 SEG-Y 地震体与层位数据导入、二维剖面、三维场景、层位地图和图片导出。
+
+![SeisCanvas 三维切片与层位曲面界面](assets/screenshots/seiscanvas-3d.png)
 
 ## 主要功能
 
