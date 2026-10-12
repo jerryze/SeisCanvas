@@ -82,7 +82,7 @@ export function ProbeReadout({ reading }: { reading: ProbeReading | null }) {
         XL <b>{reading.crossline}</b>
       </span>
       <span>
-        TWT <b>{reading.time.toFixed(1)}</b> ms
+        Time <b>{reading.time.toFixed(1)}</b> ms
       </span>
       <span className="probe-amplitude" title="原始 SEG-Y 振幅">
         振幅 <b>{reading.amplitude === null ? "—" : reading.amplitude.toPrecision(6)}</b>

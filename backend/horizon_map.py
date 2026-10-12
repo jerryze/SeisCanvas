@@ -1,7 +1,7 @@
 """Horizon maps: geometry/color-scalar separation, contours and publication render.
 
-The map geometry is always Inline/Crossline/TWT; the color scalar is selected by
-``HorizonMapState.color_by`` (horizon TWT today, seismic amplitude sampled along
+The map geometry is always Inline/Crossline/Time; the color scalar is selected by
+``HorizonMapState.color_by`` (horizon Time today, seismic amplitude sampled along
 the horizon, difference between two horizons later).  The web preview and the
 matplotlib renderer consume the same ``HorizonMapData``, so a scalar only has to
 be implemented once (horizon_map_v2 requirements, phases 1-2).
@@ -52,11 +52,11 @@ class HorizonMapData:
 
     x: np.ndarray          # crossline axis
     y: np.ndarray          # inline axis
-    twt: np.ndarray        # TWT grid (ms), NaN where unpicked
+    twt: np.ndarray        # Time grid (ms), NaN where unpicked
     scalar: np.ndarray     # active color scalar, NaN = invalid
-    name: str              # "TWT" / "Amplitude"
+    name: str              # "Time" / "Amplitude"
     unit: str              # "ms" / ""
-    label: str             # colorbar caption, e.g. "TWT (ms)"
+    label: str             # colorbar caption, e.g. "Time (ms)"
 
     @property
     def valid(self):
@@ -298,7 +298,7 @@ def _profile_data(survey, state, horizons, a, b, target_width=None, target_heigh
     ends and is clipped to the surveyed extent; traces are placed at a fixed
     one-grid-unit spatial step.  Every floating position gets a bilinearly
     interpolated trace from its four surrounding survey traces, every loaded
-    horizon contributes its TWT along the exact same path, and A/B are
+    horizon contributes its Time along the exact same path, and A/B are
     reported as distances from the start of the section.
     """
     try:
@@ -397,7 +397,7 @@ def _profile_data(survey, state, horizons, a, b, target_width=None, target_heigh
         vmax=vmax,
         method=method,
         resampled=(width, height) != native_shape,
-        label_y="TWT (ms)",
+        label_y="Time (ms)",
     )
 
 
@@ -452,7 +452,7 @@ def render_profile(
     show_legend=True,
     show_ab=True,
 ):
-    """Publication A–B section: interpolated seismic background, horizon TWT
+    """Publication A–B section: interpolated seismic background, horizon Time
     overlays in their style colors, A/B markers.  Returns ``(bytes, info)``.
     """
     from backend.style import get_cmap, font_family
@@ -517,7 +517,7 @@ def render_profile(
         ax.set_axis_off()
     if settings.show_axes and settings.show_labels:
         ax.set_xlabel("Distance (grid)")
-        ax.set_ylabel("TWT (ms)")
+        ax.set_ylabel("Time (ms)")
     if show_curves and show_legend and d["curves"]:
         ax.legend(loc="lower right", fontsize=settings.font_size, framealpha=0.85)
     if settings.show_title:
@@ -559,12 +559,12 @@ def map_scalar(survey, horizon, state, horizons=None) -> HorizonMapData:
     elif state.color_by == "difference":
         scalar = sample_difference(horizon, state, horizons)
         if state.difference_type == "absolute":
-            name, unit, label = "|Difference|", "ms", "|ΔTWT| (ms)"
+            name, unit, label = "|Difference|", "ms", "|ΔTime| (ms)"
         else:
-            name, unit, label = "Difference", "ms", "ΔTWT (ms)"
+            name, unit, label = "Difference", "ms", "ΔTime (ms)"
     else:
         scalar = twt
-        name, unit, label = "TWT", "ms", "TWT (ms)"
+        name, unit, label = "Time", "ms", "Time (ms)"
     return HorizonMapData(x=x, y=y, twt=twt, scalar=scalar, name=name, unit=unit, label=label)
 
 
@@ -635,7 +635,7 @@ def map_data(survey, horizon, state, horizons=None):
         scalar_name=data.name,
         scalar_unit=data.unit,
         colorbar_title=data.label,
-        # Always the horizon's own TWT extent, whatever the color scalar is.
+        # Always the horizon's own Time extent, whatever the color scalar is.
         twt_range=[float(np.nanmin(data.twt)), float(np.nanmax(data.twt))],
         vmin=vmin,
         vmax=vmax,

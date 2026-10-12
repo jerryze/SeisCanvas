@@ -1,4 +1,6 @@
 import ExportDialog from "./components/ExportDialog";
+import brandSymbol from "./assets/seiscanvas-symbol.svg?url";
+import brandWordmark from "./assets/seiscanvas-wordmark.svg?url";
 import ExportQueue from "./components/ExportQueue";
 import HorizonMap from "./components/HorizonMap";
 import { mapSelectionError } from "./components/horizonMapLogic";
@@ -754,9 +756,7 @@ export default function App() {
         <div className="brand">
           <img
             className="brand-mark"
-            src={
-              new URL("./assets/seiscanvas-symbol.svg", import.meta.url).href
-            }
+            src={brandSymbol}
             alt=""
             width={44}
             height={44}
@@ -764,9 +764,7 @@ export default function App() {
 
           <img
             className="brand-wordmark"
-            src={
-              new URL("./assets/seiscanvas-wordmark.svg", import.meta.url).href
-            }
+            src={brandWordmark}
             alt="SeisCanvas"
             width={140}
             height={24}
@@ -1107,7 +1105,7 @@ export default function App() {
                       ? `Crossline ${meta.crosslines[0]}–${meta.crosslines.at(-1)}`
                       : `Inline ${meta.inlines[0]}–${meta.inlines.at(-1)}`}
                     <span className="dot-separator">·</span>
-                    TWT {meta.time_range[0]}–{meta.time_range[1]} ms
+                    Time {meta.time_range[0]}–{meta.time_range[1]} ms
                   </span>
                 ) : (
                   <span>未加载数据</span>

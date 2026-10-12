@@ -29,7 +29,7 @@ export function buildTraces(section: Section, view: VS, colors: any[]): any[] {
       hovertemplate:
         `Inline: ${inline ? view.section_number : "%{x}"}` +
         `<br>Crossline: ${inline ? "%{x}" : view.section_number}` +
-        `<br>TWT: %{y:.1f} ms` +
+        `<br>Time: %{y:.1f} ms` +
         `<extra></extra>`,
     },
   ];
@@ -86,7 +86,7 @@ export function buildTraces(section: Section, view: VS, colors: any[]): any[] {
       hovertemplate:
         `${h.name.replaceAll("<", "&lt;")}` +
         `<br>${inline ? "Crossline" : "Inline"}: %{x}` +
-        `<br>TWT: %{y:.1f} ms` +
+        `<br>Time: %{y:.1f} ms` +
         `<extra></extra>`,
     });
   }
@@ -131,7 +131,7 @@ export function buildLayout(section: Section, view: VS, drag: "zoom" | "pan") {
         ? (view.aspect_ratio_2d[1] / view.aspect_ratio_2d[0]) *
           Math.abs((xr[1] - xr[0]) / (tr[1] - tr[0]))
         : 1,
-      title: { text: "TWT (ms)", standoff: 16 },
+      title: { text: "Time (ms)", standoff: 16 },
       range: [Math.max(...tr), Math.min(...tr)],
       autorange: false,
       showgrid: false,

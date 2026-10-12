@@ -247,7 +247,7 @@ export default function HorizonMap({
             zmax: data.vmax,
             colorscale: data.colorscale,
             showscale: state.colorbar,
-            colorbar: { title: { text: data.colorbar_title || "TWT (ms)" } },
+            colorbar: { title: { text: data.colorbar_title || "Time (ms)" } },
             zsmooth: false,
             connectgaps: false,
             hoverongaps: false,
@@ -266,7 +266,7 @@ export default function HorizonMap({
               cmax: data.vmax,
               colorscale: data.colorscale,
               showscale: state.colorbar,
-              colorbar: { title: { text: data.colorbar_title || "TWT (ms)" } },
+              colorbar: { title: { text: data.colorbar_title || "Time (ms)" } },
             },
             hoverinfo: "skip",
           });
@@ -479,7 +479,7 @@ export default function HorizonMap({
     };
   }, [profileOn, profileQueryKey, endpointError, mapIssue]);
 
-  // Profile subplot: interpolated seismic section with horizon TWT overlays.
+  // Profile subplot: interpolated seismic section with horizon Time overlays.
   useEffect(() => {
     const el = profileRef.current as any;
     if (!el) return;
@@ -505,7 +505,7 @@ export default function HorizonMap({
         zmax: profileData.vmax,
         showscale: false,
         zsmooth: false,
-        hovertemplate: "距离 %{x:.1f}<br>TWT %{y:.1f} ms<br>振幅 %{z}<extra></extra>",
+        hovertemplate: "距离 %{x:.1f}<br>Time %{y:.1f} ms<br>振幅 %{z}<extra></extra>",
       },
     ];
     for (const curve of profileData.curves) {
@@ -519,7 +519,7 @@ export default function HorizonMap({
         y: curve.values,
         connectgaps: false,
         line: { color: style?.color || "#e6b450", width: 2.5 },
-        hovertemplate: `${style.name}<br>TWT %{y:.1f} ms<extra></extra>`,
+        hovertemplate: `${style.name}<br>Time %{y:.1f} ms<extra></extra>`,
       });
     }
     // Aspect lock shared with the 2D window: the same 横向/纵向 ratio.
@@ -667,7 +667,7 @@ export default function HorizonMap({
           "颜色变量",
           state.color_by,
           [
-            ["twt", "TWT"],
+            ["twt", "Time"],
             ["amplitude", "沿层振幅"],
             ["difference", "差值"],
           ],
@@ -707,7 +707,7 @@ export default function HorizonMap({
                 (difference_comparison) => patch({ difference_comparison }),
               )}
             </div>
-            <label className="map-field-label" title="ΔTWT = 对比层位 − 参考层位">差值类型</label>
+            <label className="map-field-label" title="ΔTime = 对比层位 − 参考层位">差值类型</label>
             <div
               className="map-display-options"
               role="group"

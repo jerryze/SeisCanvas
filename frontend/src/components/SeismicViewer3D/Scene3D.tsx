@@ -8,6 +8,7 @@ import {
 } from "react";
 import Plotly from "plotly.js-dist-min";
 import { applyDepthLayers } from "./depthLayers";
+import { applyTimeAxisTitleRotation } from "./axisTitles";
 import { applySurfaceLighting } from "./surfaceLighting";
 import {
   LoaderCircle,
@@ -185,6 +186,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
         );
         if (version !== renderVersion.current) return;
         applySurfaceLighting(el);
+        applyTimeAxisTitleRotation(el._fullLayout?.scene?._scene?.glplot?.axes);
         applyDepthLayers(el);
         displayedCamera.current = JSON.stringify(latest.current.view.scene.camera);
         el.on("plotly_relayout", (event: any) => {
@@ -245,6 +247,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
             plotGlPixelRatio: Math.min(window.devicePixelRatio, 2),
           });
         applySurfaceLighting(el);
+        applyTimeAxisTitleRotation(el._fullLayout?.scene?._scene?.glplot?.axes);
         applyDepthLayers(el);
         displayedCamera.current = requestedKey;
       })

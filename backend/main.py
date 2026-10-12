@@ -782,8 +782,6 @@ def intersection(
 
 DIST = ROOT / "frontend/dist"
 if DIST.exists():
-    app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
-
-    @app.get("/")
-    def index():
-        return FileResponse(DIST / "index.html")
+    # Mount after the API routes so the built app also serves root-level public
+    # files (favicons), while /api continues to resolve to the handlers above.
+    app.mount("/", StaticFiles(directory=DIST, html=True), name="frontend")

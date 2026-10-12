@@ -22,13 +22,13 @@ export function mapPresentation(state: HorizonMapState, horizons: Pick<HS, "id" 
     const formula = `${name(state.difference_comparison) || "请选择对比层位"} − ${name(state.difference_reference) || "请选择参考层位"}`;
     return {
       title: `层位差值 · ${state.difference_type === "absolute" ? `|${formula}|` : formula}`,
-      scalar: state.difference_type === "absolute" ? "|ΔTWT|" : "ΔTWT",
+      scalar: state.difference_type === "absolute" ? "|ΔTime|" : "ΔTime",
       unit: "ms",
     };
   }
   return {
     title: `${state.color_by === "amplitude" ? "沿层振幅" : "层位时间"} · ${name(state.horizon) || "请导入层位"}`,
-    scalar: state.color_by === "amplitude" ? "振幅" : "TWT",
+    scalar: state.color_by === "amplitude" ? "振幅" : "Time",
     unit: state.color_by === "amplitude" ? "" : "ms",
   };
 }

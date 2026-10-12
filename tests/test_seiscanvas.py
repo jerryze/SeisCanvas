@@ -140,7 +140,7 @@ def test_export(cube, tmp_path, fmt, magic):
         im = Image.open(io.BytesIO(data))
         assert max(im.size) == 3000
     if fmt == "svg":
-        assert b"Inline 12" in data and b"TWT (ms)" in data
+        assert b"Inline 12" in data and b"Time (ms)" in data
 
 
 def test_api(cube):

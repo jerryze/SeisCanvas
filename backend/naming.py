@@ -126,11 +126,11 @@ def _range(values, prefix, pad=0, suffix=""):
 
 
 def slice_label(inlines=(), crosslines=(), times=()):
-    """``IL0350-0450_XL0600-0800_TWT1200ms`` for a multi-slice scene."""
+    """``IL0350-0450_XL0600-0800_Time1200ms`` for a multi-slice scene."""
     parts = [
         _range(inlines, "IL", pad=4),
         _range(crosslines, "XL", pad=4),
-        _range(times, "TWT", suffix="ms"),
+        _range(times, "Time", suffix="ms"),
     ]
     return "_".join(part for part in parts if part) or None
 

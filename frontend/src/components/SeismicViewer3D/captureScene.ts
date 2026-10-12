@@ -3,6 +3,8 @@
  */
 import type { Camera, Export3D } from "../../types";
 import { contentBounds } from "./exportCrop";
+import { suppressJunctionOverlaps } from "./axisJunctions";
+import { applyTimeAxisTitleRotation } from "./axisTitles";
 
 type Matrix = ArrayLike<number>;
 type Bounds = number[][];
@@ -171,6 +173,7 @@ export async function captureScene(
   const gl = renderer.gl as WebGLRenderingContext,
     canvas = renderer.canvas as HTMLCanvasElement;
   const axes = renderer.axes;
+  applyTimeAxisTitleRotation(axes);
   const camera: Camera = structuredClone(scene.getCamera());
   const saved = {
     width: canvas.width,
@@ -241,6 +244,7 @@ export async function captureScene(
   status(`渲染三维 · ${width} × ${height} px`);
   await paint();
   let pixels: Uint8Array;
+  let restoreAxisText = () => {};
   try {
     const presentationStart = now();
     // All edits below are temporary presentation/resolution state. No object,
@@ -252,6 +256,7 @@ export async function captureScene(
     renderer.onrender = () => {
       for (let i = 0; i < 16; i++) params.projection[i] = projection[i];
     };
+    if (settings.show_axes) restoreAxisText = suppressJunctionOverlaps(axes);
     axes.update({
       tickFont: settings.font,
       labelFont: settings.font,
@@ -272,7 +277,7 @@ export async function captureScene(
       lineTickLength: (saved.axes.lineTickLength ?? [5, 5, 5]).map(
         (v: number) => (v * rect.height) / cssHeight,
       ),
-      labels: ["Crossline", "Inline", "TWT (ms)"],
+      labels: ["Crossline", "Inline", "Time (ms)"],
       tickEnable: true,
       lineEnable: true,
       gridEnable: true,
@@ -296,6 +301,7 @@ export async function captureScene(
     timings.image_readback = now() - readStart;
   } finally {
     const restoreStart = now();
+    restoreAxisText();
     renderer.autoResize = saved.autoResize;
     renderer.pixelRatio = saved.pixelRatio;
     renderer.clearColor = saved.clearColor;

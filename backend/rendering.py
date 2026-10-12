@@ -120,7 +120,7 @@ def render(survey, horizons, state, settings):
         vmin=lo,
         vmax=hi,
         extent=extent,
-        # Row 0 is the smallest TWT; the time axis is inverted below, so the
+        # Row 0 is the smallest Time; the time axis is inverted below, so the
         # array origin belongs at the bottom of the extent.
         origin="lower",
         aspect="auto",
@@ -176,7 +176,7 @@ def render(survey, horizons, state, settings):
         ax.set_axis_off()
     if settings.show_axes and settings.show_labels:
         ax.set_xlabel("Crossline" if state.view_type == "inline" else "Inline")
-        ax.set_ylabel("TWT (ms)")
+        ax.set_ylabel("Time (ms)")
     if settings.show_title:
         ax.set_title(f"{state.view_type.title()} {state.section_number}")
     for txt in [

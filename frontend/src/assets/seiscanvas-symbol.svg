@@ -1,20 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="744" height="720" viewBox="396 56 744 720" role="img" aria-labelledby="title description">
   <title id="title">SeisCanvas</title>
-  <desc id="description">Strict isometric cube, three identical rotated coordinate arrows, and folded seismic horizon. All artwork is editable vector geometry.</desc>
+  <desc id="description">Strict isometric cube, three coordinate arrows with a shortened top arrow, and folded seismic horizon. All artwork is editable vector geometry.</desc>
   <defs>
     <g id="axis-arrow" stroke="#12345B" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
       <path id="arrow-shaft" d="M 0,0 V -73.9656" fill="none"/>
       <path id="arrow-head" d="M 0,-104.9416 L 18.216,-73.9656 L -18.216,-73.9656 Z" fill="#12345B"/>
     </g>
+    <g id="top-arrow" stroke="#12345B" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M 0,0 V -58.22436" fill="none"/>
+      <path d="M 0,-89.20036 L 18.216,-58.22436 L -18.216,-58.22436 Z" fill="#12345B"/>
+    </g>
   </defs>
-  <rect id="white-background" x="348" y="18" width="840" height="780" fill="#FFFFFF"/>
   <g id="seiscanvas-symbol">
     <g id="isometric-cube" fill="none" stroke="#12345B" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
       <polygon id="cube-outline" points="768.000000000,198.000000000 1010.487113060,338.000000000 1010.487113060,618.000000000 768.000000000,758.000000000 525.512886940,618.000000000 525.512886940,338.000000000"/>
     </g>
     <g id="coordinate-axes">
-      <use id="axis-z" href="#axis-arrow" transform="translate(768 198) rotate(0)"/>
+      <use id="axis-z" href="#top-arrow" transform="translate(768 198) rotate(0)"/>
       <use id="axis-x" href="#axis-arrow" transform="translate(1010.487113060 618) rotate(120)"/>
       <use id="axis-y" href="#axis-arrow" transform="translate(525.512886940 618) rotate(240)"/>
     </g>

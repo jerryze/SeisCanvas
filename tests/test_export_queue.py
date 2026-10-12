@@ -34,28 +34,28 @@ def test_naming_matches_the_specification_examples():
         == "F3_2D_Crossline_XL0760_H1-H3-H5_Seismic_180x100mm_600dpi.png"
     )
     assert naming.slice_label([350, 450], [600, 800], [1200]) == (
-        "IL0350-0450_XL0600-0800_TWT1200ms"
+        "IL0350-0450_XL0600-0800_Time1200ms"
     )
     assert (
         naming.multislice_name(
-            "F3", "IL0350-0450_XL0600-0800_TWT1200ms", "Horizons6", 180, 100, 600
+            "F3", "IL0350-0450_XL0600-0800_Time1200ms", "Horizons6", 180, 100, 600
         )
-        == "F3_3D_MultiSlice_IL0350-0450_XL0600-0800_TWT1200ms_Horizons6_180x100mm_600dpi.png"
+        == "F3_3D_MultiSlice_IL0350-0450_XL0600-0800_Time1200ms_Horizons6_180x100mm_600dpi.png"
     )
     assert (
-        naming.horizon_surface_name("F3", "H1", "TWT", "Petrel", 180, 100, 600)
-        == "F3_3D_HorizonSurface_H1_TWT_Petrel_180x100mm_600dpi.png"
+        naming.horizon_surface_name("F3", "H1", "Time", "Petrel", 180, 100, 600)
+        == "F3_3D_HorizonSurface_H1_Time_Petrel_180x100mm_600dpi.png"
     )
     assert (
         naming.horizon_map_name(
-            "F3", "H1", "TWT", "FilledContour", "Petrel", 90, 80, 600
+            "F3", "H1", "Time", "FilledContour", "Petrel", 90, 80, 600
         )
-        == "F3_HorizonMap_H1_TWT_FilledContour_Petrel_90x80mm_600dpi.png"
+        == "F3_HorizonMap_H1_Time_FilledContour_Petrel_90x80mm_600dpi.png"
     )
     # A contour-only map is not filled, so the colormap is dropped.
     assert (
-        naming.horizon_map_name("F3", "H1", "TWT", "Contour", "Petrel", 90, 80, 600, "pdf")
-        == "F3_HorizonMap_H1_TWT_Contour_90x80mm_600dpi.pdf"
+        naming.horizon_map_name("F3", "H1", "Time", "Contour", "Petrel", 90, 80, 600, "pdf")
+        == "F3_HorizonMap_H1_Time_Contour_90x80mm_600dpi.pdf"
     )
     assert (
         naming.horizon_map_name("F3", "H1", "Amplitude", "Filled", "Seismic", 90, 80, 600)
@@ -68,8 +68,8 @@ def test_naming_matches_the_specification_examples():
         == "F3_HorizonMap_H1_Pred-vs-Ref_SignedDifference_RdBu_90x80mm_600dpi.png"
     )
     assert (
-        naming.horizon_profile_name("F3", "H1", "AB", "TWT", 120, 60, 600, "pdf")
-        == "F3_HorizonProfile_H1_AB_TWT_120x60mm_600dpi.pdf"
+        naming.horizon_profile_name("F3", "H1", "AB", "Time", 120, 60, 600, "pdf")
+        == "F3_HorizonProfile_H1_AB_Time_120x60mm_600dpi.pdf"
     )
 
 
@@ -226,7 +226,7 @@ def test_horizon_map_is_queued_with_its_contour_parameters(client):
     item = client.post("/api/export/queue", json=body).json()
     assert item["view_type"] == "horizon_map"
     assert item["folder"] == "HorizonMap"
-    assert item["filename"] == "F3_HorizonMap_h_TWT_FilledContour_Petrel_90x80mm_600dpi.png"
+    assert item["filename"] == "F3_HorizonMap_h_Time_FilledContour_Petrel_90x80mm_600dpi.png"
 
     manifest_body = {
         "kind": "map",
@@ -379,7 +379,7 @@ def test_three_dimensional_scene_with_only_surfaces_is_a_horizon_surface(client)
     }
     item = client.post("/api/export/queue", json=body).json()
     assert item["view_type"] == "3d_horizon_surface"
-    assert item["filename"] == "F3_3D_HorizonSurface_H1_TWT_Petrel_180x100mm_300dpi.png"
+    assert item["filename"] == "F3_3D_HorizonSurface_H1_Time_Petrel_180x100mm_300dpi.png"
     assert client.get(f"/api/export/queue/{item['id']}/file").content.startswith(b"\x89PNG")
 
 

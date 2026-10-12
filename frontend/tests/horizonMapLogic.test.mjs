@@ -10,8 +10,8 @@ const horizons = [{ id: 'r', name: '参考' }, { id: 'c', name: '对比' }];
 
 test('difference direction, absolute bars and units stay consistent with the calculated scalar', () => {
   const state = { horizon: 'r', color_by: 'difference', difference_reference: 'r', difference_comparison: 'c', difference_type: 'signed' };
-  assert.deepEqual(mapPresentation(state, horizons), { title: '层位差值 · 对比 − 参考', scalar: 'ΔTWT', unit: 'ms' });
-  assert.deepEqual(mapPresentation({ ...state, difference_type: 'absolute' }, horizons), { title: '层位差值 · |对比 − 参考|', scalar: '|ΔTWT|', unit: 'ms' });
+  assert.deepEqual(mapPresentation(state, horizons), { title: '层位差值 · 对比 − 参考', scalar: 'ΔTime', unit: 'ms' });
+  assert.deepEqual(mapPresentation({ ...state, difference_type: 'absolute' }, horizons), { title: '层位差值 · |对比 − 参考|', scalar: '|ΔTime|', unit: 'ms' });
   assert.match(mapPresentation({ ...state, difference_comparison: null }, horizons).title, /请选择对比层位/);
 });
 

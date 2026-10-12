@@ -150,7 +150,7 @@ export function buildTraces(
         fresnel: 0,
       },
       hovertemplate:
-        "Inline: %{y}<br>Crossline: %{x}<br>TWT: %{z:.1f} ms<extra>" +
+        "Inline: %{y}<br>Crossline: %{x}<br>Time: %{z:.1f} ms<extra>" +
         plane.kind +
         " " +
         plane.position +
@@ -221,11 +221,11 @@ export function buildTraces(
               },
           // gl-mesh3d unprojects this position by inverse projection/view/model
           // every frame. surfaceLighting keeps its vectors in world space and
-          // corrects mirrored TWT normals, keeping this camera light on the front.
+          // corrects mirrored Time normals, keeping this camera light on the front.
           lightposition: { x: 0, y: 0, z: -1 },
           showscale: false,
           showlegend: false,
-          hovertemplate: `${safe(h.name)}<br>Inline: %{y}<br>Crossline: %{x}<br>TWT: %{z:.1f} ms<extra></extra>`,
+          hovertemplate: `${safe(h.name)}<br>Inline: %{y}<br>Crossline: %{x}<br>Time: %{z:.1f} ms<extra></extra>`,
         });
     }
     if (h.display_mode === "slice_intersections")
@@ -290,7 +290,7 @@ export function buildTraces(
             },
           },
           customdata: pts.horizon_time,
-          hovertemplate: `${safe(h.name)}<br>Inline: %{y}<br>Crossline: %{x}<br>TWT: %{z:.1f} ms${points ? "<br>Horizon TWT: %{customdata:.1f} ms" : ""}<extra></extra>`,
+          hovertemplate: `${safe(h.name)}<br>Inline: %{y}<br>Crossline: %{x}<br>Time: %{z:.1f} ms${points ? "<br>Horizon Time: %{customdata:.1f} ms" : ""}<extra></extra>`,
         });
       }
   }
@@ -359,7 +359,7 @@ export function buildLayout(
     scene: {
       xaxis: axis("Crossline", data.bounds.x),
       yaxis: axis("Inline", data.bounds.y),
-      zaxis: axis("TWT (ms)", [data.bounds.z[1], data.bounds.z[0]]),
+      zaxis: axis("Time (ms)", [data.bounds.z[1], data.bounds.z[0]]),
       aspectmode: "manual",
       aspectratio: {
         x: view.scene.aspect_ratio[0],

@@ -24,7 +24,7 @@ type Props = {
   onImport: () => void;
 };
 
-/** Modal for mapping Inline/Xline/TWT columns of a freshly picked horizon file. */
+/** Modal for mapping Inline/Xline/Time columns of a freshly picked horizon file. */
 export default function HorizonImportModal({
   state,
   busy,
@@ -67,7 +67,7 @@ export default function HorizonImportModal({
             [
               ["inline_column", "Inline"],
               ["xline_column", "Xline"],
-              ["time_column", "Time / TWT"],
+              ["time_column", "Time"],
             ] as const
           ).map(([key, label]) => (
             <label className="field" key={key}>

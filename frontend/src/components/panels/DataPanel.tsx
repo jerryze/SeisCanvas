@@ -89,7 +89,7 @@ export default function DataPanel({
           <dd className="metadata-count" title="Crossline 数量">
             {meta.crosslines.length}
           </dd>
-          <dt>TWT</dt>
+          <dt>Time</dt>
           <dd
             className="metadata-value"
             title={`${meta.time_range.join("–")} ms`}

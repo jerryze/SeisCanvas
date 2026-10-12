@@ -15,7 +15,7 @@ def test_map_native_coordinates_holes_and_contours(tmp_path):
     assert data['z'][2][4] == 208
     assert data['twt_range'] == [200, 212]
     assert data['vmin'] == 200 and data['vmax'] == 212
-    assert data['color_by'] == 'twt' and data['colorbar_title'] == 'TWT (ms)'
+    assert data['color_by'] == 'twt' and data['colorbar_title'] == 'Time (ms)'
     assert data['contours']
     for path in data['contours']:
         assert not any(0 < x < 2 and 0 < y < 2 for x, y in zip(path['x'], path['y']))
@@ -112,7 +112,7 @@ def test_amplitude_interpolates_fractional_times(cube, tmp_path):
     data = map_data(cube, h, state)
     # Sample index (206-200)/4 == 1.5: average of trace[1] and trace[2].
     assert data['z'] == [[1031.5, 1034.5], [1231.5, 1234.5]]
-    # The horizon TWT extent stays a TWT range even for amplitude maps.
+    # The horizon Time extent stays a Time range even for amplitude maps.
     assert data['twt_range'] == [206, 206]
 
 
@@ -192,7 +192,7 @@ def test_difference_signed_constant_offset(tmp_path):
     comp = grid_horizon(tmp_path, "b.txt", lambda y, x: 200 + 2 * y + x + 3)
     horizons = {"a": base, "b": comp}
     data = map_data(None, base, difference_state("a", "a", "b", display="filled"), horizons)
-    assert data["colorbar_title"] == "ΔTWT (ms)"
+    assert data["colorbar_title"] == "ΔTime (ms)"
     assert data["z"] == [[3.0] * 5] * 5
     # Signed differences center on zero with a symmetric auto range.
     assert data["vmin"] == pytest.approx(-data["vmax"])
@@ -211,7 +211,7 @@ def test_difference_absolute_range_and_label(tmp_path):
         difference_state("a", "a", "b", difference_type="absolute", colormap="viridis", display="filled"),
         horizons,
     )
-    assert data["colorbar_title"] == "|ΔTWT| (ms)"
+    assert data["colorbar_title"] == "|ΔTime| (ms)"
     assert data["z"] == [[4.0] * 5] * 5
     # Absolute differences grow from zero.
     assert data["vmin"] <= 0 < data["vmax"]
@@ -327,7 +327,7 @@ def test_difference_map_api(client, tmp_path):
         server.horizons.pop("c", None)
     assert response.status_code == 200, response.text
     data = response.json()
-    assert data["colorbar_title"] == "ΔTWT (ms)"
+    assert data["colorbar_title"] == "ΔTime (ms)"
     assert data["statistics"]["mae"] == 2.0 and data["statistics"]["bias"] == 2.0
 
 
@@ -343,7 +343,7 @@ def test_profile_section_interpolates_between_traces(cube):
     assert result["a_distance"] == 0 and result["b_distance"] == 3
     assert result["distance"][-1] == pytest.approx(3.45)
     assert result["time"] == [200.0, 204.0, 208.0, 212.0]
-    assert result["label_y"] == "TWT (ms)"
+    assert result["label_y"] == "Time (ms)"
     # Amplitude is time-major: amplitude[time][position]. Fractional positions
     # blend the four surrounding traces linearly.
     assert result["amplitude"][0][0] == 1030

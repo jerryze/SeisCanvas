@@ -103,7 +103,7 @@ def add_map(survey, horizons, req: QueueMapRequest) -> dict:
     horizon = horizons[state.horizon]
     dataset = dataset_label(survey, req.dataset)
     # Difference filenames identify the pair; the manifest keeps the scalar.
-    scalar = {"twt": "TWT", "amplitude": "Amplitude", "difference": "Diff"}[state.color_by]
+    scalar = {"twt": "Time", "amplitude": "Amplitude", "difference": "Diff"}[state.color_by]
     content = scalar
     difference = None
     if state.color_by == "difference":
@@ -258,7 +258,7 @@ def add_3d(survey, req: Queue3DRequest) -> dict:
         filename = naming.horizon_surface_name(
             dataset,
             naming.horizons_label([h.name for h in surfaces]) or content or "Horizons",
-            "TWT",
+            "Time",
             naming.colormap_label(
                 surfaces[0].horizon_colormap if surfaces else "petrel", "Petrel"
             ),

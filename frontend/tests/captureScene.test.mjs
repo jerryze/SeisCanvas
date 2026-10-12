@@ -5,7 +5,9 @@ import ts from 'typescript';
 const compile = source => ts.transpileModule(source, {compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
 const moduleURL = source => 'data:text/javascript;base64,' + Buffer.from(compile(source)).toString('base64');
 const cropURL = moduleURL(await readFile(new URL('../src/components/SeismicViewer3D/exportCrop.ts',import.meta.url),'utf8'));
-const source = (await readFile(new URL('../src/components/SeismicViewer3D/captureScene.ts',import.meta.url),'utf8')).replace('"./exportCrop"',JSON.stringify(cropURL));
+const junctionURL = moduleURL(await readFile(new URL('../src/components/SeismicViewer3D/axisJunctions.ts',import.meta.url),'utf8'));
+const titleURL = moduleURL(await readFile(new URL('../src/components/SeismicViewer3D/axisTitles.ts',import.meta.url),'utf8'));
+const source = (await readFile(new URL('../src/components/SeismicViewer3D/captureScene.ts',import.meta.url),'utf8')).replace('"./exportCrop"',JSON.stringify(cropURL)).replace('"./axisJunctions"',JSON.stringify(junctionURL)).replace('"./axisTitles"',JSON.stringify(titleURL));
 const {projectedBounds,cropProjection,unpackPixels,captureScene} = await import(moduleURL(source));
 const identity = () => [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1];
 
@@ -34,7 +36,9 @@ function fixture(fail=false) {
  globalThis.FileReader=class {readAsDataURL(){this.result='data:image/png;base64,TEST';this.onload();}};
  const canvas=makeCanvas();canvas.width=800;canvas.height=600;
  const object={bounds:[[-.5,-.5,-.5],[.5,.5,.5]],texture:{},buffer:{}};
- const axes={enable:true,tickPad:[10,10,10],labelPad:[30,30,30],lineTickLength:[5,5,5],update(p){Object.assign(this,p);}};
+ const text={buffer:{update(){}},bind(){},drawTicks(){}};
+ const originalText={upload:text.buffer.update,bind:text.bind,draw:text.drawTicks};
+ const axes={_text:text,enable:true,tickPad:[10,10,10],labelPad:[30,30,30],lineTickLength:[5,5,5],update(p){Object.assign(this,p);text.buffer.update([]);}};
  const draws=[];const originalOnrender=()=>{};
  const renderer={canvas,axes,objects:[object],bounds:object.bounds,pixelRatio:1,autoResize:true,
   onrender:originalOnrender,clearColor:[1,1,1,1],selection:{object:null},
@@ -47,7 +51,7 @@ function fixture(fail=false) {
     }},
  };
  const camera={eye:{x:1,y:1,z:1},up:{x:0,y:0,z:1},center:{x:0,y:0,z:0}};
- return {renderer,object,draws,originalOnrender,element:{_fullLayout:{scene:{_scene:{glplot:renderer,traces:{},getCamera:()=>camera}}}}};
+ return {renderer,object,draws,originalText,originalOnrender,element:{_fullLayout:{scene:{_scene:{glplot:renderer,traces:{},getCamera:()=>camera}}}}};
 }
 const settings={format:'png',canvas:'fit',long_edge:600,font:'Arial',font_size:10,background:'transparent',show_axes:true,show_axis_labels:true,show_bounding_box:false};
 
@@ -58,6 +62,9 @@ test('capture reuses objects and texture, renders once, then restores interactiv
  assert.equal(Math.max(...f.draws[0]),600); assert.deepEqual(f.draws[1],[800,600]);
  assert.equal(f.renderer.objects[0],f.object);assert.equal(f.renderer.onrender,f.originalOnrender);
  assert.equal(f.renderer.pixelRatio,1);assert.equal(f.renderer.autoResize,true);
+ assert.equal(f.renderer.axes._text.drawTicks,f.originalText.draw);
+ assert.equal(f.renderer.axes._text.buffer.update,f.originalText.upload);
+ assert.equal(f.renderer.axes._text.bind,f.originalText.bind);
  assert.deepEqual(f.renderer.axes.tickPad,[10,10,10]);
  assert.deepEqual(f.renderer.axes.labelPad,[30,30,30]);
  assert.deepEqual(f.renderer.axes.lineTickLength,[5,5,5]);
@@ -70,4 +77,7 @@ test('failed image readback still restores GPU presentation state and cached obj
  assert.equal(f.renderer.objects[0],f.object);assert.equal(f.renderer.onrender,f.originalOnrender);
  assert.deepEqual([f.renderer.canvas.width,f.renderer.canvas.height],[800,600]);
  assert.deepEqual(f.renderer.clearColor,[1,1,1,1]);assert.equal(f.renderer.pixelRatio,1);
+ assert.equal(f.renderer.axes._text.drawTicks,f.originalText.draw);
+ assert.equal(f.renderer.axes._text.buffer.update,f.originalText.upload);
+ assert.equal(f.renderer.axes._text.bind,f.originalText.bind);
 });

@@ -32,7 +32,7 @@ const titles = {
   crossline: "Crossline 切片",
   time: "时间切片",
 };
-const prefixes = { inline: "IL", crossline: "XL", time: "TWT" };
+const prefixes = { inline: "IL", crossline: "XL", time: "Time" };
 export function SliceManager({
   slices,
   meta,
@@ -414,7 +414,7 @@ export function Horizon3DControls({
                 onChange({ color_by: e.target.value as HS["color_by"] })
               }
             >
-              <option value="twt">TWT 时间</option>
+              <option value="twt">Time 时间</option>
               <option value="solid">单色</option>
             </Select>
           </label>
