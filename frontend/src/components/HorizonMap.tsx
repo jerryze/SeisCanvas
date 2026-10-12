@@ -1,5 +1,5 @@
 import ExportDialog from "./ExportDialog";
-import { Layers, MousePointer2, Move, Palette, Plus, RotateCcw, ScanLine, X } from "lucide-react";
+import { Layers, MousePointer2, Move, Plus, RotateCcw, ScanLine, X } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
 import type { HorizonMapState, MapWorkspace } from "../workspace";
 import { reconcileMapWorkspace } from "../workspace";
@@ -99,7 +99,9 @@ export default function HorizonMap({
   onDataset: (value: string) => void;
   onAddToExport: (payload: { state: State; settings: Record<string, unknown> }) => Promise<void>;
 }) {
-  const { state, settings, drag, profileOn, profileA, profileB, profileSettings } = workspace;
+  const { state: savedState, settings, drag, profileOn, profileA, profileB, profileSettings } = workspace;
+  // Display mode controls contour visibility, including for older saved workspaces.
+  const state = { ...savedState, contours: savedState.display !== "filled" };
   const profileShare = Math.min(70, Math.max(30, workspace.profileShare ?? 45));
   const presentation = mapPresentation(state, horizons);
   const horizonKey = JSON.stringify(horizons.map(h => [h.id, h.name]));
@@ -737,78 +739,63 @@ export default function HorizonMap({
             </div>
           </>
         )}
-        <details className="subsettings">
-          <SubsectionSummary title={state.color_by === "difference" ? "输出网格与统计" : "层位信息"} />
-          <div className="subsettings-body">
-            {state.color_by === "difference" && (
-              <>
-                {select(
-                  "输出网格层位",
-                  state.horizon,
-                  horizons.map((h) => [h.id, h.name]),
-                  (horizon) =>
-                    patch({
-                      horizon,
-                      range_mode: "auto",
-                      vmin: null,
-                      vmax: null,
-                      x_range: null,
-                      y_range: null,
-                    }),
-                )}
-                <Toggle
-                  label="显示统计"
-                  checked={state.show_statistics}
-                  onChange={(show_statistics) => patch({ show_statistics })}
-                />
-              </>
+        {state.color_by === "difference" && (
+          <>
+            {select(
+              "输出网格层位",
+              state.horizon,
+              horizons.map((h) => [h.id, h.name]),
+              (horizon) =>
+                patch({
+                  horizon,
+                  range_mode: "auto",
+                  vmin: null,
+                  vmax: null,
+                  x_range: null,
+                  y_range: null,
+                }),
             )}
-            <div className="map-range-summary">
+            <Toggle
+              label="显示统计"
+              checked={state.show_statistics}
+              onChange={(show_statistics) => patch({ show_statistics })}
+            />
+          </>
+        )}
+        {state.color_by === "difference" &&
+          state.show_statistics &&
+          data?.statistics && (
+            <div className="map-stats" role="status" aria-label="差值统计">
               <span>
-                层位时间范围 <small>ms</small>
+                MAE
+                <b>
+                  {data.statistics.mae === null
+                    ? "—"
+                    : `${formatAmplitude(data.statistics.mae)} ms`}
+                </b>
               </span>
-              <strong>
-                {data
-                  ? `${data.twt_range[0].toFixed(1)} — ${data.twt_range[1].toFixed(1)}`
-                  : "—"}
-              </strong>
+              <span>
+                RMSE
+                <b>
+                  {data.statistics.rmse === null
+                    ? "—"
+                    : `${formatAmplitude(data.statistics.rmse)} ms`}
+                </b>
+              </span>
+              <span>
+                Bias
+                <b>
+                  {data.statistics.bias === null
+                    ? "—"
+                    : `${formatAmplitude(data.statistics.bias)} ms`}
+                </b>
+              </span>
+              <span>
+                有效率
+                <b>{(data.statistics.valid_ratio * 100).toFixed(1)}%</b>
+              </span>
             </div>
-            {state.color_by === "difference" &&
-              state.show_statistics &&
-              data?.statistics && (
-                <div className="map-stats" role="status" aria-label="差值统计">
-                  <span>
-                    MAE
-                    <b>
-                      {data.statistics.mae === null
-                        ? "—"
-                        : `${formatAmplitude(data.statistics.mae)} ms`}
-                    </b>
-                  </span>
-                  <span>
-                    RMSE
-                    <b>
-                      {data.statistics.rmse === null
-                        ? "—"
-                        : `${formatAmplitude(data.statistics.rmse)} ms`}
-                    </b>
-                  </span>
-                  <span>
-                    Bias
-                    <b>
-                      {data.statistics.bias === null
-                        ? "—"
-                        : `${formatAmplitude(data.statistics.bias)} ms`}
-                    </b>
-                  </span>
-                  <span>
-                    有效率
-                    <b>{(data.statistics.valid_ratio * 100).toFixed(1)}%</b>
-                  </span>
-                </div>
-              )}
-          </div>
-        </details>
+          )}
         <label className="map-field-label">显示方式</label>
         <div
           className="map-display-options"
@@ -824,12 +811,114 @@ export default function HorizonMap({
               key={value}
               className={state.display === value ? "active" : ""}
               aria-pressed={state.display === value}
-              onClick={() => patch({ display: value })}
+              onClick={() => patch({ display: value, contours: value !== "filled" })}
             >
               {label}
             </button>
           ))}
         </div>
+        <ColormapSelect
+          label="地图色标"
+          value={state.colormap}
+          options={((state.color_by === "amplitude"
+            ? [
+                ["seismic", "Seismic"],
+                ["RdBu", "RdBu"],
+                ["coolwarm", "Coolwarm"],
+              ]
+            : state.color_by === "difference"
+              ? state.difference_type === "absolute"
+                ? [
+                    ["viridis", "Viridis"],
+                    ["turbo", "Turbo"],
+                    ["magma", "Magma"],
+                  ]
+                : [
+                    ["RdBu", "RdBu"],
+                    ["coolwarm", "Coolwarm"],
+                    ["seismic", "Seismic"],
+                  ]
+              : [
+                  ["petrel", "Petrel"],
+                  ["turbo", "Turbo"],
+                  ["viridis", "Viridis"],
+                  ["cividis", "Cividis"],
+                  ["jet", "Jet"],
+                ]) as [string, string][]).map(([value, label]) => ({ value, label, colors: mapColors[value] || [] }))}
+          reverse={state.reverse_colormap}
+          onChange={(colormap) => patch({ colormap })}
+          range={data ? `${data.vmin.toFixed(1)}–${data.vmax.toFixed(1)}${presentation.unit ? ` ${presentation.unit}` : ""}` : undefined}
+        />
+        <div className="check-row">
+          <Toggle
+            label="反转色标"
+            checked={state.reverse_colormap}
+            onChange={(reverse_colormap) => patch({ reverse_colormap })}
+          />
+          <Toggle
+            label="显示色标尺"
+            checked={state.colorbar}
+            onChange={(colorbar) => patch({ colorbar })}
+          />
+        </div>
+        <div className="map-range-mode">
+          <span>颜色范围</span>
+          <div
+            className="map-display-options"
+            role="group"
+            aria-label="颜色范围"
+          >
+            {[
+              ["auto", "自动"],
+              ["manual", "手动"],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                className={state.range_mode === value ? "active" : ""}
+                aria-pressed={state.range_mode === value}
+                onClick={() =>
+                  patch({
+                    range_mode: value,
+                    vmin: data?.vmin ?? 0,
+                    vmax: data?.vmax ?? 1,
+                  })
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {state.range_mode === "manual" && (
+          <div className="field-row">
+            <label>
+              最小值{state.color_by === "amplitude" ? "" : " · ms"}
+              <Num
+                value={state.vmin ?? 0}
+                onChange={(vmin) => patch({ vmin })}
+              />
+            </label>
+            <label>
+              最大值{state.color_by === "amplitude" ? "" : " · ms"}
+              <Num
+                value={state.vmax ?? 1}
+                onChange={(vmax) => patch({ vmax })}
+              />
+            </label>
+          </div>
+        )}
+        {state.color_by === "amplitude" && state.range_mode === "auto" && (
+          <div className="section-number">
+            <span>裁剪百分位 %</span>
+            <Num
+              value={state.clip_percentile}
+              min={0.1}
+              max={100}
+              step={0.1}
+              onChange={(clip_percentile) => patch({ clip_percentile })}
+            />
+          </div>
+        )}
       </Group>
       <Group
         icon={<ScanLine size={16} />}
@@ -923,151 +1012,46 @@ export default function HorizonMap({
           </div>
         )}
       </Group>
-      <Group icon={<Palette size={16} />} title="地图色彩" defaultOpen={false}>
-        <ColormapSelect
-          label="地图色标"
-          value={state.colormap}
-          options={((state.color_by === "amplitude"
-            ? [
-                ["seismic", "Seismic"],
-                ["RdBu", "RdBu"],
-                ["coolwarm", "Coolwarm"],
-              ]
-            : state.color_by === "difference"
-              ? state.difference_type === "absolute"
-                ? [
-                    ["viridis", "Viridis"],
-                    ["turbo", "Turbo"],
-                    ["magma", "Magma"],
-                  ]
-                : [
-                    ["RdBu", "RdBu"],
-                    ["coolwarm", "Coolwarm"],
-                    ["seismic", "Seismic"],
-                  ]
-              : [
-                  ["petrel", "Petrel"],
-                  ["turbo", "Turbo"],
-                  ["viridis", "Viridis"],
-                  ["cividis", "Cividis"],
-                  ["jet", "Jet"],
-                ]) as [string, string][]).map(([value, label]) => ({ value, label, colors: mapColors[value] || [] }))}
-          reverse={state.reverse_colormap}
-          onChange={(colormap) => patch({ colormap })}
-          range={data ? `${data.vmin.toFixed(1)}–${data.vmax.toFixed(1)}${presentation.unit ? ` ${presentation.unit}` : ""}` : undefined}
-        />
-        <Toggle
-          label="反转色标"
-          checked={state.reverse_colormap}
-          onChange={(reverse_colormap) => patch({ reverse_colormap })}
-        />
-        <div className="map-range-mode">
-          <span>颜色范围</span>
-          <div
-            className="map-display-options"
-            role="group"
-            aria-label="颜色范围"
-          >
-            {[
-              ["auto", "自动"],
-              ["manual", "手动"],
-            ].map(([value, label]) => (
-              <button
-                key={value}
-                className={state.range_mode === value ? "active" : ""}
-                aria-pressed={state.range_mode === value}
-                onClick={() =>
-                  patch({
-                    range_mode: value,
-                    vmin: data?.vmin ?? 0,
-                    vmax: data?.vmax ?? 1,
-                  })
-                }
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-        {state.range_mode === "manual" && (
-          <div className="field-row">
-            <label>
-              最小值{state.color_by === "amplitude" ? "" : " · ms"}
-              <Num
-                value={state.vmin ?? 0}
-                onChange={(vmin) => patch({ vmin })}
-              />
-            </label>
-            <label>
-              最大值{state.color_by === "amplitude" ? "" : " · ms"}
-              <Num
-                value={state.vmax ?? 1}
-                onChange={(vmax) => patch({ vmax })}
-              />
-            </label>
-          </div>
-        )}
-        {state.color_by === "amplitude" && state.range_mode === "auto" && (
-          <div className="section-number">
-            <span>裁剪百分位 %</span>
-            <Num
-              value={state.clip_percentile}
-              min={0.1}
-              max={100}
-              step={0.1}
-              onChange={(clip_percentile) => patch({ clip_percentile })}
-            />
-          </div>
-        )}
-        <Toggle
-          label="显示色标尺"
-          checked={state.colorbar}
-          onChange={(colorbar) => patch({ colorbar })}
-        />
-      </Group>
       <Group icon={<ScanLine size={16} />} title="等值线" defaultOpen={false}>
-        <Toggle
-          label="显示等值线"
-          checked={state.contours}
-          onChange={(contours) => patch({ contours })}
-        />
         <fieldset
           className="map-contour-fields"
-          disabled={!state.contours || state.display === "filled"}
+          disabled={state.display === "filled"}
         >
-          <Toggle
-            label="自动间隔"
-            checked={state.interval_auto}
-            onChange={(interval_auto) => patch({ interval_auto })}
-          />
-          <div className="field-row">
-            {!state.interval_auto && (
-              <label>
-                间隔{state.color_by === "amplitude" ? "" : " · ms"}
-                <Num
-                  value={state.interval}
-                  min={0.01}
-                  step={1}
-                  onChange={(interval) => patch({ interval })}
-                />
-              </label>
-            )}
-            <label>
-              线宽 · pt
+          <label className="field">
+            线宽 · pt
+            <Num
+              label="等值线线宽（pt）"
+              value={state.line_width}
+              min={0.1}
+              max={6}
+              step={0.1}
+              onChange={(line_width) => patch({ line_width })}
+            />
+          </label>
+          <div className="check-row">
+            <Toggle
+              label="自动间隔"
+              checked={state.interval_auto}
+              onChange={(interval_auto) => patch({ interval_auto })}
+            />
+            <Toggle
+              label="显示数值标签"
+              checked={state.labels}
+              onChange={(labels) => patch({ labels })}
+            />
+          </div>
+          {!state.interval_auto && (
+            <label className="field">
+              间隔{state.color_by === "amplitude" ? "" : " · ms"}
               <Num
-                value={state.line_width}
-                min={0.1}
-                max={6}
-                step={0.1}
-                onChange={(line_width) => patch({ line_width })}
+                label="等值线间隔"
+                value={state.interval}
+                min={0.01}
+                step={1}
+                onChange={(interval) => patch({ interval })}
               />
             </label>
-          </div>
-          <Toggle
-            label="显示数值标签"
-            checked={state.labels}
-            onChange={(labels) => patch({ labels })}
-          />
+          )}
         </fieldset>
       </Group>
     </div>

@@ -6,7 +6,7 @@
   gap: 4px;
 }
 .colormap-label {
-  color: #475569;
+  color: var(--text-secondary);
   font-size: var(--ui-label-size);
   font-weight: 400;
 }
@@ -35,20 +35,20 @@
   background: var(--surface);
 }
 .colormap-trigger[aria-expanded="true"] {
-  border-color: #94a3b8;
+  border-color: var(--accent);
 }
 .colormap-trigger > svg {
   color: var(--text-muted);
 }
 .colormap-trigger:focus-visible {
-  outline: 2px solid #315f9e55;
+  outline: 2px solid var(--accent-focus);
   outline-offset: 2px;
 }
 .colormap-swatch {
   display: block;
   width: 64px;
   height: 11px;
-  border: 1px solid #18223014;
+  border: 1px solid #1f293714;
   border-radius: 3px;
   background-color: var(--surface-hover);
   /* Cover the border box once; repeating a padding-box gradient wraps the
@@ -63,7 +63,7 @@
   white-space: nowrap;
 }
 .colormap-range {
-  color: #64748b;
+  color: var(--text-muted);
   font-size: var(--ui-meta-size);
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -92,7 +92,8 @@
 }
 .colormap-option[aria-selected="true"] {
   background: var(--primary-soft);
+  box-shadow: inset 0 0 0 1px var(--primary-border);
 }
 .colormap-option > svg {
-  color: var(--primary);
+  color: var(--accent);
 }

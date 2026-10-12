@@ -22,8 +22,6 @@ import {
   Check,
   X,
   LoaderCircle,
-  PanelLeftClose,
-  PanelLeftOpen,
   Package,
 } from "lucide-react";
 
@@ -194,8 +192,6 @@ export default function App() {
     reset: resetProbe,
   } = useOriginalProbe();
 
-  const [sidebar, setSidebar] = useState(true);
-
   const [revision, setRevision] = useState(0);
   useModalFocus(deleteDialog, !!horizonToDelete, () => setHorizonToDelete(null), !busy);
 
@@ -203,8 +199,8 @@ export default function App() {
 
   const workspaceState = useMemo<WorkspaceState>(() => ({
     version: 1, view, map: mapWorkspace, settings, settings3D, dataset, selected,
-    bytes, geometryMode, sidebar, drag,
-  }), [view, mapWorkspace, settings, settings3D, dataset, selected, bytes, geometryMode, sidebar, drag]);
+    bytes, geometryMode, sidebar: true, drag,
+  }), [view, mapWorkspace, settings, settings3D, dataset, selected, bytes, geometryMode, drag]);
   const saveStatus = useWorkspacePersistence(workspaceState, project, hydrated, setError);
 
   function applyRecovered(result: WorkspaceResponse) {
@@ -231,7 +227,6 @@ export default function App() {
     setSelected(state.selected);
     setBytes(state.bytes);
     setGeometryMode(state.geometryMode);
-    setSidebar(state.sidebar);
     setDrag(state.drag);
     setRevision(v => v + 1);
     if (!result.issues.length) setNotice("已恢复上次工作");
@@ -777,7 +772,7 @@ export default function App() {
             height={24}
           />
 
-          <span className="version">V0.2</span>
+          <span className="version">V0.3</span>
         </div>
 
         <div className="top-status">
@@ -824,7 +819,22 @@ export default function App() {
         {/* Sidebar                                                          */}
         {/* ---------------------------------------------------------------- */}
 
-          <aside className="sidebar" hidden={!sidebar}>
+          <aside className="sidebar">
+            <div className="sidebar-view-switch">
+              <div className="view-mode-switch segmented" role="group" aria-label="视图模式">
+                {(["2d", "3d", "map"] as const).map(mode => (
+                  <button
+                    key={mode}
+                    disabled={!!busy || (mode !== "2d" && !meta) || (mode === "map" && !view.horizons.length)}
+                    className={view.view_mode === mode ? "active" : ""}
+                    aria-pressed={view.view_mode === mode}
+                    onClick={() => { setExportOpen(false); setView(v => ({ ...v, view_mode: mode })); }}
+                  >
+                    {mode === "map" ? "层位地图" : mode.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
             <DataPanel
               datasetName={dataset || datasetPlaceholder}
               progress={importProgress}
@@ -911,35 +921,6 @@ export default function App() {
               <button className="secondary" disabled={!!busy} onClick={() => relink(issue.horizon_id)}>重新定位</button>
             </div>
           ))}
-          <div className="breadcrumb">
-            <button
-              className="icon"
-              title="收起或展开控制面板"
-              aria-expanded={sidebar}
-              onClick={() => setSidebar((s) => !s)}
-            >
-              {sidebar ? (
-                <PanelLeftClose size={17} />
-              ) : (
-                <PanelLeftOpen size={17} />
-              )}
-            </button>
-            <div className="view-mode-switch segmented" role="group" aria-label="视图模式">
-              {(["2d", "3d", "map"] as const).map(mode => (
-                <button
-                  key={mode}
-                  disabled={!!busy || (mode !== "2d" && !meta) || (mode === "map" && !view.horizons.length)}
-                  className={view.view_mode === mode ? "active" : ""}
-                  aria-pressed={view.view_mode === mode}
-                  onClick={() => { setExportOpen(false); setView(v => ({ ...v, view_mode: mode })); }}
-                >
-                  {mode === "map" ? "层位地图" : mode.toUpperCase()}
-                </button>
-              ))}
-            </div>
-            {meta && <span className="workspace-name" title={meta.filename}>{dataset || datasetPlaceholder}</span>}
-          </div>
-
           {error && (
             <div role="alert" className="error">
               <span>{error}</span>

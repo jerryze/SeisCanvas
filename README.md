@@ -1,6 +1,17 @@
 # SeisCanvas
 
-SeisCanvas 是本地运行的地震数据可视化工具，支持 SEG-Y 地震体与层位数据导入、二维剖面浏览、三维切片与层位叠加，以及图片导出。前端使用 React、TypeScript 和 Vite，后端使用 FastAPI、segyio、NumPy 与 Matplotlib。
+SeisCanvas 是本地运行的地震数据可视化工具，支持 SEG-Y 地震体与层位数据导入、二维剖面浏览、三维切片与层位叠加、层位地图与差值分析，以及图片批量导出。前端使用 React、TypeScript 和 Vite，后端使用 FastAPI、segyio、NumPy 与 Matplotlib。
+
+当前版本：**V0.3（0.3.0）**。
+
+## V0.3 更新
+
+- 层位地图支持 TWT、沿层振幅和双层位差值，提供差值统计与独立的 A–B 地震剖面导出。
+- 自动保存工作状态和导出队列，刷新页面或重启后端后可恢复；批量导入层位支持预览与列映射。
+- 二维、三维、地图及 A–B 剖面使用内容适配导出，并支持图片暂存、预览、重命名和 ZIP 批量打包。
+- 2D / 3D / 层位地图切换位于侧栏顶部，侧栏固定显示；右侧主内容与顶栏保留 12px 间距。
+- 界面使用品牌深蓝 `#12345B` 和交互蓝 `#3478A8`，统一侧栏、弹窗及选中状态的配色。
+- 地图色彩设置直接位于“层位地图”分组中；色标反转和色标尺开关同行显示。等值线由地图显示方式统一控制，线宽同行设置，自动间隔和数值标签开关同行显示。
 
 ## 环境要求
 
@@ -127,12 +138,12 @@ npm run dev
 导出采用“暂存 → 队列管理 → 批量打包”流程：
 
 ```text
-调整视图 → Add to Export（按当前导出参数完成最终渲染）→ Export Queue 管理 → Export All 生成 ZIP
+调整视图 → 保存图件 → 保存到队列（按当前导出参数完成最终渲染）→ 导出队列管理 → 导出全部生成 ZIP
 ```
 
-- 每次 `Add to Export` 立即渲染最终文件并写入持久保存目录，不触发浏览器下载；加入后继续修改 inline、crossline、色标、层位、相机等设置都不会改变已暂存的图片。
-- 顶栏 `Export Queue · N` 打开导出队列，支持 Preview、Rename、Delete、Clear Queue、Export All；Preview 显示的正是 ZIP 中的最终文件。
-- `Export All` 只整理已渲染文件和生成 `export_manifest.json`，不重复执行 Matplotlib 或三维高分辨率渲染，最后打包为 `SeisCanvas_{Dataset}_Export_{YYYYMMDD_HHmm}.zip`（多数据集时为 `SeisCanvas_BatchExport_YYYYMMDD_HHmm.zip`）。
+- 每次“保存到队列”立即渲染最终文件并写入持久保存目录，不触发浏览器下载；加入后继续修改 inline、crossline、色标、层位、相机等设置都不会改变已暂存的图片。
+- 顶栏“导出队列 · N”打开导出队列，支持预览、重命名、删除、清空队列和导出全部；预览显示的正是 ZIP 中的最终文件。
+- “导出全部”只整理已渲染文件和生成 `export_manifest.json`，不重复执行 Matplotlib 或三维高分辨率渲染，最后打包为 `SeisCanvas_{Dataset}_Export_{YYYYMMDD_HHmm}.zip`（多数据集时为 `SeisCanvas_BatchExport_YYYYMMDD_HHmm.zip`）。
 - 文件名为自描述式科研命名 `{Dataset}_{View}_{Location/Target}_{Content}_{KeyStyle}_{Width}x{Height}px`，例如 `F3_2D_Inline_IL0350_Horizons6_Seismic_3000x1700px.png`；同名文件自动追加 `_02`、`_03`。
 - 层位差值图的文件名包含网格层位、`对比层位-vs-参考层位`、差值类型（`SignedDifference` / `AbsoluteError`）及绘制方式；差值方向固定为“对比 − 参考”。例如 `F3_HorizonMap_H1_Pred-vs-Ref_SignedDifference_FilledContour_RdBu_3000x2700px.png`。图内标题显示实际层位名称及减法方向，清单同时保存层位 ID 和名称。
 - 一个 ZIP 可混合 PNG、PDF、SVG，并按 `2D/Inline`、`2D/Crossline`、`3D`、`HorizonMap`、`HorizonProfile` 自动分类；根目录包含 `export_manifest.json`，记录数据集、完整 ViewState 与绘图参数（振幅范围、裁剪百分位、色标、层位颜色与线型、字体、三维相机、光照、透明度、垂向夸张、等值线间隔等）。
@@ -168,14 +179,16 @@ npm run dev
 - 光源、顶点和法线统一在世界坐标系中计算光照，并修正 TWT 反向轴造成的法线朝向翻转，避免凸起显示成凹陷；相机旋转及导出复用同一修正。
 - 三维预览与导出共用曲面着色和平滑、光照设置。
 
-## Horizon Map
+## 层位地图
 
-- 独立查看单个层位在 Crossline–Inline 平面的 TWT 分布，支持 Filled Map、Contour、Filled + Contour 三种模式。
-- 提供 Petrel、Turbo、Viridis、Cividis、Jet 色标及反转，支持自动范围和手动颜色范围裁剪。
-- 显示层位实际 TWT 范围，Colorbar 与当前色标和范围同步。
-- 等值线支持间隔、线宽、数值标签和显示开关；原始网格缺失区域保持为空。
+- 在 Crossline–Inline 平面查看层位 TWT、沿层振幅或双层位差值，支持填色、等值线、叠加三种显示方式。
+- 差值方向固定为“对比层位 − 参考层位”，支持有符号差值与绝对值，并提供 MAE、RMSE、Bias 和有效率统计。
+- 当前层位、颜色变量、地图色标和颜色范围直接显示在“层位地图”分组中。TWT 提供 Petrel、Turbo、Viridis、Cividis、Jet 色标；振幅和差值使用对应的发散或连续色标。
+- 色标范围随当前颜色变量同步显示，支持自动范围、手动范围裁剪、反转色标和色标尺开关。
+- “填色”关闭等值线，“等值线”和“叠加”开启等值线；等值线分组提供线宽、自动或手动间隔、数值标签设置，原始网格缺失区域保持为空。
 - 使用真实网格坐标与等比例坐标轴，支持缩放、平移、重置和悬停读取。
-- Matplotlib 根据当前地图状态与可见范围重新生成 PNG、PDF、SVG，支持毫米尺寸、300/600 DPI、字体、字号、标题、坐标轴标签和 Colorbar 设置。填色图栅格化，PDF/SVG 保留等值线、坐标轴和 Colorbar 等矢量内容。
+- A–B 剖面支持图上拾取或手动输入端点，复用二维地震显示色标和图面比例，并可独立加入导出队列。
+- 地图和 A–B 剖面采用内容适配导出，支持 PNG、PDF、SVG、字体、字号、标题、坐标轴标签与色标尺设置。填色图栅格化，PDF/SVG 保留等值线、坐标轴和色标尺等矢量内容。
 
 ## 大型 SEG-Y 文件
 

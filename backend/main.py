@@ -62,7 +62,7 @@ async def lifespan(_: FastAPI):
     export_queue.shutdown()
 
 
-app = FastAPI(title="SeisCanvas", lifespan=lifespan)
+app = FastAPI(title="SeisCanvas", version="0.3.0", lifespan=lifespan)
 # Local single-user application. Serialize mutations and section/export reads.
 lock = RLock()
 workspace = tempfile.TemporaryDirectory(prefix="seiscanvas-")
