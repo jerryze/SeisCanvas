@@ -34,15 +34,15 @@
   height: 100%;
   flex-shrink: 0;
   overflow: hidden auto;
-  scrollbar-width: thin;
-  scrollbar-color: #cbd5e1 transparent;
-  scrollbar-gutter: stable;
+  scrollbar-width: none;
+  scrollbar-gutter: auto;
   border-right: 1px solid var(--panel-divider);
   background: var(--surface);
   color: var(--panel-label);
   font-size: var(--panel-label-size);
   line-height: 1.4;
 }
+.sidebar::-webkit-scrollbar { display: none; }
 .sidebar .sidebar-view-switch { position: sticky; top: 0; z-index: 2; padding: 10px var(--panel-padding); border-bottom: 1px solid var(--panel-divider); background: var(--surface); }
 .sidebar .view-mode-switch { width: 100%; margin: 0; }
 
