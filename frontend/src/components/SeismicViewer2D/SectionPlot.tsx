@@ -14,6 +14,8 @@ type Props = {
   /** Ask the backend for the original amplitude under the cursor. */
   onProbe: (request: ProbeRequest) => void;
   onError: (message: string) => void;
+  /** Usable CSS x-axis width, after Plotly applies the margins/aspect lock. */
+  onViewportWidth: (width: number) => void;
 };
 
 /** The Plotly container for one 2D section; owns rendering and plot events. */
@@ -25,12 +27,20 @@ export default function SectionPlot({
   onPatch,
   onProbe,
   onError,
+  onViewportWidth,
 }: Props) {
   const plot = useRef<HTMLDivElement>(null);
   const viewRef = useRef(view);
   viewRef.current = view;
-  const latest = useRef({ onPatch, onProbe, onError });
-  latest.current = { onPatch, onProbe, onError };
+  const latest = useRef({ onPatch, onProbe, onError, onViewportWidth });
+  latest.current = { onPatch, onProbe, onError, onViewportWidth };
+
+  function reportViewportWidth(el: any) {
+    const width = Math.round(el._fullLayout?.xaxis?._length);
+    if (Number.isFinite(width) && width > 0) {
+      latest.current.onViewportWidth(width);
+    }
+  }
 
   useEffect(() => {
     const el = plot.current as any;
@@ -50,6 +60,7 @@ export default function SectionPlot({
     )
       .then(() => {
         if (disposed) return;
+        reportViewportWidth(el);
 
         el.removeAllListeners?.("plotly_relayout");
         el.removeAllListeners?.("plotly_hover");
@@ -119,13 +130,16 @@ export default function SectionPlot({
   useEffect(() => {
     const el = plot.current;
     if (!el) return;
+    let disposed = false;
     const ob = new ResizeObserver(() => {
       if ((el as any).data) {
-        Plotly.Plots.resize(el);
+        Promise.resolve(Plotly.Plots.resize(el))
+          .then(() => { if (!disposed) reportViewportWidth(el); })
+          .catch(e => { if (!disposed) latest.current.onError(String(e)); });
       }
     });
     ob.observe(el);
-    return () => ob.disconnect();
+    return () => { disposed = true; ob.disconnect(); };
   }, []);
 
   useEffect(() => {

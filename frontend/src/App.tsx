@@ -85,6 +85,11 @@ const initial: VS = {
 
     reverse_polarity: false,
 
+    wiggle: false,
+    variable_area: false,
+    wiggle_gain: 1,
+    variable_area_color: "#000000",
+
     // Interactive browsing defaults: bilinear at viewport resolution.
     interpolation: "bilinear",
     adaptive_resolution: true,
@@ -136,6 +141,7 @@ export default function App() {
 
   const sceneRef = useRef<Scene3DHandle>(null);
   const plotWrap = useRef<HTMLDivElement>(null);
+  const traceViewportWidthRef = useRef<number | null>(null);
   const deleteDialog = useRef<HTMLDivElement>(null);
 
   const requestId = useRef(0);
@@ -153,6 +159,7 @@ export default function App() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [view, setView] = useState<VS>(initial);
   const [section, setSection] = useState<Section | null>(null);
+  const [traceViewportWidth, setTraceViewportWidth] = useState<number | null>(null);
 
   const viewRef = useRef(view);
 
@@ -500,6 +507,16 @@ export default function App() {
   /* Request 2D section                                                       */
   /* ------------------------------------------------------------------------ */
 
+  // CSS plot width controls trace density; it is transient and never persisted
+  // with the workspace, nor multiplied by device/export pixel resolution.
+  const overlayViewportWidth = view.seismic.wiggle || view.seismic.variable_area
+    ? traceViewportWidth : null;
+
+  function measuredTraceViewportWidth(width: number) {
+    traceViewportWidthRef.current = width;
+    setTraceViewportWidth(current => current === width ? current : width);
+  }
+
   useEffect(() => {
     if (!meta || view.view_mode !== "2d") {
       setLoading(false);
@@ -526,6 +543,7 @@ export default function App() {
             quality: "interactive",
             target_width: box ? Math.round(box.clientWidth * ratio) : null,
             target_height: box ? Math.round(box.clientHeight * ratio) : null,
+            trace_viewport_width: traceViewportWidthRef.current,
           }),
           signal: abort.signal,
         });
@@ -562,10 +580,15 @@ export default function App() {
     view.seismic.vmin,
     view.seismic.vmax,
     view.seismic.reverse_polarity,
+    view.seismic.wiggle,
+    view.seismic.variable_area,
+    view.seismic.wiggle_gain,
+    view.seismic.variable_area_color,
     view.seismic.interpolation,
     view.seismic.adaptive_resolution,
     view.x_range,
     view.time_range,
+    overlayViewportWidth,
     revision,
   ]);
 
@@ -689,7 +712,11 @@ export default function App() {
   function add2DToQueue() {
     setExportOpen(false);
     task("正在保存二维图件…", async () => {
-      await queueItem({ kind: "2d", dataset, state: view, settings });
+      await queueItem({
+        kind: "2d", dataset,
+        state: { ...view, trace_viewport_width: traceViewportWidthRef.current },
+        settings,
+      });
     });
   }
 
@@ -1031,6 +1058,7 @@ export default function App() {
                       onPatch={setView}
                       onProbe={runProbe}
                       onError={setError}
+                      onViewportWidth={measuredTraceViewportWidth}
                     />
                   ) : (
                     <div className="empty">

@@ -35,6 +35,11 @@ class Seismic(BaseModel):
     interpolation: Literal["nearest", "bilinear", "bicubic"] = "bilinear"
     #: Match the render grid to the viewport pixels instead of a fixed grid.
     adaptive_resolution: bool = True
+    #: Optional traditional trace overlays; shared amplitudes and colour raster.
+    wiggle: bool = False
+    variable_area: bool = False
+    wiggle_gain: float = Field(1.0, ge=0, le=100)
+    variable_area_color: str = Field("#000000", pattern=r"^#[0-9a-fA-F]{6}$")
 
 
 class Line(BaseModel):
@@ -72,6 +77,8 @@ class ViewState(BaseModel):
     x_range: tuple[float, float] | None = None
     time_range: tuple[float, float] | None = None
     aspect_ratio_2d: tuple[float, float] | None = None
+    #: Inner 2D axes width in CSS pixels, independent of export resolution/DPI.
+    trace_viewport_width: float | None = Field(None, gt=0, le=16000)
     seismic: Seismic = Field(default_factory=Seismic)
     horizons: list[HorizonStyle] = Field(default_factory=list)
 

@@ -10,7 +10,7 @@ const { initialMapWorkspace, initialExport3D, reconcileMapWorkspace, restoreStat
 function defaults() {
   return {
     version: 1,
-    view: { view_mode: '2d', seismic: { interpolation: 'bilinear', colormap: 'seismic' }, scene: { camera: { eye: { x: 1, y: 1, z: 1 } }, quality: 256 }, horizons: [] },
+    view: { view_mode: '2d', seismic: { interpolation: 'bilinear', colormap: 'seismic', wiggle: false, variable_area: false, wiggle_gain: 1, variable_area_color: '#000000' }, scene: { camera: { eye: { x: 1, y: 1, z: 1 } }, quality: 256 }, horizons: [] },
     map: initialMapWorkspace(), settings: { format: 'png', long_edge: 3000 }, settings3D: initialExport3D,
     dataset: '', selected: '', bytes: { il: 189, xl: 21 }, geometryMode: 'auto', sidebar: true, drag: 'zoom',
   };
@@ -50,11 +50,23 @@ test('keeps new defaults and clears unavailable IDs without mutating saved state
   const before = structuredClone(saved);
   const restored = restoreState(base, saved, [{ id: 'remaining', name: 'H1' }]);
   assert.equal(restored.view.seismic.interpolation, 'bilinear');
+  assert.equal(restored.view.seismic.wiggle, false);
+  assert.equal(restored.view.seismic.variable_area, false);
+  assert.equal(restored.view.seismic.wiggle_gain, 1);
+  assert.equal(restored.view.seismic.variable_area_color, '#000000');
   assert.equal(restored.map.state.horizon, 'remaining');
   assert.equal(restored.map.state.difference_reference, null);
   assert.equal(restored.map.state.difference_comparison, 'remaining');
   assert.equal(restored.selected, 'remaining');
   assert.deepEqual(saved, before);
+});
+
+test('restores independent waveform and area settings with the existing seismic state', () => {
+  const base = defaults();
+  const saved = structuredClone(base);
+  saved.view.seismic = { colormap: 'petrel', wiggle: false, variable_area: true, wiggle_gain: 2.5, variable_area_color: '#123456' };
+  const restored = restoreState(base, saved, []);
+  assert.deepEqual(restored.view.seismic, { ...base.view.seismic, ...saved.view.seismic });
 });
 
 test('a quick-refresh draft only applies to its exact project and server revision', () => {

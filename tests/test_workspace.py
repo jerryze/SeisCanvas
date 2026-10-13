@@ -135,6 +135,21 @@ def test_uploaded_sources_survive_restart(cube):
     assert server.horizons[styles[0]["id"]].path.is_file()
 
 
+def test_trace_display_settings_restore_after_restart(cube):
+    client, result = open_project(cube)
+    state = drawing_state([])
+    state["view"]["view_mode"] = "2d"
+    state["view"]["seismic"].update({
+        "wiggle": True, "variable_area": True, "wiggle_gain": 2.5,
+        "variable_area_color": "#224466",
+    })
+    assert save(client, result, state).status_code == 200
+    restart()
+    restored = client.get("/api/workspace").json()
+    assert restored["issues"] == []
+    assert restored["state"]["view"]["seismic"] == state["view"]["seismic"]
+
+
 def test_rename_delete_and_delayed_save_do_not_resurrect_old_horizons(cube, tmp_path, monkeypatch):
     client, result = open_project(cube)
     styles, _ = import_horizons(client, tmp_path, monkeypatch)

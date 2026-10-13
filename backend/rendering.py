@@ -2,9 +2,13 @@
 
 import numpy as np
 from matplotlib.figure import Figure
+from matplotlib.collections import LineCollection, PolyCollection
 from backend import resample
 from backend.figure_export import figure_size, save_figure
 from backend.style import get_cmap, font_family
+from backend.trace_overlay import (
+    WIGGLE_WIDTH, aligned_raster, build_trace_overlay, coordinate_edges, overlays_enabled,
+)
 
 #: A viewer-sized render grid, used when an export reuses the view resolution.
 VIEW_TARGET = (1600, 1000)
@@ -53,6 +57,11 @@ def display_raster(x, time, z, state, settings):
             budget=resample.MAX_RENDER_PIXELS,
             max_upscale=EXPORT_MAX_UPSCALE,
         )
+    if overlays_enabled(state.seismic):
+        raster, _, _, extent = aligned_raster(
+            x[x0:x1 + 1], time[t0:t1 + 1], window, width, height, settings.interpolation
+        )
+        return raster, extent, (native_width, native_height)
     raster = resample.resample(window, width, height, settings.interpolation)
     extent = (
         float(x[x0]) - 0.5,
@@ -69,15 +78,35 @@ def amplitude(z, s):
         if s.vmin is None or s.vmax is None or s.vmin >= s.vmax:
             raise ValueError("Manual amplitude minimum must be less than maximum.")
         lo, hi = s.vmin, s.vmax
-    elif s.symmetric:
-        hi = float(np.percentile(np.abs(z), s.clip_percentile)) or 1.0
-        lo = -hi
     else:
-        tail = (100 - s.clip_percentile) / 2
-        lo, hi = np.percentile(z, [tail, 100 - tail]).tolist()
-        if hi == lo:
-            lo, hi = lo - 1, hi + 1
+        # Survey data is normally finite; avoid copying that full section.
+        finite = z if np.isfinite(z).all() else z[np.isfinite(z)]
+        if not finite.size:
+            finite = np.array([0.0])
+        if s.symmetric:
+            hi = float(np.percentile(np.abs(finite), s.clip_percentile)) or 1.0
+            lo = -hi
+        else:
+            tail = (100 - s.clip_percentile) / 2
+            lo, hi = np.percentile(finite, [tail, 100 - tail]).tolist()
+            if hi == lo:
+                lo, hi = lo - 1, hi + 1
     return z, lo, hi
+
+
+def _path_segments(path):
+    """Convert shared JSON paths to vector collection segments."""
+    segments, points = [], []
+    for x, time in zip(path["x"], path["time"]):
+        if x is None or time is None:
+            if points:
+                segments.append(points)
+                points = []
+        else:
+            points.append((x, time))
+    if points:
+        segments.append(points)
+    return segments
 
 
 def render(survey, horizons, state, settings):
@@ -85,11 +114,22 @@ def render(survey, horizons, state, settings):
     # Amplitude clipping always comes from the original section: the colour
     # range must not change with the interpolation mode or the zoom window.
     z, lo, hi = amplitude(z, state.seismic)
+    trace_display = overlays_enabled(state.seismic)
+    raster_sampler = None
     if settings.canvas == "fit":
         x0, x1 = window_indices(x, state.x_range)
         t0, t1 = window_indices(t, state.time_range)
         raster = z[t0:t1 + 1, x0:x1 + 1]
         extent = (float(x[x0]) - .5, float(x[x1]) + .5, float(t[t0]) - .5, float(t[t1]) + .5)
+        if trace_display:
+            native = raster
+            visible_x, visible_t = x[x0:x1 + 1], t[t0:t1 + 1]
+            raster_sampler = lambda width, height: aligned_raster(
+                visible_x, visible_t, native, width, height, settings.interpolation
+            )[0]
+            raster, _, _, extent = aligned_raster(
+                visible_x, visible_t, native, native.shape[1], native.shape[0], settings.interpolation
+            )
     else:
         raster, extent, _ = display_raster(x, t, z, state, settings)
     ratio = (state.aspect_ratio_2d[0] / state.aspect_ratio_2d[1]
@@ -126,7 +166,27 @@ def render(survey, horizons, state, settings):
         aspect="auto",
         interpolation=blend,
         rasterized=True,
+        zorder=0,
     )
+    if trace_display:
+        overlay = build_trace_overlay(x, t, z, state, lo, hi)
+        if state.seismic.variable_area:
+            ax.add_collection(PolyCollection(
+                _path_segments(overlay["variable_area"]),
+                facecolors=state.seismic.variable_area_color,
+                edgecolors="none", linewidths=0, zorder=1,
+            ), autolim=False)
+        if state.seismic.wiggle:
+            ax.add_collection(LineCollection(
+                _path_segments(overlay["wiggle"]),
+                colors="#000000", linewidths=WIGGLE_WIDTH, zorder=2,
+            ), autolim=False)
+        # Axes furniture is drawn last; overlays always sit below horizons.
+        ax.set_axisbelow(False)
+        ax.xaxis.set_zorder(4)
+        ax.yaxis.set_zorder(4)
+        for spine in ax.spines.values():
+            spine.set_zorder(4)
     dash = {"solid": "-", "dashed": "--", "dotted": ":", "dashdot": "-."}
     markers = {
         "circle": "o",
@@ -150,6 +210,7 @@ def render(survey, horizons, state, settings):
                     color="black",
                     lw=h.line.width + 2 * h.outline.width,
                     ls=dash[h.line.style],
+                    zorder=3 if trace_display else 2,
                 )
             ax.plot(
                 pts[:, 0],
@@ -157,6 +218,7 @@ def render(survey, horizons, state, settings):
                 color=h.color,
                 lw=h.line.width,
                 ls=dash[h.line.style],
+                zorder=3 if trace_display else 2,
             )
         if h.marker.visible and h.marker.shape != "none":
             ax.plot(
@@ -168,8 +230,9 @@ def render(survey, horizons, state, settings):
                 color=h.color,
                 markeredgecolor="black" if h.outline.enabled else h.color,
                 markeredgewidth=h.outline.width if h.outline.enabled else 0,
+                zorder=3 if trace_display else 2,
             )
-    ax.set_xlim(state.x_range or [float(x[0]) - 0.5, float(x[-1]) + 0.5])
+    ax.set_xlim(state.x_range or (coordinate_edges(x) if trace_display else [float(x[0]) - 0.5, float(x[-1]) + 0.5]))
     tr = state.time_range or [float(t[0]), float(t[-1])]
     ax.set_ylim(max(tr), min(tr))
     if not settings.show_axes:
@@ -188,4 +251,5 @@ def render(survey, horizons, state, settings):
     ]:
         txt.set_fontfamily(font_family(settings.font))
         txt.set_fontsize(settings.font_size)
-    return save_figure(fig, settings, [(image, raster)])
+    rasters = [(image, native, raster_sampler)] if raster_sampler else [(image, raster)]
+    return save_figure(fig, settings, rasters)

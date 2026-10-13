@@ -1,7 +1,7 @@
 import { Section, VS } from "../../types";
 import { PLOT_DASH, SYMBOLS_2D } from "../plotStyle";
 
-/** Plotly traces for one 2D section: the amplitude raster plus horizon lines. */
+/** Layer order: color raster, variable area, wiggle, then horizon lines. */
 export function buildTraces(section: Section, view: VS, colors: any[]): any[] {
   const s = view.seismic;
 
@@ -33,6 +33,40 @@ export function buildTraces(section: Section, view: VS, colors: any[]): any[] {
         `<extra></extra>`,
     },
   ];
+
+  // Overlay coordinates are computed from the original samples by the backend;
+  // reuse them as supplied so raster interpolation never shifts a trace or
+  // applies clipping/polarity/gain a second time.
+  const overlay = section.trace_overlay;
+  if (s.variable_area && overlay?.variable_area.x.length) {
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x: overlay.variable_area.x,
+      y: overlay.variable_area.time,
+      fill: "toself",
+      fillcolor: s.variable_area_color,
+      line: { color: s.variable_area_color, width: 0, simplify: false },
+      showlegend: false,
+      hoverinfo: "skip",
+      connectgaps: false,
+      cliponaxis: true,
+    });
+  }
+  if (s.wiggle && overlay?.wiggle.x.length) {
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x: overlay.wiggle.x,
+      y: overlay.wiggle.time,
+      // 0.8 CSS px equals the export renderer's 0.6 pt stroke at 96 dpi.
+      line: { color: "#000000", width: 0.8, simplify: false },
+      showlegend: false,
+      hoverinfo: "skip",
+      connectgaps: false,
+      cliponaxis: true,
+    });
+  }
 
   for (const h of view.horizons) {
     const pts = section.horizons[h.id] || [];
@@ -96,10 +130,13 @@ export function buildTraces(section: Section, view: VS, colors: any[]): any[] {
 
 /** Plotly layout for one 2D section, honouring ranges and the aspect lock. */
 export function buildLayout(section: Section, view: VS, drag: "zoom" | "pan") {
+  const overlayEnabled = view.seismic.wiggle || view.seismic.variable_area;
+  const extent = overlayEnabled ? section.raster_extent : null;
   const xr =
-    view.x_range || [section.x[0] - 0.5, section.x.at(-1)! + 0.5];
+    view.x_range || (extent ? [extent[0], extent[1]] : [section.x[0] - 0.5, section.x.at(-1)! + 0.5]);
 
-  const tr = view.time_range || [section.time[0], section.time.at(-1)!];
+  const tr = view.time_range || (overlayEnabled && section.window?.time_range)
+    || [section.time[0], section.time.at(-1)!];
 
   const inline = view.view_type === "inline";
 
@@ -115,6 +152,7 @@ export function buildLayout(section: Section, view: VS, drag: "zoom" | "pan") {
     },
     dragmode: drag,
     xaxis: {
+      layer: "above traces",
       title: { text: inline ? "Crossline" : "Inline", standoff: 18 },
       constrain: "domain",
       range: [...xr],
@@ -125,6 +163,7 @@ export function buildLayout(section: Section, view: VS, drag: "zoom" | "pan") {
       ticks: "outside",
     },
     yaxis: {
+      layer: "above traces",
       constrain: "domain",
       scaleanchor: view.aspect_ratio_2d ? "x" : false,
       scaleratio: view.aspect_ratio_2d

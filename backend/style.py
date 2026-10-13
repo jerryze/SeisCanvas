@@ -1,16 +1,27 @@
 """Viewer and publication styling shared by every renderer: colormaps and fonts."""
 
-import matplotlib
+import json
+from pathlib import Path
 
+import matplotlib
 matplotlib.use("Agg")
 from matplotlib import colormaps
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, ListedColormap
+
+# Keep every extracted sample exactly; the reference's amplitude range is
+# metadata, while the viewer continues to control clipping for each dataset.
+REFERENCE_SEISMIC = json.loads(
+    (Path(__file__).with_name("colormaps") / "reference_seismic.json").read_text(encoding="utf-8")
+)["colorscale"]
 
 # A muted diverging ramp matching the supplied Pos / 0 / Neg reference:
 # positive amplitudes are red, zero is near-white, and negative amplitudes are blue.
 # The stops are sampled from that reference colorbar (every 5% of its length), so
 # the ramp reproduces its curved blue shoulder and dark, slightly desaturated ends.
 CUSTOM_CMAPS = {
+    "reference_seismic": ListedColormap(
+        [color for _, color in REFERENCE_SEISMIC], name="reference_seismic"
+    ),
     "red_white_blue": LinearSegmentedColormap.from_list(
         "red_white_blue",
         [
@@ -77,6 +88,7 @@ CMAPS = [
     "binary",
     "seismic",
     "red_white_blue",
+    "reference_seismic",
     "petrel",
     "RdBu",
     "coolwarm",

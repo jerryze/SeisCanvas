@@ -168,6 +168,41 @@ def test_duplicate_names_get_a_suffix_and_deleted_files_are_removed(client):
     assert listing["count"] == 1 and listing["items"][0]["index"] == 1
 
 
+@pytest.mark.parametrize("format", ["png", "svg", "pdf"])
+def test_2d_trace_overlays_survive_queue_and_archive(client, format):
+    seismic = {
+        "wiggle": True, "variable_area": True, "wiggle_gain": 1.7,
+        "variable_area_color": "#123456", "reverse_polarity": True,
+        "clip_mode": "manual", "vmin": -1500, "vmax": 1500,
+    }
+    state = {
+        "seismic": seismic, "trace_viewport_width": 480,
+        "x_range": [30, 38], "time_range": [201, 211],
+    }
+    response = client.post("/api/export/queue", json=queue_body(
+        state=state,
+        settings={"format": format, "canvas": "fit", "long_edge": 600},
+    ))
+    assert response.status_code == 200, response.text
+    item = response.json()
+    for key, value in seismic.items():
+        assert item["view_state"]["seismic"][key] == value
+    assert item["view_state"]["trace_viewport_width"] == 480
+    original = client.get(f"/api/export/queue/{item['id']}/file").content
+    assert original.startswith({"png": b"\x89PNG", "pdf": b"%PDF", "svg": b"<?xml"}[format])
+
+    # Queue figures retain the exact settings and rendered bytes at add time.
+    client.post("/api/section", json={"section_number": 12, "seismic": {"wiggle": False}})
+    archived = client.post("/api/export/archive")
+    assert archived.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(archived.content)) as archive:
+        assert archive.read(f"2D/Inline/{item['filename']}") == original
+        figure = json.loads(archive.read("export_manifest.json"))["figures"][0]
+        for key in ("wiggle", "variable_area", "wiggle_gain", "variable_area_color"):
+            assert figure[key] == seismic[key]
+        assert figure["trace_viewport_width"] == 480
+
+
 def test_crossline_and_horizon_content_naming(client):
     body = queue_body(
         state={"view_type": "crossline", "section_number": 30},

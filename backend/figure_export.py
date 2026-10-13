@@ -22,7 +22,7 @@ def figure_size(settings, ratio):
 
 
 def save_figure(fig, settings, rasters=(), colorbars=()):
-    """rasters contains (image artist, native visible data), never previews."""
+    """Rasters are (artist, native data[, coordinate-aware sampler])."""
     if settings.canvas == "fixed":
         out = io.BytesIO()
         fig.savefig(out, format=settings.format, dpi=settings.dpi)
@@ -52,10 +52,11 @@ def save_figure(fig, settings, rasters=(), colorbars=()):
     height = settings.long_edge if bbox.height >= bbox.width else max(1, math.ceil(bbox.height * dpi))
     # Round the shorter edge outwards; this is padding, never image resizing.
     bbox = Bbox.from_bounds(bbox.x0, bbox.y0, width / dpi, height / dpi)
-    for artist, native in rasters:
+    for raster in rasters:
+        artist, native = raster[:2]
         box = artist.axes.get_window_extent().transformed(fig.dpi_scale_trans.inverted())
         w, h = max(1, math.ceil(box.width * dpi)), max(1, math.ceil(box.height * dpi))
-        artist.set_data(resample.resample(native, w, h, settings.interpolation))
+        artist.set_data(raster[2](w, h) if len(raster) > 2 else resample.resample(native, w, h, settings.interpolation))
         artist.set_interpolation("none")
     transparent = settings.format == "png" and settings.background == "transparent"
     out = io.BytesIO()

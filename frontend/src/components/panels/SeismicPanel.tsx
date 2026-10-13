@@ -38,6 +38,51 @@ export default function SeismicPanel({
         />
       </div>
 
+      {view.view_mode === "2d" && (
+        <details className="subsettings">
+          <SubsectionSummary
+            title="波形与变面积"
+            hint={s.wiggle || s.variable_area ? `Gain ${s.wiggle_gain}` : "关闭"}
+            tooltip="叠加原始地震道；道间隔随缩放自动调整"
+          />
+          <div className="subsettings-body">
+            <Toggle
+              label="波形（Wiggle）"
+              checked={s.wiggle}
+              onChange={(wiggle) => onSeismic({ wiggle })}
+            />
+            <Toggle
+              label="正振幅填充（Variable Area）"
+              checked={s.variable_area}
+              onChange={(variable_area) => onSeismic({ variable_area })}
+            />
+            <label className="section-number">
+              <span>增益 Gain</span>
+              <Num
+                label="波形与填充增益"
+                title="横向振幅缩放，1.0 为默认增益"
+                value={s.wiggle_gain}
+                min={0}
+                max={100}
+                step={0.1}
+                disabled={!s.wiggle && !s.variable_area}
+                onChange={(wiggle_gain) => onSeismic({ wiggle_gain })}
+              />
+            </label>
+            <label className="field">
+              填充颜色
+              <input
+                type="color"
+                aria-label="变面积填充颜色"
+                value={s.variable_area_color}
+                disabled={!s.variable_area}
+                onChange={(e) => onSeismic({ variable_area_color: e.target.value })}
+              />
+            </label>
+          </div>
+        </details>
+      )}
+
       <details className="subsettings">
         <SubsectionSummary
           title="振幅与采样"

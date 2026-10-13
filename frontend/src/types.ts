@@ -26,6 +26,11 @@ export type SS = {
   vmin: number | null;
   vmax: number | null;
   reverse_polarity: boolean;
+  /** Original-trace overlays for 2D sections, independent of the color raster. */
+  wiggle: boolean;
+  variable_area: boolean;
+  wiggle_gain: number;
+  variable_area_color: string;
   /** Display interpolation: bilinear while browsing, bicubic for figures. */
   interpolation: Interpolation;
   /** Match the render grid to the viewport pixels instead of a fixed grid. */
@@ -59,6 +64,16 @@ export type Section = {
   vmin: number;
   vmax: number;
   horizons: Record<string, number[][]>;
+  /** Backend paths use original trace samples, including clipping and polarity. */
+  trace_overlay?: {
+    wiggle: { x: (number | null)[]; time: (number | null)[] };
+    variable_area: { x: (number | null)[]; time: (number | null)[] };
+    trace_step: number;
+    trace_count: number;
+    viewport_width: number;
+  } | null;
+  /** Native sample-cell bounds for the coordinate-aligned overlay raster. */
+  raster_extent?: [number, number, number, number];
   /** Display raster bookkeeping: the source window and the render grid. */
   native_shape?: number[];
   render_shape?: number[];
