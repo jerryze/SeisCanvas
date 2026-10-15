@@ -10,7 +10,7 @@ const { initialMapWorkspace, initialExport3D, reconcileMapWorkspace, restoreStat
 function defaults() {
   return {
     version: 1,
-    view: { view_mode: '2d', seismic: { interpolation: 'bilinear', colormap: 'seismic', wiggle: false, variable_area: false, wiggle_gain: 1, variable_area_color: '#000000' }, scene: { camera: { eye: { x: 1, y: 1, z: 1 } }, quality: 256 }, horizons: [] },
+    view: { view_mode: '2d', seismic: { interpolation: 'bilinear', colormap: 'seismic', wiggle: false, variable_area: false, wiggle_gain: 1, variable_area_color: '#000000', background_interpolation: true, wiggle_interpolation: true }, scene: { camera: { eye: { x: 1, y: 1, z: 1 } }, quality: 256 }, horizons: [] },
     map: initialMapWorkspace(), settings: { format: 'png', long_edge: 3000 }, settings3D: initialExport3D,
     dataset: '', selected: '', bytes: { il: 189, xl: 21 }, geometryMode: 'auto', sidebar: true, drag: 'zoom',
   };
@@ -26,6 +26,12 @@ test('restores camera, difference pair, zoom, profile endpoints and export setti
   saved.map.profileOn = true;
   saved.map.profileA = [10, 20];
   saved.map.profileB = [12, 30];
+  saved.map.activeView = 'section';
+  saved.map.profileDrag = 'pan';
+  saved.map.profileXRange = [0, 15];
+  saved.map.profileTimeRange = [220, 400];
+  saved.map.profileAspectRatio = 3;
+  saved.map.profileSettings.long_edge = 1800;
   saved.settings.format = 'pdf';
   saved.settings3D.format = 'svg';
   saved.selected = 'ref';
@@ -37,6 +43,40 @@ test('restores camera, difference pair, zoom, profile endpoints and export setti
   assert.equal(restored.view.horizons[0].lighting, false);
   assert.equal(restored.settings.format, 'pdf');
   assert.equal(restored.settings3D.format, 'svg');
+});
+
+test('upgrades split-pane state to the map tab while removing obsolete height state', () => {
+  const base = defaults(), saved = structuredClone(base);
+  delete saved.map.activeView;
+  delete saved.map.profileDrag;
+  delete saved.map.profileAspectRatio;
+  saved.map.profileShare = 70;
+  saved.map.profileOn = true;
+  saved.map.profileA = [10, 30];
+  saved.map.profileB = [12, 38];
+  saved.map.profileXRange = [0, 8];
+  saved.map.profileTimeRange = [200, 212];
+  const before = structuredClone(saved);
+  const restored = restoreState(base, saved, []);
+  assert.equal(restored.map.activeView, 'map');
+  assert.equal(restored.map.profileDrag, 'zoom');
+  assert.equal(restored.map.profileAspectRatio, null);
+  assert.equal('profileShare' in restored.map, false);
+  for (const field of ['profileOn', 'profileA', 'profileB', 'profileXRange', 'profileTimeRange', 'profileSettings'])
+    assert.deepEqual(restored.map[field], saved.map[field]);
+  assert.deepEqual(saved, before);
+});
+
+test('A–B aspect is independent of the 2D aspect and rejects invalid persisted ratios', () => {
+  const base = defaults(), saved = structuredClone(base);
+  saved.view.aspect_ratio_2d = [2, 1];
+  for (const ratio of [.02, 1, 3, 50, null, NaN, Infinity, 0, -1, 100, '2']) {
+    saved.map.profileAspectRatio = ratio;
+    const restored = restoreState(base, saved, []);
+    const expected = typeof ratio === 'number' && Number.isFinite(ratio) && ratio >= .02 && ratio <= 50 ? ratio : null;
+    assert.equal(restored.map.profileAspectRatio, expected);
+    assert.deepEqual(restored.view.aspect_ratio_2d, [2, 1]);
+  }
 });
 
 test('keeps new defaults and clears unavailable IDs without mutating saved state', () => {
@@ -54,6 +94,8 @@ test('keeps new defaults and clears unavailable IDs without mutating saved state
   assert.equal(restored.view.seismic.variable_area, false);
   assert.equal(restored.view.seismic.wiggle_gain, 1);
   assert.equal(restored.view.seismic.variable_area_color, '#000000');
+  assert.equal(restored.view.seismic.background_interpolation, true);
+  assert.equal(restored.view.seismic.wiggle_interpolation, true);
   assert.equal(restored.map.state.horizon, 'remaining');
   assert.equal(restored.map.state.difference_reference, null);
   assert.equal(restored.map.state.difference_comparison, 'remaining');
@@ -61,12 +103,15 @@ test('keeps new defaults and clears unavailable IDs without mutating saved state
   assert.deepEqual(saved, before);
 });
 
-test('restores independent waveform and area settings with the existing seismic state', () => {
+test('restores independent waveform, area and interpolation settings with the existing seismic state', () => {
   const base = defaults();
   const saved = structuredClone(base);
   saved.view.seismic = { colormap: 'petrel', wiggle: false, variable_area: true, wiggle_gain: 2.5, variable_area_color: '#123456' };
-  const restored = restoreState(base, saved, []);
-  assert.deepEqual(restored.view.seismic, { ...base.view.seismic, ...saved.view.seismic });
+  for (const [background_interpolation, wiggle_interpolation] of [[false, true], [true, false], [false, false]]) {
+    Object.assign(saved.view.seismic, { background_interpolation, wiggle_interpolation });
+    const restored = restoreState(base, saved, []);
+    assert.deepEqual(restored.view.seismic, { ...base.view.seismic, ...saved.view.seismic });
+  }
 });
 
 test('a quick-refresh draft only applies to its exact project and server revision', () => {
@@ -77,6 +122,23 @@ test('a quick-refresh draft only applies to its exact project and server revisio
   assert.equal(readDraft(storage, 'project-1', 5), null);
   assert.equal(readDraft({ getItem: () => '{broken' }, 'project-1', 4), null);
   assert.equal(readDraft({ getItem: () => { throw new Error('disabled'); } }, 'project-1', 4), null);
+});
+
+test('restores the shared horizon smoothing preference independently of horizon selection', () => {
+  const base = defaults();
+  base.view.smooth_horizons = false;
+  const saved = structuredClone(base);
+  saved.view.smooth_horizons = true;
+  saved.view.horizon_sg = true;
+  saved.view.horizon_sg_window = 11;
+  saved.selected = 'old';
+  const restored = restoreState(base, saved, [{ id: 'new', name: 'New horizon' }]);
+  assert.equal(restored.view.smooth_horizons, true);
+  assert.equal(restored.view.horizon_sg, true);
+  assert.equal(restored.view.horizon_sg_window, 11);
+  assert.equal(restored.selected, 'new');
+  delete saved.view.smooth_horizons;
+  assert.equal(restoreState(base, saved, []).view.smooth_horizons, false);
 });
 
 test('edits during an interrupted save recover only against its acknowledged body', () => {

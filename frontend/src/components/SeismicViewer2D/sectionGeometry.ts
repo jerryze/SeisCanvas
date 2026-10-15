@@ -1,23 +1,26 @@
 import { Section, VS } from "../../types";
 import { PLOT_DASH, SYMBOLS_2D } from "../plotStyle";
+import { horizonCurve, HorizonCurveViewport } from "./horizonCurve";
 
 /** Layer order: color raster, variable area, wiggle, then horizon lines. */
-export function buildTraces(section: Section, view: VS, colors: any[]): any[] {
+export function buildTraces(section: Section, view: VS, colors: any[], horizontalLabel?: string,
+  horizonViewport?: HorizonCurveViewport): any[] {
   const s = view.seismic;
 
   const colorScale = s.reverse_colormap
     ? colors.map((c, i) => [c[0], colors[colors.length - 1 - i][1]])
     : colors;
 
-  const z = s.reverse_polarity ? section.z.map((r) => r.map((v) => -v)) : section.z;
+  const z = s.reverse_polarity
+    ? section.z.map((r) => r.map((v) => v === null ? null : -v)) : section.z;
 
   const inline = view.view_type === "inline";
 
   const traces: any[] = [
     {
       type: "heatmap",
-      x: section.x,
-      y: section.time,
+      x: section.x_edges ?? section.x,
+      y: section.time_edges ?? section.time,
       z,
       colorscale: colorScale.length ? colorScale : "RdBu",
       zmin: section.vmin,
@@ -80,33 +83,61 @@ export function buildTraces(section: Section, view: VS, colors: any[]): any[] {
 
     const base = {
       type: "scatter",
+      meta: { horizonId: h.id },
       x: pts.map((p) => p[0]),
       y: pts.map((p) => p[1]),
       showlegend: false,
       connectgaps: false,
     };
+    // A response for a previous window/section must never supply SG geometry.
+    const display = section.horizon_display;
+    const sg = line && horizonViewport && view.horizon_sg && display?.algorithm === "sg"
+      && display.window === (view.horizon_sg_window ?? 7)
+      && display.view_type === view.view_type && display.section_number === view.section_number;
+    // PCHIP works on display knots; original picks still own all interaction.
+    const smooth = line && view.smooth_horizons && horizonViewport;
+    const knots = sg ? (display.points[h.id] ?? pts) as number[][] : pts;
+    const curve = smooth ? horizonCurve(knots, horizonViewport) : knots;
+    const displayOnly = smooth || sg;
+    const lineBase = { ...base, x: curve.map(p => p[0]), y: curve.map(p => p[1]) };
 
     if (line && h.outline.enabled) {
       traces.push({
-        ...base,
+        ...lineBase,
         mode: "lines",
         line: {
           color: "#000",
           width: ((h.line.width + 2 * h.outline.width) * 4) / 3,
           dash: PLOT_DASH[h.line.style],
+          shape: "linear",
+          simplify: false,
         },
         hoverinfo: "skip",
       });
     }
 
+    if (displayOnly) {
+      traces.push({
+        ...lineBase,
+        mode: "lines",
+        line: { color: h.color, width: (h.line.width * 4) / 3,
+          dash: PLOT_DASH[h.line.style], shape: "linear", simplify: false },
+        hoverinfo: "skip",
+      });
+    }
+
+    // The original points still own markers and hover/probe coordinates.
+    // A zero-width raw line keeps Plotly's existing point hit testing intact.
     traces.push({
       ...base,
       name: h.name,
       mode: line && marker ? "lines+markers" : line ? "lines" : "markers",
       line: {
         color: h.color,
-        width: (h.line.width * 4) / 3,
+        width: displayOnly ? 0 : (h.line.width * 4) / 3,
         dash: PLOT_DASH[h.line.style],
+        shape: "linear",
+        simplify: false,
       },
       marker: {
         color: h.color,
@@ -119,7 +150,7 @@ export function buildTraces(section: Section, view: VS, colors: any[]): any[] {
       },
       hovertemplate:
         `${h.name.replaceAll("<", "&lt;")}` +
-        `<br>${inline ? "Crossline" : "Inline"}: %{x}` +
+        `<br>${horizontalLabel || (inline ? "Crossline" : "Inline")}: %{x}` +
         `<br>Time: %{y:.1f} ms` +
         `<extra></extra>`,
     });
@@ -130,12 +161,11 @@ export function buildTraces(section: Section, view: VS, colors: any[]): any[] {
 
 /** Plotly layout for one 2D section, honouring ranges and the aspect lock. */
 export function buildLayout(section: Section, view: VS, drag: "zoom" | "pan") {
-  const overlayEnabled = view.seismic.wiggle || view.seismic.variable_area;
-  const extent = overlayEnabled ? section.raster_extent : null;
+  const extent = section.raster_extent;
   const xr =
     view.x_range || (extent ? [extent[0], extent[1]] : [section.x[0] - 0.5, section.x.at(-1)! + 0.5]);
 
-  const tr = view.time_range || (overlayEnabled && section.window?.time_range)
+  const tr = view.time_range || section.window?.time_range
     || [section.time[0], section.time.at(-1)!];
 
   const inline = view.view_type === "inline";

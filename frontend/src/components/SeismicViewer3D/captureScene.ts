@@ -5,6 +5,8 @@ import type { Camera, Export3D } from "../../types";
 import { contentBounds } from "./exportCrop";
 import { suppressJunctionOverlaps } from "./axisJunctions";
 import { applyTimeAxisTitleRotation } from "./axisTitles";
+import { captureVectorAxes, translateVectorOverlay, type VectorOverlay } from "./vectorAxes";
+export type { VectorOverlay } from "./vectorAxes";
 
 type Matrix = ArrayLike<number>;
 type Bounds = number[][];
@@ -245,6 +247,8 @@ export async function captureScene(
   await paint();
   let pixels: Uint8Array;
   let restoreAxisText = () => {};
+  let vectorAxes: ReturnType<typeof captureVectorAxes> | null = null;
+  let vectorOverlay: VectorOverlay | undefined;
   try {
     const presentationStart = now();
     // All edits below are temporary presentation/resolution state. No object,
@@ -257,6 +261,7 @@ export async function captureScene(
       for (let i = 0; i < 16; i++) params.projection[i] = projection[i];
     };
     if (settings.show_axes) restoreAxisText = suppressJunctionOverlaps(axes);
+    if (settings.format !== "png" && settings.show_axes) vectorAxes = captureVectorAxes(axes);
     axes.update({
       tickFont: settings.font,
       labelFont: settings.font,
@@ -292,6 +297,7 @@ export async function captureScene(
     timings.scene_preparation += now() - presentationStart;
     const renderStart = now();
     renderer.redraw();
+    vectorOverlay = vectorAxes?.overlay;
     gl.finish(); // Attribute GPU work to render, rather than hiding it in readback.
     timings.render_3d = now() - renderStart;
     const readStart = now();
@@ -301,6 +307,7 @@ export async function captureScene(
     timings.image_readback = now() - readStart;
   } finally {
     const restoreStart = now();
+    vectorAxes?.restore();
     restoreAxisText();
     renderer.autoResize = saved.autoResize;
     renderer.pixelRatio = saved.pixelRatio;
@@ -320,7 +327,8 @@ export async function captureScene(
   const crop =
     settings.canvas === "fixed"
       ? { x: 0, y: 0, width, height }
-      : contentBounds(rgba, width, height, Math.max(4, Math.ceil(6 * scale)));
+      : contentBounds(rgba, width, height, Math.max(4, Math.ceil(6 * scale)),
+          vectorOverlay?.paths.flatMap(path => path.points));
   const source = document.createElement("canvas");
   source.width = width;
   source.height = height;
@@ -339,15 +347,16 @@ export async function captureScene(
       ? longEdge
       : Math.max(64, Math.min(height, crop.height));
   const context = output.getContext("2d")!;
-  if (settings.format !== "png" || settings.background !== "transparent") {
-    context.fillStyle = "white";
+  // Vector containers add the selected page background below back-layer axes.
+  // Their scene image must retain alpha; PNG includes its own background.
+  if (settings.format === "png" && settings.background !== "transparent") {
+    context.fillStyle = settings.background || "white";
     context.fillRect(0, 0, output.width, output.height);
   }
-  context.drawImage(
-    source,
-    -crop.x + Math.floor((output.width - crop.width) / 2),
-    -crop.y + Math.floor((output.height - crop.height) / 2),
-  );
+  const offsetX = -crop.x + Math.floor((output.width - crop.width) / 2);
+  const offsetY = -crop.y + Math.floor((output.height - crop.height) / 2);
+  context.drawImage(source, offsetX, offsetY);
+  if (vectorOverlay) vectorOverlay = translateVectorOverlay(vectorOverlay, offsetX, offsetY);
   timings.crop = now() - cropStart;
   status(`编码 PNG · ${output.width} × ${output.height} px`);
   const encodeStart = now();
@@ -374,5 +383,6 @@ export async function captureScene(
     render_dpi: 96 * scale,
     camera,
     timings,
+    vector_overlay: vectorOverlay,
   };
 }

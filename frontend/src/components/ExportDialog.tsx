@@ -80,7 +80,7 @@ export default function ExportDialog({
                 <button
                   key={format}
                   aria-pressed={s.format === format}
-                  title={scene && format !== "png" ? "内嵌高清位图" : undefined}
+                  title={scene && format !== "png" ? "场景位图 + 坐标矢量" : undefined}
                   className={s.format === format ? "active" : ""}
                   onClick={() => patch({ format })}
                 >
@@ -102,20 +102,17 @@ export default function ExportDialog({
                   onChange={(long_edge) => patch({ canvas: "fit", long_edge })}
                 />
               </label>
-              {s.format === "png" && (
-                <label>
-                  背景
-                  <select
-                    value={
-                      s.background === "transparent" ? "transparent" : "white"
-                    }
-                    onChange={(e) => patch({ background: e.target.value })}
-                  >
-                    <option value="white">白色</option>
-                    <option value="transparent">透明</option>
-                  </select>
-                </label>
-              )}
+              <label>
+                背景
+                <select
+                  aria-label="导出背景"
+                  value={s.background === "transparent" ? "transparent" : "white"}
+                  onChange={(e) => patch({ background: e.target.value })}
+                >
+                  <option value="white">白色</option>
+                  <option value="transparent">透明</option>
+                </select>
+              </label>
             </div>
             <label className="field export-dataset">
               项目 / 数据集名称

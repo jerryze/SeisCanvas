@@ -30,7 +30,7 @@ export function colormapGradient(colors: ColorScale, reverse = false) {
 export function colormapOptions(maps: Record<string, any[]>): ColormapOption[] {
   return Object.entries(maps).map(([value, colors]) => ({
     value,
-    label: value === "reference_seismic" ? "Reference Seismic" : value,
+    label: value === "reference_seismic" ? "RedWhiteBlack" : value,
     colors,
   }));
 }

@@ -6,12 +6,14 @@ from backend.scene import (
     timeslice,
     slice_data,
     horizon_mesh,
+    horizon_amplitude_mesh,
     horizon_intersection,
     scene_data,
 )
 from backend.models import ViewState3D, Seismic
 import backend.main as server
 from conftest import make_horizon
+from backend.preview import sample_horizon_amplitude
 
 
 def test_three_planes_use_same_samples(cube):
@@ -174,6 +176,71 @@ def test_surface_defaults_and_import_range(tmp_path):
         assert imported["twt_range"] == (200, 212)
     finally:
         server.horizons.pop(imported["id"])
+
+
+def amplitude_surface(tmp_path, time=206):
+    path = tmp_path / "amplitude-surface.txt"
+    path.write_text("\n".join(f"{il} {xl} {time}" for il in [10, 12] for xl in [30, 33]))
+    return Horizon(path)
+
+
+def test_horizon_amplitude_sampling_fractional_time_endpoints_and_invalid_nodes(cube):
+    sampled = sample_horizon_amplitude(cube,
+        [10, 10, 12, 12, 10, 10, 10], [30, 33, 30, 33, 31, 30, 30],
+        [200, 206, 212, 204, 204, 199, 213])
+    np.testing.assert_allclose(sampled[:4], [1030, 1034.5, 1233, 1234])
+    assert np.isnan(sampled[4:]).all()
+
+
+def test_amplitude_mesh_keeps_geometry_and_time_scalar_separate(cube, tmp_path):
+    h = amplitude_surface(tmp_path)
+    before = h.data.copy()
+    time_mesh = horizon_mesh(h, 2)
+    mesh = horizon_amplitude_mesh(cube, h, 2)
+    np.testing.assert_allclose(mesh["amplitude"], [1031.5, 1034.5, 1231.5, 1234.5])
+    for key in ["x", "y", "z", "scalar", "twt_range", "i", "j", "k"]:
+        assert mesh[key] == time_mesh[key]
+    assert "amplitude" not in time_mesh
+    assert mesh["amplitude_faces"] == {key: time_mesh[key] for key in ["i", "j", "k"]}
+    np.testing.assert_array_equal(h.data, before)
+
+
+def test_amplitude_mesh_excludes_invalid_faces_without_mutating_time_faces(cube, tmp_path):
+    h = amplitude_surface(tmp_path)
+    h.data[1, 2] = 216
+    mesh = horizon_amplitude_mesh(cube, h, 2)
+    assert mesh["amplitude"][1] is None
+    assert len(mesh["amplitude_faces"]["i"]) == 1
+    assert len(horizon_mesh(h, 2)["i"]) == 2
+    outside = amplitude_surface(tmp_path, 300)
+    assert horizon_amplitude_mesh(cube, outside, 2)["amplitude_faces"]["i"] == []
+
+
+def test_amplitude_cache_only_reads_two_samples_per_preview_vertex(cube, tmp_path, monkeypatch):
+    import backend.preview as preview
+    original = preview.read_samples
+    calls = []
+    def read(survey, ids, samples):
+        calls.append((len(ids), np.asarray(samples).shape))
+        return original(survey, ids, samples)
+    monkeypatch.setattr(preview, "read_samples", read)
+    h = amplitude_surface(tmp_path)
+    first = horizon_amplitude_mesh(cube, h, 2)
+    assert horizon_amplitude_mesh(cube, h, 2) is first
+    assert calls == [(4, (4,)), (4, (4,))]
+
+
+def test_amplitude_surfaces_supply_a_shared_range_even_without_slices(cube, tmp_path):
+    h = amplitude_surface(tmp_path)
+    state = ViewState3D(horizons=[{"id": "h", "name": "H", "color_by": "amplitude"}],
+                        seismic={"clip_percentile": 100})
+    result = scene_data(cube, {"h": h}, state)
+    assert result["slices"] == []
+    assert (result["vmin"], result["vmax"]) == (-1234.5, 1234.5)
+    state.seismic = Seismic(clip_mode="manual", vmin=-1300, vmax=0, reverse_polarity=True)
+    reversed_result = scene_data(cube, {"h": h}, state)
+    assert (reversed_result["vmin"], reversed_result["vmax"]) == (-1300, 0)
+    assert reversed_result["horizons"]["h"]["mesh"]["amplitude"] == result["horizons"]["h"]["mesh"]["amplitude"]
 
 
 def test_slice_reads_stay_bounded_and_never_load_the_native_grid(cube, monkeypatch):

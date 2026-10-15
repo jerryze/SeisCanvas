@@ -200,7 +200,9 @@ def test_2d_export_box_ratio(cube, monkeypatch, ratio):
         bbox = ax.get_window_extent()
         assert bbox.width / bbox.height == pytest.approx(ratio[0] / ratio[1])
     assert ax.get_ylim() == (212, 200)
-    assert ax.get_xlim() == (29.5, 38.5)
+    # Trace coordinates are irregular (30, 33, 38); physical cell bounds use
+    # their endpoint spacing rather than assuming one unit between traces.
+    assert ax.get_xlim() == (28.5, 40.5)
 
 
 def test_publication_font_defaults_and_fallback(cube, monkeypatch):

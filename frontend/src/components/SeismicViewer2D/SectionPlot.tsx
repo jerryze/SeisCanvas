@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Plotly from "plotly.js-dist-min";
 import { Section, VS } from "../../types";
 import { ProbeRequest } from "../Probe";
 import { buildTraces, buildLayout } from "./sectionGeometry";
+import { measureSectionViewport, SectionViewport } from "./sectionDisplay";
 
 type Props = {
   view: VS;
@@ -14,8 +15,8 @@ type Props = {
   /** Ask the backend for the original amplitude under the cursor. */
   onProbe: (request: ProbeRequest) => void;
   onError: (message: string) => void;
-  /** Usable CSS x-axis width, after Plotly applies the margins/aspect lock. */
-  onViewportWidth: (width: number) => void;
+  /** Usable CSS plot dimensions, including the applied margins/aspect lock. */
+  onViewportSize: (viewport: SectionViewport) => void;
 };
 
 /** The Plotly container for one 2D section; owns rendering and plot events. */
@@ -27,18 +28,20 @@ export default function SectionPlot({
   onPatch,
   onProbe,
   onError,
-  onViewportWidth,
+  onViewportSize,
 }: Props) {
   const plot = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState<SectionViewport | null>(null);
   const viewRef = useRef(view);
   viewRef.current = view;
-  const latest = useRef({ onPatch, onProbe, onError, onViewportWidth });
-  latest.current = { onPatch, onProbe, onError, onViewportWidth };
+  const latest = useRef({ onPatch, onProbe, onError, onViewportSize });
+  latest.current = { onPatch, onProbe, onError, onViewportSize };
 
-  function reportViewportWidth(el: any) {
-    const width = Math.round(el._fullLayout?.xaxis?._length);
-    if (Number.isFinite(width) && width > 0) {
-      latest.current.onViewportWidth(width);
+  function reportViewportSize(el: any) {
+    const viewport = measureSectionViewport(el._fullLayout);
+    if (viewport) {
+      setViewport(current => current?.width === viewport.width && current.height === viewport.height ? current : viewport);
+      latest.current.onViewportSize(viewport);
     }
   }
 
@@ -47,11 +50,16 @@ export default function SectionPlot({
     if (!el) return;
 
     let disposed = false;
+    const layout = buildLayout(section, view, drag);
 
     Plotly.react(
       el,
-      buildTraces(section, view, colors),
-      buildLayout(section, view, drag) as any,
+      buildTraces(section, view, colors, undefined, {
+        width: viewport?.width || Math.max(1, el.clientWidth - 100),
+        xRange: layout.xaxis.range,
+        pixelRatio: window.devicePixelRatio || 1,
+      }),
+      layout as any,
       {
         responsive: true,
         displayModeBar: false,
@@ -60,7 +68,7 @@ export default function SectionPlot({
     )
       .then(() => {
         if (disposed) return;
-        reportViewportWidth(el);
+        reportViewportSize(el);
 
         el.removeAllListeners?.("plotly_relayout");
         el.removeAllListeners?.("plotly_hover");
@@ -125,7 +133,7 @@ export default function SectionPlot({
     return () => {
       disposed = true;
     };
-  }, [section, view, colors, drag]);
+  }, [section, view, colors, drag, viewport]);
 
   useEffect(() => {
     const el = plot.current;
@@ -134,7 +142,7 @@ export default function SectionPlot({
     const ob = new ResizeObserver(() => {
       if ((el as any).data) {
         Promise.resolve(Plotly.Plots.resize(el))
-          .then(() => { if (!disposed) reportViewportWidth(el); })
+          .then(() => { if (!disposed) reportViewportSize(el); })
           .catch(e => { if (!disposed) latest.current.onError(String(e)); });
       }
     });

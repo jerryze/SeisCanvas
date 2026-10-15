@@ -1,5 +1,48 @@
 import type { HorizonMapState } from "../workspace";
 import type { HS, SS } from "../types";
+import type { ProbeRequest } from "./Probe";
+
+export const PROFILE_MARGIN = { l: 72, r: 24, t: 28, b: 56 };
+
+/** Measure the visible section, including letterboxing, before Plotly exists. */
+export function profileContainerViewport(width: number, height: number, aspectRatio: number | null = null) {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+  const availableWidth = Math.max(8, width - PROFILE_MARGIN.l - PROFILE_MARGIN.r);
+  const availableHeight = Math.max(8, height - PROFILE_MARGIN.t - PROFILE_MARGIN.b);
+  const fixed = aspectRatio !== null && Number.isFinite(aspectRatio) && aspectRatio > 0;
+  return { width: Math.max(8, Math.round(fixed ? Math.min(availableWidth, availableHeight * aspectRatio) : availableWidth)),
+    height: Math.max(8, Math.round(fixed ? Math.min(availableHeight, availableWidth / aspectRatio) : availableHeight)) };
+}
+
+/** Reuse the existing export API while keeping both components in its 0.1–5 bounds. */
+export function profileAspectPair(ratio: number | null): [number, number] | null {
+  if (ratio === null) return null;
+  return ratio >= 1 ? [5, 5 / ratio] : [5 * ratio, 5];
+}
+
+export function mapViewForKey(current: "map" | "section", key: string) {
+  if (key === "Home") return "map";
+  if (key === "End") return "section";
+  if (key === "ArrowLeft" || key === "ArrowRight") return current === "map" ? "section" : "map";
+  return null;
+}
+
+/** Geometry/style invalidation deliberately excludes app-level visibility. */
+export function profileHorizonStyleKey(horizons: HS[]) {
+  return JSON.stringify(horizons.map(h => [h.id, h.name, h.color, h.line, h.marker, h.outline]));
+}
+
+/** Cursor amplitude queries use original SEG-Y coordinates, never Sinc pixels. */
+export function profileProbeRequest(profile: {
+  x_range: [number, number]; path_start: [number, number]; path_end: [number, number];
+}, point: { x: number; y: number }): ProbeRequest | null {
+  if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+  const span = profile.x_range[1] - profile.x_range[0];
+  if (span <= 0) return null;
+  const fraction = Math.max(0, Math.min(1, (point.x - profile.x_range[0]) / span));
+  return { kind: "inline", position: profile.path_start[0] + fraction * (profile.path_end[0] - profile.path_start[0]),
+    crossline: profile.path_start[1] + fraction * (profile.path_end[1] - profile.path_start[1]), time: point.y };
+}
 
 /** The A–B raster depends on geometry and sampling, not map color settings. */
 export function profileRequestKey(
@@ -7,12 +50,20 @@ export function profileRequestKey(
   horizonKey: string,
   a: [number, number] | null,
   b: [number, number] | null,
-  seismic: Pick<SS, "adaptive_resolution" | "interpolation">,
+  seismic: SS,
+  viewport?: { width: number | null; height: number | null } | null,
+  xRange?: [number, number] | null,
+  timeRange?: [number, number] | null,
 ) {
   return JSON.stringify({
     horizon: state.horizon, horizonKey, a, b,
-    adaptive_resolution: seismic.adaptive_resolution,
-    interpolation: seismic.interpolation,
+    seismic: { background_interpolation: seismic.background_interpolation,
+      wiggle_interpolation: seismic.wiggle_interpolation,
+      wiggle: seismic.wiggle, variable_area: seismic.variable_area, wiggle_gain: seismic.wiggle_gain,
+      clip_mode: seismic.clip_mode, clip_percentile: seismic.clip_percentile,
+      symmetric: seismic.symmetric, vmin: seismic.vmin, vmax: seismic.vmax,
+      reverse_polarity: seismic.reverse_polarity },
+    viewport, xRange, timeRange,
   });
 }
 

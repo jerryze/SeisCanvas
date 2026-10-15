@@ -4,6 +4,10 @@ from collections import OrderedDict
 import numpy as np
 import segyio
 from backend.rendering import amplitude
+from backend.models import ViewState
+from backend.section_service import section_raster
+from backend.trace_overlay import build_trace_overlay, overlays_enabled
+from backend.preview import sample_horizon_amplitude
 
 
 #: Above this many samples a slice is never read at native resolution; the
@@ -54,7 +58,7 @@ def timeslice(survey, time):
     return actual, grid
 
 
-def slice_data(survey, kind, position, maximum=256, interpolation="bilinear"):
+def slice_data(survey, kind, position, maximum=256, interpolation="bilinear", *, seismic=None, viewport=None):
     from backend.preview import read_samples, preview_ids
     from backend import resample
     if kind not in ("time", "inline", "crossline"):
@@ -72,6 +76,29 @@ def slice_data(survey, kind, position, maximum=256, interpolation="bilinear"):
         actual = int(position)
         a = survey.crosslines if kind == "inline" else survey.inlines
         b = survey.times
+    if seismic is not None:
+        # The native vertical section is shared with the 2D viewer. Time planes
+        # keep one original TWT sample and interpolate only spatial amplitudes.
+        if kind == "time":
+            actual, native = timeslice(survey, position)
+        else:
+            a, b, native = survey.section(kind, actual)
+        width, height = viewport or (maximum, maximum)
+        display_state = ViewState(section_number=0, seismic=seismic,
+                                  trace_viewport_width=width, trace_viewport_height=height)
+        display = section_raster(
+            survey, a, b, native, display_state, round(width), round(height),
+            cache_id=(kind, actual), budget=min(maximum ** 2, 600_000), time_sinc=kind != "time",
+        )
+        return dict(kind=kind, position=actual, requested_position=position,
+                    a=display["x"].tolist(), b=display["time"].tolist(),
+                    a_edges=display["x_edges"].tolist(), b_edges=display["time_edges"].tolist(),
+                    amplitude=serial(display["values"]),
+                    **{key: display[key] for key in ("native_shape", "render_shape", "preview_shape", "interpolation")},
+                    background_interpolation=seismic.background_interpolation,
+                    wiggle_interpolation=seismic.wiggle_interpolation,
+                    source_a_range=[float(a[0]), float(a[-1])],
+                    source_b_range=[float(b[0]), float(b[-1])]), native
     # Texture grid: bounded by the requested maximum and by the real samples.
     cols, rows = indices(len(a), maximum), indices(len(b), maximum)
     target = (len(rows), len(cols))
@@ -205,6 +232,29 @@ def horizon_mesh(horizon, maximum=256):
     return result
 
 
+def horizon_amplitude_mesh(survey, horizon, maximum=256):
+    """Separate amplitude payload; cached Time geometry is never overwritten."""
+    mesh = horizon_mesh(horizon, maximum)
+    cache = getattr(horizon, "_amplitude_mesh3d", None)
+    if cache is None:
+        cache = horizon._amplitude_mesh3d = OrderedDict()
+    cached = cache.get(maximum)
+    if cached is not None and cached[0] is survey and cached[1] is mesh:
+        cache.move_to_end(maximum)
+        return cached[2]
+    values = sample_horizon_amplitude(survey, mesh["y"], mesh["x"], mesh["z"])
+    faces = np.column_stack((mesh["i"], mesh["j"], mesh["k"])).astype(np.intp, copy=False)
+    faces = faces[np.isfinite(values)[faces].all(axis=1)]
+    result = {**mesh, "amplitude": serial(values), "amplitude_faces": {
+        "i": faces[:, 0].tolist(), "j": faces[:, 1].tolist(), "k": faces[:, 2].tolist(),
+    }}
+    cache[maximum] = (survey, mesh, result)
+    cache.move_to_end(maximum)
+    while len(cache) > 3:
+        cache.popitem(last=False)
+    return result
+
+
 def horizon_intersection(horizon, kind, position, tolerance=4, maximum=None):
     if kind == "time":
         data = horizon.data[np.abs(horizon.data[:, 2] - position) <= tolerance]
@@ -258,30 +308,51 @@ def scene_data(survey, horizons, state):
         for sl in getattr(state.slices, kind):
             if not sl.visible:
                 continue
-            # The texture is display data: bilinear while browsing, bicubic for
-            # a publication capture. Slices share one amplitude window.
             data, values = slice_data(
                 survey,
                 kind,
                 sl.position,
                 maximum,
                 state.seismic.interpolation,
+                seismic=state.seismic,
+                viewport=state.scene.slice_viewports.get(sl.id),
             )
             data["id"] = sl.id
             result["slices"].append(data)
             finite = values[np.isfinite(values)]
             if len(finite):
                 stats.append(finite)
-    # All visible slices share one amplitude window, estimated from the displayed preview samples.
+    # Amplitude-colored horizons share the slice color scale, including when no
+    # slices are shown. Cache raw values so polarity/style changes never reread.
+    amplitude_meshes = {}
+    for h in state.horizons:
+        if h.visible and h.id in horizons and h.display_mode == "full_surface" and h.color_by == "amplitude":
+            mesh = horizon_amplitude_mesh(survey, horizons[h.id], state.scene.quality)
+            amplitude_meshes[h.id] = mesh
+            values = np.asarray(mesh["amplitude"], dtype=float)
+            finite = values[np.isfinite(values)]
+            if len(finite):
+                stats.append(finite)
+    # All visible seismic surfaces share one amplitude window.
     samples = np.concatenate(stats) if stats else np.array([0.0])
     _, lo, hi = amplitude(samples, state.seismic)
     result.update(vmin=lo, vmax=hi)
+    if overlays_enabled(state.seismic):
+        for sl in result["slices"]:
+            if sl["kind"] == "time":
+                continue  # A fixed-TWT plane has no time-directed seismic traces.
+            x, time, native = survey.section(sl["kind"], sl["position"])
+            values, _, _ = amplitude(native, state.seismic)
+            width, height = state.scene.slice_viewports.get(sl["id"], (1000, 600))
+            display_state = ViewState(section_number=0, seismic=state.seismic,
+                                      trace_viewport_width=width, trace_viewport_height=height)
+            sl["trace_overlay"] = build_trace_overlay(x, time, values, display_state, lo, hi)
     for h in state.horizons:
         if not h.visible or h.id not in horizons:
             continue
         source = horizons[h.id]
         if h.display_mode == "full_surface":
-            mesh = horizon_mesh(source, state.scene.quality)
+            mesh = amplitude_meshes.get(h.id) or horizon_mesh(source, state.scene.quality)
             result["horizons"][h.id] = {"mesh": mesh}
             # Full surface includes its whole valid footprint, even outside the cube.
             for axis in ["x", "y", "z"]:
@@ -301,8 +372,8 @@ def scene_data(survey, horizons, state):
                     keep = [
                         i
                         for i, (x, y) in enumerate(zip(pts["x"], pts["y"]))
-                        if sl["a"][0] <= x <= sl["a"][-1]
-                        and sl["b"][0] <= y <= sl["b"][-1]
+                        if sl["source_a_range"][0] <= x <= sl["source_a_range"][-1]
+                        and sl["source_b_range"][0] <= y <= sl["source_b_range"][-1]
                     ]
                     pts = {
                         **pts,
@@ -315,8 +386,8 @@ def scene_data(survey, horizons, state):
                     axis = "x" if sl["kind"] == "inline" else "y"
                     for i, value in enumerate(pts[axis]):
                         if value is not None and not (
-                            sl["a"][0] <= value <= sl["a"][-1]
-                            and sl["b"][0] <= pts["z"][i] <= sl["b"][-1]
+                            sl["source_a_range"][0] <= value <= sl["source_a_range"][-1]
+                            and sl["source_b_range"][0] <= pts["z"][i] <= sl["source_b_range"][-1]
                         ):
                             for k in ["x", "y", "z"]:
                                 pts[k][i] = None

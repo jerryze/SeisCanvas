@@ -16,11 +16,15 @@ from matplotlib.colors import LinearSegmentedColormap, Normalize, to_hex
 from matplotlib.figure import Figure
 from backend.figure_export import figure_size, save_figure
 from matplotlib.cm import ScalarMappable
-from backend.models import HorizonMapExport, HorizonMapState
+from backend.models import HorizonMapExport, HorizonMapState, Seismic, ViewState
 from backend import resample
 from backend.preview import preview_ids, read_samples, trace_ids_at
 from backend.scene import horizon_grid, serial
 from backend.style import font_family
+from backend.section_service import section_raster
+from backend.rendering import amplitude, _path_segments, _publication_raster, draw_horizon
+from backend.trace_overlay import build_trace_overlay, overlays_enabled, WIGGLE_WIDTH
+from matplotlib.collections import LineCollection, PolyCollection
 
 __all__ = [
     "HorizonMapData",
@@ -291,7 +295,7 @@ def sample_seismic_line(survey, qil, qxl):
     return section
 
 
-def _profile_data(survey, state, horizons, a, b, target_width=None, target_height=None, interpolation=None):
+def _profile_data(survey, state, horizons, a, b, target_width=None, target_height=None, interpolation=None, display_state=None):
     """Compute the A–B section as numpy arrays (web and renderer share it).
 
     The path runs through A and B, extends ``PROFILE_EXTENSION`` beyond both
@@ -343,34 +347,20 @@ def _profile_data(survey, state, horizons, a, b, target_width=None, target_heigh
     # (a Plotly heatmap needs monotonic x); A and B sit inside it.
     distance = np.hypot(qil - qil[0], qxl - qxl[0])
 
-    section = sample_seismic_line(survey, qil, qxl)
-    native_shape = section.shape
-    # Display resampling, identical to the 2D section pipeline: the raster is
-    # fitted to the subplot's pixels (adaptive) with the selected filter and
-    # antialiasing on downsample; the underlying data is never altered.
-    method = resample.method(interpolation, "bilinear")
-    if target_width or target_height:
-        width, height = resample.fit_target(
-            native_shape[0], native_shape[1], target_width, target_height
-        )
+    path_key = ("ab-native", ail, axl, bil, bxl, count)
+    native = survey.cache.get(path_key)
+    if native is None:
+        native = sample_seismic_line(survey, qil, qxl).T
+        survey.cache[path_key] = native
     else:
-        width, height = native_shape
-    # resample expects rows = height (time) and columns = width (distance),
-    # so transpose before and the result is already time-major for the payload.
-    if (width, height) != native_shape:
-        display = resample.resample(section.T, width, height, method)
-    else:
-        display = section.T
-    finite = section[np.isfinite(section)]
-    vmax = float(np.percentile(np.abs(finite), 99)) if len(finite) else 0.0
-    vmax = vmax or 1.0
-    # Horizon curves are sampled at the DISPLAY positions, so they line up
-    # with the resampled heatmap columns exactly (same count, same axis).
-    # The path is straight with uniform sampling, so positions are linear in
-    # the path fraction; without resampling this reproduces the native points.
-    fraction = np.linspace(0.0, 1.0, width)
-    display_il = qil[0] + (qil[-1] - qil[0]) * fraction
-    display_xl = qxl[0] + (qxl[-1] - qxl[0]) * fraction
+        survey.cache.move_to_end(path_key)
+    view = display_state or ViewState(section_number=0, seismic=Seismic(clip_percentile=99))
+    trace_amplitudes, lo, hi = amplitude(native, view.seismic)
+    display = section_raster(survey, distance, survey.times, native, view,
+                             target_width, target_height, cache_id=path_key)
+    display_distance, display_time = display["x"], display["time"]
+    # Interpretations keep the fixed original path coordinates. Background
+    # pixels and interpolation switches never rebuild horizon curve geometry.
     curves = []
     for key, h in (horizons or {}).items():
         hx, hy, hgrid = horizon_grid(h)
@@ -378,25 +368,33 @@ def _profile_data(survey, state, horizons, a, b, target_width=None, target_heigh
             dict(
                 id=key,
                 name=h.name,
-                values=_bilinear_points(hx, hy, hgrid, display_xl, display_il),
+                values=_bilinear_points(hx, hy, hgrid, qxl, qil),
             )
         )
     return dict(
         # Resampled coordinate axes, matching the display raster exactly.
-        distance=np.linspace(distance[0], distance[-1], width),
-        time=np.linspace(survey.times[0], survey.times[-1], height),
+        distance=display_distance,
+        time=display_time,
         # Time-major rows so both the heatmap and matplotlib consume z directly.
-        amplitude=display,
+        amplitude=display["values"],
+        distance_edges=display["x_edges"], time_edges=display["time_edges"],
+        raster_extent=display["extent"],
+        native_distance=distance, native_time=survey.times, native_amplitude=native,
+        trace_amplitudes=trace_amplitudes,
+        trace_overlay=build_trace_overlay(distance, survey.times, trace_amplitudes, view, lo, hi)
+            if overlays_enabled(view.seismic) else None,
+        view=view,
         curves=curves,
+        curve_distance=distance,
         a_distance=float(round(np.hypot(ail - qil[0], axl - qxl[0]), 3)),
         b_distance=float(round(np.hypot(bil - qil[0], bxl - qxl[0]), 3)),
         # Full extended path ends, so the map can draw what the section covers.
         path_start=[float(qil[0]), float(qxl[0])],
         path_end=[float(qil[-1]), float(qxl[-1])],
-        vmin=-vmax,
-        vmax=vmax,
-        method=method,
-        resampled=(width, height) != native_shape,
+        vmin=lo, vmax=hi,
+        method=display["interpolation"],
+        native_shape=display["native_shape"], preview_shape=display["preview_shape"],
+        resampled=display["preview_shape"] != display["native_shape"],
         label_y="Time (ms)",
     )
 
@@ -411,23 +409,28 @@ def map_profile(
     target_width=None,
     target_height=None,
     interpolation=None,
+    display_state=None,
 ):
     """Serialized A–B section for the web profile subplot."""
-    d = _profile_data(survey, state, horizons, a, b, target_width, target_height, interpolation)
+    d = _profile_data(survey, state, horizons, a, b, target_width, target_height, interpolation, display_state)
     return dict(
-        distance=np.round(d["distance"], 3).tolist(),
+        distance=d["distance"].tolist(),
         time=[float(v) for v in d["time"]],
-        amplitude=resample.display_values(
-            d["amplitude"],
-            -d["vmax"],
-            d["vmax"],
-            d["method"],
-            resampled=d["resampled"],
-        ),
+        amplitude=serial(d["amplitude"]),
+        distance_edges=d["distance_edges"].tolist(), time_edges=d["time_edges"].tolist(),
+        raster_extent=list(d["raster_extent"]),
+        native_shape=d["native_shape"], preview_shape=d["preview_shape"],
+        interpolation=d["method"],
+        background_interpolation=d["view"].seismic.background_interpolation,
+        wiggle_interpolation=d["view"].seismic.wiggle_interpolation,
+        trace_overlay=d["trace_overlay"],
+        x_range=[float(d["native_distance"][0]), float(d["native_distance"][-1])],
+        time_range=[float(d["native_time"][0]), float(d["native_time"][-1])],
         curves=[
             dict(id=c["id"], name=c["name"], values=serial(c["values"]))
             for c in d["curves"]
         ],
+        curve_distance=d["curve_distance"].tolist(),
         a_distance=d["a_distance"],
         b_distance=d["b_distance"],
         path_start=d["path_start"],
@@ -451,55 +454,78 @@ def render_profile(
     show_curves=True,
     show_legend=True,
     show_ab=True,
+    display_state=None,
+    horizon_styles=None,
 ):
     """Publication A–B section: interpolated seismic background, horizon Time
     overlays in their style colors, A/B markers.  Returns ``(bytes, info)``.
     """
     from backend.style import get_cmap, font_family
 
-    d = _profile_data(survey, state, horizons, a, b)
-    ratio = d["amplitude"].shape[1] / d["amplitude"].shape[0]
+    view = display_state or ViewState(section_number=0, seismic=Seismic(
+        colormap=colormap, reverse_colormap=reverse_colormap, clip_percentile=99,
+    ))
+    # Use native cells as a layout placeholder; publication reconstructs once
+    # at the final axes pixels with the same Sinc8 kernel as the viewer.
+    layout_view = view.model_copy(update={"seismic": view.seismic.model_copy(update={"background_interpolation": False})})
+    d = _profile_data(survey, state, horizons, a, b, display_state=layout_view)
+    d["view"] = view
+    ratio = view.aspect_ratio_2d[0] / view.aspect_ratio_2d[1] if view.aspect_ratio_2d else d["amplitude"].shape[1] / d["amplitude"].shape[0]
     fig = Figure(
         figsize=figure_size(settings, ratio),
         dpi=settings.dpi,
         layout="constrained",
     )
     ax = fig.subplots()
-    if settings.canvas == "fit":
+    if view.aspect_ratio_2d or settings.canvas == "fit":
         ax.set_box_aspect(1 / ratio)
-    extent = [
-        float(d["distance"][0]),
-        float(d["distance"][-1]),
-        float(d["time"][-1]),
-        float(d["time"][0]),
-    ]
-    canvas_w, canvas_h = settings.canvas_pixels()
-    blend = "nearest" if d["amplitude"].size >= canvas_w * canvas_h else "bilinear"
-    cmap = get_cmap(colormap, reverse_colormap)
-    image = ax.imshow(
-        d["amplitude"],
-        extent=extent,
-        aspect="auto",
-        cmap=cmap,
-        vmin=-d["vmax"],
-        vmax=d["vmax"],
-        origin="upper",
-        interpolation=blend,
-        rasterized=True,
-    )
+    from backend.trace_overlay import reconstruction_extent
+    extent = reconstruction_extent(d["native_distance"], d["native_time"], view.x_range, view.time_range)
+    cmap = get_cmap(view.seismic.colormap, view.seismic.reverse_colormap)
+    values = -d["amplitude"] if view.seismic.reverse_polarity else d["amplitude"]
+    rasters = []
+    if view.seismic.background_interpolation:
+        image = ax.imshow(values, extent=extent, aspect="auto", cmap=cmap,
+                          vmin=d["vmin"], vmax=d["vmax"], origin="lower",
+                          interpolation="none", rasterized=True, zorder=0)
+        sampler = lambda width, height: _publication_raster(
+            d["native_distance"], d["native_time"], d["trace_amplitudes"], width, height, extent,
+        )
+        rasters = [(image, values, sampler)]
+    else:
+        ax.pcolormesh(d["distance_edges"], d["time_edges"], values, shading="flat",
+                      cmap=cmap, vmin=d["vmin"], vmax=d["vmax"],
+                      edgecolors="none", antialiased=False, rasterized=True, zorder=0)
+    overlay = d["trace_overlay"]
+    if overlay and view.seismic.variable_area:
+        ax.add_collection(PolyCollection(_path_segments(overlay["variable_area"]),
+            facecolors=view.seismic.variable_area_color, edgecolors="none", antialiaseds=True, zorder=1), autolim=False)
+    if overlay and view.seismic.wiggle:
+        ax.add_collection(LineCollection(_path_segments(overlay["wiggle"]),
+            colors="#000000", linewidths=WIGGLE_WIDTH, antialiaseds=True, zorder=2), autolim=False)
+    ax.set_axisbelow(False)
+    ax.xaxis.set_zorder(4)
+    ax.yaxis.set_zorder(4)
+    for spine in ax.spines.values():
+        spine.set_zorder(4)
     colors = curve_colors or {}
+    styles = None if horizon_styles is None else {h.id: h for h in horizon_styles if h.visible}
+    drawn = []
     if show_curves:
         for curve in d["curves"]:
-            ax.plot(
-                d["distance"],
-                curve["values"],
-                color=colors.get(curve["id"], "#1a1a1a"),
-                lw=1.8,
-                label=curve["name"],
-            )
+            if styles is not None:
+                if curve["id"] not in styles:
+                    continue
+                if not draw_horizon(ax, np.column_stack((d["curve_distance"], curve["values"])),
+                                    styles[curve["id"]], label=curve["name"]):
+                    continue
+            else:
+                ax.plot(d["curve_distance"], curve["values"], color=colors.get(curve["id"], "#1a1a1a"),
+                        lw=1.8, label=curve["name"], zorder=3)
+            drawn.append(curve["name"])
     if show_ab:
         for x in (d["a_distance"], d["b_distance"]):
-            ax.axvline(x, color="#1a1a1a", lw=1.2, ls=(0, (4, 3)))
+            ax.axvline(x, color="#1a1a1a", lw=1.2, ls=(0, (4, 3)), zorder=4)
         top = float(d["time"][0])
         span = float(d["time"][-1]) - top
         for x, text in ((d["a_distance"], "A"), (d["b_distance"], "B")):
@@ -512,19 +538,21 @@ def render_profile(
                 ha="left",
                 va="top",
             )
-    ax.set_xlim(float(d["distance"][0]), float(d["distance"][-1]))
+    ax.set_xlim(view.x_range or (float(d["native_distance"][0]), float(d["native_distance"][-1])))
+    tr = view.time_range or (float(d["native_time"][0]), float(d["native_time"][-1]))
+    ax.set_ylim(max(tr), min(tr))
     if not settings.show_axes:
         ax.set_axis_off()
     if settings.show_axes and settings.show_labels:
         ax.set_xlabel("Distance (grid)")
         ax.set_ylabel("Time (ms)")
-    if show_curves and show_legend and d["curves"]:
+    if show_curves and show_legend and drawn:
         ax.legend(loc="lower right", fontsize=settings.font_size, framealpha=0.85)
     if settings.show_title:
         ax.set_title("A–B Profile")
     colorbars = []
     if state.colorbar:
-        norm = Normalize(-d["vmax"], d["vmax"])
+        norm = Normalize(d["vmin"], d["vmax"])
         cb = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax)
         cb.set_label("Amplitude")
         cb.solids.set_rasterized(False)
@@ -534,7 +562,7 @@ def render_profile(
     for text in fig.findobj(Text):
         text.set_fontfamily(font_family(settings.font))
         text.set_fontsize(settings.font_size)
-    content = save_figure(fig, settings, [(image, d["amplitude"])], colorbars)
+    content = save_figure(fig, settings, rasters, colorbars)
     info = dict(
         a=list(a) if not isinstance(a, (list, tuple)) else [float(a[0]), float(a[1])],
         b=[float(b[0]), float(b[1])],
@@ -542,8 +570,9 @@ def render_profile(
         b_distance=d["b_distance"],
         path_start=d["path_start"],
         path_end=d["path_end"],
-        curves=[c["name"] for c in d["curves"]],
+        curves=drawn,
         vmax=d["vmax"],
+        vmin=d["vmin"],
     )
     return content, info
 

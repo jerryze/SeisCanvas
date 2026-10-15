@@ -169,14 +169,16 @@ def test_duplicate_names_get_a_suffix_and_deleted_files_are_removed(client):
 
 
 @pytest.mark.parametrize("format", ["png", "svg", "pdf"])
-def test_2d_trace_overlays_survive_queue_and_archive(client, format):
+@pytest.mark.parametrize("background,wiggle", [(True, True), (True, False), (False, True), (False, False)])
+def test_2d_trace_overlays_survive_queue_and_archive(client, format, background, wiggle):
     seismic = {
         "wiggle": True, "variable_area": True, "wiggle_gain": 1.7,
         "variable_area_color": "#123456", "reverse_polarity": True,
         "clip_mode": "manual", "vmin": -1500, "vmax": 1500,
+        "background_interpolation": background, "wiggle_interpolation": wiggle,
     }
     state = {
-        "seismic": seismic, "trace_viewport_width": 480,
+        "seismic": seismic, "trace_viewport_width": 480, "trace_viewport_height": 320,
         "x_range": [30, 38], "time_range": [201, 211],
     }
     response = client.post("/api/export/queue", json=queue_body(
@@ -188,6 +190,7 @@ def test_2d_trace_overlays_survive_queue_and_archive(client, format):
     for key, value in seismic.items():
         assert item["view_state"]["seismic"][key] == value
     assert item["view_state"]["trace_viewport_width"] == 480
+    assert item["view_state"]["trace_viewport_height"] == 320
     original = client.get(f"/api/export/queue/{item['id']}/file").content
     assert original.startswith({"png": b"\x89PNG", "pdf": b"%PDF", "svg": b"<?xml"}[format])
 
@@ -198,9 +201,11 @@ def test_2d_trace_overlays_survive_queue_and_archive(client, format):
     with zipfile.ZipFile(io.BytesIO(archived.content)) as archive:
         assert archive.read(f"2D/Inline/{item['filename']}") == original
         figure = json.loads(archive.read("export_manifest.json"))["figures"][0]
-        for key in ("wiggle", "variable_area", "wiggle_gain", "variable_area_color"):
+        for key in ("wiggle", "variable_area", "wiggle_gain", "variable_area_color", "background_interpolation", "wiggle_interpolation"):
             assert figure[key] == seismic[key]
         assert figure["trace_viewport_width"] == 480
+        assert figure["trace_viewport_height"] == 320
+        assert figure["background_algorithm"] == ("sinc8_time_linear_trace" if background else "native")
 
 
 def test_crossline_and_horizon_content_naming(client):
@@ -416,6 +421,24 @@ def test_three_dimensional_scene_with_only_surfaces_is_a_horizon_surface(client)
     assert item["view_type"] == "3d_horizon_surface"
     assert item["filename"] == "F3_3D_HorizonSurface_H1_Time_Petrel_180x100mm_300dpi.png"
     assert client.get(f"/api/export/queue/{item['id']}/file").content.startswith(b"\x89PNG")
+
+
+@pytest.mark.parametrize("fmt", ["png", "svg", "pdf"])
+def test_three_dimensional_amplitude_surface_keeps_coloring_in_export(client, fmt):
+    body = {"kind": "3d", "dataset": "F3", "png": png_data_url(), "format": fmt,
+            "width_px": 400, "height_px": 300, "scale": 1,
+            "settings": {"width": 180, "height": 100, "dpi": 300},
+            "state": {"view_mode": "3d", "horizons": [{"id": "h", "name": "H1", "color_by": "amplitude"}],
+                      "seismic": {"colormap": "seismic", "reverse_polarity": True}}}
+    response = client.post("/api/export/queue", json=body)
+    assert response.status_code == 200, response.text
+    item = response.json()
+    assert "_Amplitude_Seismic_" in item["filename"]
+    assert item["view_state"]["horizons"][0]["color_by"] == "amplitude"
+    assert item["view_state"]["seismic"]["reverse_polarity"] is True
+    assert export_queue.session().manifest()["figures"][0]["horizon_amplitude_colormap"] == "seismic"
+    preview = client.get(f"/api/export/queue/{item['id']}/file")
+    assert preview.content.startswith({"png": b"\x89PNG", "pdf": b"%PDF", "svg": b"<svg"}[fmt])
 
 
 def test_three_dimensional_request_rejects_a_mismatched_png(client):

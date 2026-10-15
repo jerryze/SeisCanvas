@@ -14,6 +14,7 @@ from backend import resample
 
 TRACE_PIXELS = 12.0
 DEFAULT_VIEWPORT_WIDTH = 1000.0
+DEFAULT_VIEWPORT_HEIGHT = 600.0
 WIGGLE_WIDTH = 0.6  # points; frontend uses 4/3 CSS pixels per point
 
 
@@ -32,63 +33,39 @@ def coordinate_edges(coordinates):
     )
 
 
-def _regular(coordinates):
-    return len(coordinates) < 3 or np.allclose(
-        np.diff(coordinates), coordinates[1] - coordinates[0], rtol=1e-7, atol=1e-9
-    )
+def coordinate_cell_edges(coordinates):
+    """Full cell boundaries for a native, possibly irregular coordinate axis."""
+    coordinates = np.asarray(coordinates, dtype=float)
+    left, right = coordinate_edges(coordinates)
+    return np.concatenate(([left], (coordinates[:-1] + coordinates[1:]) / 2, [right]))
 
 
-def _sample_axis(values, indices, axis, method):
-    """Interpolate at source indices without changing their world mapping."""
-    if method == "nearest":
-        return np.take(values, np.floor(indices + 0.5).astype(np.intp), axis=axis)
-    base = np.floor(indices).astype(np.intp)
-    weight = indices - base
-    shape = [1] * values.ndim
-    shape[axis] = len(indices)
-    if method == "bilinear":
-        right = np.minimum(base + 1, values.shape[axis] - 1)
-        weight = weight.reshape(shape)
-        return np.take(values, base, axis=axis) * (1 - weight) + np.take(values, right, axis=axis) * weight
-    # Catmull-Rom interpolation in source-index space, mapped through the real
-    # coordinates first. Its knots remain exactly at the original samples.
-    result = 0.0
-    for offset in (-1, 0, 1, 2):
-        distance = np.abs(weight - offset)
-        kernel = np.where(
-            distance <= 1,
-            1.5 * distance**3 - 2.5 * distance**2 + 1,
-            np.where(distance < 2, -0.5 * distance**3 + 2.5 * distance**2 - 4 * distance + 2, 0),
-        ).reshape(shape)
-        source = np.clip(base + offset, 0, values.shape[axis] - 1)
-        result = result + np.take(values, source, axis=axis) * kernel
-    return result
+def reconstruction_extent(x, time, x_range=None, time_range=None):
+    """Exact visible ranges clipped to the physical source cells."""
+    bounds = [*coordinate_edges(x), *coordinate_edges(time)]
+    for offset, span in ((0, x_range), (2, time_range)):
+        if span is not None:
+            low, high = max(bounds[offset], span[0]), min(bounds[offset + 1], span[1])
+            if low < high:
+                bounds[offset:offset + 2] = [float(low), float(high)]
+    return tuple(bounds)
 
 
-def aligned_raster(x, time, values, width, height, method):
-    """Raster and uniformly spaced world sample centres with correct cell edges.
-
-    Pillow's half-pixel mapping is correct for regular source coordinates when
-    the image extent uses real half-sample edges. Irregular trace numbers need
-    a world-to-source mapping before interpolation rather than index linspace.
-    """
-    x, time = np.asarray(x, dtype=float), np.asarray(time, dtype=float)
-    values = np.asarray(values, dtype=np.float32)
-    left, right = coordinate_edges(x)
-    top, bottom = coordinate_edges(time)
-    gx = left + (np.arange(width) + 0.5) * (right - left) / width
-    gt = top + (np.arange(height) + 0.5) * (bottom - top) / height
-    if method != "nearest" and _regular(x) and _regular(time):
-        raster = resample.resample(values, width, height, method)
-    else:
-        xi = np.interp(gx, x, np.arange(len(x), dtype=float))
-        ti = np.interp(gt, time, np.arange(len(time), dtype=float))
-        raster = _sample_axis(values, xi, 1, method)
-        raster = _sample_axis(raster, ti, 0, method).astype(np.float32)
-        finite = values[np.isfinite(values)]
-        if len(finite):
-            np.clip(raster, finite.min(), finite.max(), out=raster)
-    return raster, gx, gt, (left, right, top, bottom)
+def _interpolated_trace(values, time, sample_times):
+    """Sinc8 within original finite runs, retaining knots and gap boundaries."""
+    sampled = np.full(len(sample_times), np.nan, dtype=float)
+    finite = np.isfinite(values)
+    starts = np.flatnonzero(finite & np.concatenate(([True], ~finite[:-1])))
+    stops = np.flatnonzero(finite & np.concatenate((~finite[1:], [True]))) + 1
+    for start, stop in zip(starts, stops):
+        inside = (sample_times >= time[start]) & (sample_times <= time[stop - 1])
+        if not inside.any():
+            continue
+        indices = np.interp(sample_times[inside], time[start:stop], np.arange(stop - start, dtype=float))
+        # The whole finite source run supplies the eight taps, even when only
+        # a small time window is visible. Panning cannot invent a local edge.
+        sampled[inside] = resample.sinc8(values[start:stop], indices)
+    return sampled
 
 
 def _runs(values, time, low, high):
@@ -157,6 +134,7 @@ def build_trace_overlay(x, time, amplitudes, state, lo, hi):
     x, time = np.asarray(x, dtype=float), np.asarray(time, dtype=float)
     amplitudes = np.asarray(amplitudes)
     viewport = float(state.trace_viewport_width or DEFAULT_VIEWPORT_WIDTH)
+    viewport_height = float(state.trace_viewport_height or DEFAULT_VIEWPORT_HEIGHT)
     differences = np.diff(x)
     differences = differences[np.isfinite(differences) & (differences > 0)]
     native_spacing = float(np.median(differences)) if len(differences) else 1.0
@@ -180,6 +158,16 @@ def build_trace_overlay(x, time, amplitudes, state, lo, hi):
         t1 = min(len(time), int(np.searchsorted(time, high_t, side="right")) + 1)
     else:
         t0, t1 = 0, len(time)
+        low_t, high_t = float(time[0]), float(time[-1])
+    sample_times = time[t0:t1]
+    if state.seismic.wiggle_interpolation and high_t > low_t:
+        # One vertex per CSS pixel plus every native knot. The CSS density is
+        # also used in publication output, so exported paths match the viewer.
+        # Dense points cover only visible time, never the native slack: a
+        # sub-sample zoom must not allocate millions of points outside view.
+        count = max(2, min(8000, math.ceil(viewport_height) + 1))
+        dense = np.linspace(low_t, high_t, count)
+        sample_times = np.unique(np.concatenate((sample_times, dense)))
     normalizer = max(abs(float(lo)), abs(float(hi))) or 1.0
     # Clip around the physical zero, even when a manual colour range is wholly
     # positive/negative. Zero remains the trace baseline and polarity survives.
@@ -189,7 +177,9 @@ def build_trace_overlay(x, time, amplitudes, state, lo, hi):
         index = global_indices[displayed]
         baseline = float(x[index])
         scale = float(excursion[displayed]) / normalizer
-        for nodes in _runs(amplitudes[t0:t1, index], time[t0:t1], low, high):
+        values = (_interpolated_trace(amplitudes[:, index], time, sample_times)
+                  if state.seismic.wiggle_interpolation else amplitudes[t0:t1, index])
+        for nodes in _runs(values, sample_times, low, high):
             if state.seismic.wiggle:
                 _append_path(wiggle, ((baseline + value * scale, at) for at, value in nodes))
             if state.seismic.variable_area and scale > 0:
@@ -201,4 +191,5 @@ def build_trace_overlay(x, time, amplitudes, state, lo, hi):
         "trace_step": step,
         "trace_count": len(selected),
         "viewport_width": viewport,
+        "viewport_height": viewport_height,
     }

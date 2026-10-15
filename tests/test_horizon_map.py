@@ -423,8 +423,8 @@ def test_profile_api(client):
 
 
 def test_profile_display_resampling(cube):
-    # Adaptive: the raster is fitted to the target pixels with bilinear, but
-    # never upsampled beyond 3x the native grid (same guard as /api/section).
+    # Shared Sinc8/linear reconstruction follows the actual subplot pixels.
+    # A legacy interpolation selector cannot override the new display switch.
     result = map_profile(
         cube,
         None,
@@ -436,13 +436,14 @@ def test_profile_display_resampling(cube):
         target_height=200,
         interpolation="bilinear",
     )
-    # Native path grid is 5 x 4 (tiny cube): 3x cap gives 15 x 12.
-    assert len(result["distance"]) == 15
-    assert len(result["time"]) == 12
-    assert len(result["amplitude"]) == 12 and len(result["amplitude"][0]) == 15
-    # Coordinate axes are resampled linspaces spanning the native extent.
-    assert result["distance"][0] == pytest.approx(0)
-    assert result["time"][0] == 200.0 and result["time"][-1] == 212.0
+    assert len(result["distance"]) == 400
+    assert len(result["time"]) == 200
+    assert len(result["amplitude"]) == 200 and len(result["amplitude"][0]) == 400
+    assert result["interpolation"] == "sinc8"
+    # Pixel centers occupy exact source-cell edges, just like the 2D heatmap.
+    assert result["time_edges"][0] == 198 and result["time_edges"][-1] == 214
+    assert result["time"][0] == pytest.approx(198.04)
+    assert result["time"][-1] == pytest.approx(213.96)
 
 
 def test_profile_native_without_target(cube):
@@ -451,9 +452,8 @@ def test_profile_native_without_target(cube):
     assert len(result["amplitude"][0]) == n
 
 
-def test_profile_curves_align_with_display_columns(cube, tmp_path):
-    # A constant horizon sampled at the display positions stays constant, and
-    # a gapped horizon breaks exactly once at the display resolution too.
+def test_profile_curves_keep_original_world_coordinates(cube, tmp_path):
+    # Horizon path coordinates stay independent of the background pixel grid.
     full = amplitude_horizon(tmp_path, 204, xls=(30, 32, 34, 36, 38))
     p = tmp_path / "gapped.txt"
     p.write_text(
@@ -476,21 +476,21 @@ def test_profile_curves_align_with_display_columns(cube, tmp_path):
         target_height=12,
     )
     curves = {c["id"]: c for c in result["curves"]}
-    assert len(curves["h"]["values"]) == len(result["distance"]) == 15
+    assert len(curves["h"]["values"]) == len(result["curve_distance"]) == 5
+    assert len(result["distance"]) == 15
     assert all(v == pytest.approx(204) for v in curves["h"]["values"])
     # The missing pick (10, 34) invalidates every display column whose bilinear
     # stencil touches it: the gap spans the path where crossline is in (32, 36)
     # — the same distance range as at native sampling, just finer sampled.
     gap = [
         x
-        for x, v in zip(result["distance"], curves["g"]["values"])
+        for x, v in zip(result["curve_distance"], curves["g"]["values"])
         if v is None
     ]
     assert len(gap) >= 1
     # Distance of path points at xline 32 and 36 along the 8.25-long diagonal.
     lo, hi = 0.25 * 8.246, 0.75 * 8.246
-    assert lo - 0.1 < min(gap) < lo + 0.3
-    assert hi - 0.3 < max(gap) < hi + 0.1
+    assert all(lo < x < hi for x in gap)
 
 
 def test_profile_resampling_api(client):
@@ -507,8 +507,8 @@ def test_profile_resampling_api(client):
     )
     assert response.status_code == 200, response.text
     data = response.json()
-    # 3x upsample cap of the 5 x 4 native grid.
-    assert len(data["distance"]) == 15 and len(data["time"]) == 12
+    assert len(data["distance"]) == 300 and len(data["time"]) == 150
+    assert data["interpolation"] == "sinc8"
 
 
 # ------------------------------------------------------------- profile export

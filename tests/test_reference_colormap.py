@@ -50,7 +50,7 @@ def test_new_palette_works_in_sections_scenes_and_export_queue(client, reverse):
     })
     assert queued.status_code == 200
     item = queued.json()
-    assert "ReferenceSeismic" in item["filename"]
+    assert "RedWhiteBlack" in item["filename"]
     assert item["view_state"]["seismic"]["colormap"] == "reference_seismic"
     assert item["view_state"]["seismic"]["reverse_colormap"] is reverse
 

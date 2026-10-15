@@ -12,6 +12,7 @@ import SectionPanel, { SectionNavigation } from "./components/panels/SectionPane
 import SeismicPanel from "./components/panels/SeismicPanel";
 import HorizonPanel from "./components/panels/HorizonPanel";
 import SectionPlot from "./components/SeismicViewer2D/SectionPlot";
+import { samplingViewport, sectionResponseError, SectionViewport } from "./components/SeismicViewer2D/sectionDisplay";
 import { useState, useEffect, useRef, useMemo } from "react";
 import {
   Activity,
@@ -89,12 +90,17 @@ const initial: VS = {
     variable_area: false,
     wiggle_gain: 1,
     variable_area_color: "#000000",
+    background_interpolation: true,
+    wiggle_interpolation: true,
 
-    // Interactive browsing defaults: bilinear at viewport resolution.
+    // Compatibility with older saved workspaces.
     interpolation: "bilinear",
     adaptive_resolution: true,
   },
 
+  smooth_horizons: false,
+  horizon_sg: false,
+  horizon_sg_window: 7,
   horizons: [],
 };
 
@@ -115,7 +121,7 @@ const initialExport: ExportDialogSettings = {
 
   format: "png",
 
-  // Publication defaults: bicubic at the export resolution.
+  // Scalar-map compatibility; seismic sections follow their display switches.
   interpolation: "bicubic",
   resolution: "export",
 };
@@ -141,7 +147,7 @@ export default function App() {
 
   const sceneRef = useRef<Scene3DHandle>(null);
   const plotWrap = useRef<HTMLDivElement>(null);
-  const traceViewportWidthRef = useRef<number | null>(null);
+  const sectionViewportRef = useRef<SectionViewport | null>(null);
   const deleteDialog = useRef<HTMLDivElement>(null);
 
   const requestId = useRef(0);
@@ -159,7 +165,7 @@ export default function App() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [view, setView] = useState<VS>(initial);
   const [section, setSection] = useState<Section | null>(null);
-  const [traceViewportWidth, setTraceViewportWidth] = useState<number | null>(null);
+  const [sectionViewport, setSectionViewport] = useState<SectionViewport | null>(null);
 
   const viewRef = useRef(view);
 
@@ -507,14 +513,14 @@ export default function App() {
   /* Request 2D section                                                       */
   /* ------------------------------------------------------------------------ */
 
-  // CSS plot width controls trace density; it is transient and never persisted
-  // with the workspace, nor multiplied by device/export pixel resolution.
-  const overlayViewportWidth = view.seismic.wiggle || view.seismic.variable_area
-    ? traceViewportWidth : null;
+  // CSS plot dimensions control trace density/time sampling and stay transient.
+  // Raster target pixels additionally include the display device pixel ratio.
+  const samplingSize = samplingViewport(view.seismic, sectionViewport);
 
-  function measuredTraceViewportWidth(width: number) {
-    traceViewportWidthRef.current = width;
-    setTraceViewportWidth(current => current === width ? current : width);
+  function measuredSectionViewport(viewport: SectionViewport) {
+    sectionViewportRef.current = viewport;
+    setSectionViewport(current => current?.width === viewport.width && current.height === viewport.height
+      ? current : viewport);
   }
 
   useEffect(() => {
@@ -537,13 +543,18 @@ export default function App() {
     // expires and the viewport-matched window arrives.
     const timer = setTimeout(async () => {
       try {
+        const requestView = viewRef.current;
+        const viewport = sectionViewportRef.current;
         const r = await api("/section", {
           ...json({
-            ...viewRef.current,
+            ...requestView,
             quality: "interactive",
-            target_width: box ? Math.round(box.clientWidth * ratio) : null,
-            target_height: box ? Math.round(box.clientHeight * ratio) : null,
-            trace_viewport_width: traceViewportWidthRef.current,
+            target_width: viewport ? Math.round(viewport.width * ratio)
+              : box ? Math.round(box.clientWidth * ratio) : null,
+            target_height: viewport ? Math.round(viewport.height * ratio)
+              : box ? Math.round(box.clientHeight * ratio) : null,
+            trace_viewport_width: viewport?.width ?? null,
+            trace_viewport_height: viewport?.height ?? null,
           }),
           signal: abort.signal,
         });
@@ -551,6 +562,11 @@ export default function App() {
         const s = await r.json();
 
         if (id === requestId.current) {
+          const compatibilityError = sectionResponseError(s, requestView.seismic);
+          if (compatibilityError) throw new Error(compatibilityError);
+          if (requestView.horizon_sg && (!s.horizon_display || s.horizon_display.algorithm !== "sg")) {
+            throw new Error("二维层位平滑后端版本不匹配，请重启 SeisCanvas 后端以启用 SG 平滑。");
+          }
           setSection(s);
           setError("");
         }
@@ -574,6 +590,8 @@ export default function App() {
     view.view_mode,
     view.view_type,
     view.section_number,
+    view.horizon_sg,
+    view.horizon_sg_window,
     view.seismic.clip_mode,
     view.seismic.clip_percentile,
     view.seismic.symmetric,
@@ -584,11 +602,12 @@ export default function App() {
     view.seismic.variable_area,
     view.seismic.wiggle_gain,
     view.seismic.variable_area_color,
-    view.seismic.interpolation,
-    view.seismic.adaptive_resolution,
+    view.seismic.background_interpolation,
+    view.seismic.wiggle_interpolation,
     view.x_range,
     view.time_range,
-    overlayViewportWidth,
+    samplingSize.width,
+    samplingSize.height,
     revision,
   ]);
 
@@ -714,7 +733,11 @@ export default function App() {
     task("正在保存二维图件…", async () => {
       await queueItem({
         kind: "2d", dataset,
-        state: { ...view, trace_viewport_width: traceViewportWidthRef.current },
+        state: {
+          ...view,
+          trace_viewport_width: sectionViewportRef.current?.width ?? null,
+          trace_viewport_height: sectionViewportRef.current?.height ?? null,
+        },
         settings,
       });
     });
@@ -737,6 +760,7 @@ export default function App() {
         scale: capture.scale,
         render_dpi: capture.render_dpi,
         timings: capture.timings,
+        vector_overlay: capture.vector_overlay,
         settings: settings3D,
         // Export uses the current cached textures and actual renderer camera.
         state: {
@@ -839,7 +863,7 @@ export default function App() {
       {/* Workspace                                                          */}
       {/* ------------------------------------------------------------------ */}
 
-      <div className="workspace">
+      <div className={`workspace${view.view_mode === "map" ? " map-workspace" : ""}`}>
         {/* ---------------------------------------------------------------- */}
         {/* Sidebar                                                          */}
         {/* ---------------------------------------------------------------- */}
@@ -965,11 +989,7 @@ export default function App() {
               maps={maps}
               mapColors={mapColors}
               seismic={view.seismic}
-              aspect={view.aspect_ratio_2d}
               onSeismic={seismic}
-              onAspect={(ratio) =>
-                setView((v) => ({ ...v, aspect_ratio_2d: ratio }))
-              }
               onAddProfileToExport={addProfileToQueue}
               exportOpen={exportOpen}
               onCloseExport={() => setExportOpen(false)}
@@ -1058,7 +1078,7 @@ export default function App() {
                       onPatch={setView}
                       onProbe={runProbe}
                       onError={setError}
-                      onViewportWidth={measuredTraceViewportWidth}
+                      onViewportSize={measuredSectionViewport}
                     />
                   ) : (
                     <div className="empty">

@@ -214,7 +214,7 @@ export function OpacityControl({
   value,
   onChange,
   disabled = false,
-  label = "透明度",
+  label = "不透明度",
 }: {
   value: number;
   onChange: (value: number) => void;
@@ -223,11 +223,11 @@ export function OpacityControl({
 }) {
   return (
     <label className="section-number">
-      <span>透明度</span>
+      <span>不透明度</span>
       <span className="number-unit">
         <Num
           label={`${label}（%）`}
-          title="透明度（0–100%）"
+          title="不透明度：0% 完全透明，100% 完全不透明"
           disabled={disabled}
           value={Number((value * 100).toFixed(6))}
           min={0}

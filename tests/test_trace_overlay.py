@@ -10,9 +10,10 @@ from PIL import Image
 from pydantic import ValidationError
 
 from backend.models import HorizonStyle, SectionRequest, Seismic, Settings, ViewState
+from backend import resample
 from backend.rendering import amplitude, render
 from backend.section_service import interactive_section
-from backend.trace_overlay import aligned_raster, build_trace_overlay, coordinate_edges
+from backend.trace_overlay import build_trace_overlay, coordinate_edges
 
 
 class SectionSurvey:
@@ -29,7 +30,8 @@ class SectionSurvey:
 
 def state(**seismic):
     return ViewState(section_number=1, trace_viewport_width=1000,
-                     seismic=Seismic(clip_mode="manual", vmin=-1, vmax=1, **seismic))
+                     seismic=Seismic(clip_mode="manual", vmin=-1, vmax=1,
+                                     wiggle_interpolation=False, **seismic))
 
 
 def segments(path):
@@ -49,6 +51,7 @@ def test_defaults_and_numeric_validation_preserve_legacy_display():
     s = Seismic()
     assert (s.wiggle, s.variable_area, s.wiggle_gain, s.variable_area_color) == (False, False, 1.0, "#000000")
     assert ViewState(section_number=1).trace_viewport_width is None
+    assert s.background_interpolation and s.wiggle_interpolation
     for gain in (-1, 101, float("nan"), float("inf")):
         with pytest.raises(ValidationError):
             Seismic(wiggle_gain=gain)
@@ -74,7 +77,7 @@ def test_gain_clipping_polarity_and_true_crossings_share_one_geometry():
     x, time = np.array([30, 34]), np.array([200, 204, 208])
     raw = np.array([[0, 0], [4, -4], [-4, 4]], dtype=float)
     view = ViewState(section_number=1, seismic=Seismic(
-        wiggle=True, variable_area=True, wiggle_gain=2,
+        wiggle=True, variable_area=True, wiggle_gain=2, wiggle_interpolation=False,
         clip_mode="manual", vmin=-2, vmax=2))
     z, lo, hi = amplitude(raw, view.seismic)
     normal = build_trace_overlay(x, time, z, view, lo, hi)
@@ -96,7 +99,7 @@ def test_gain_clipping_polarity_and_true_crossings_share_one_geometry():
 def test_positive_area_uses_original_zero_crossing_after_asymmetric_clipping():
     # -2 to +6 crosses zero at TWT201, even after the positive end clips at2.
     x, time, z = np.array([10]), np.array([200, 204, 208]), np.array([[-2], [6], [-2]])
-    view = ViewState(section_number=1, seismic=Seismic(wiggle=True, variable_area=True,
+    view = ViewState(section_number=1, seismic=Seismic(wiggle=True, variable_area=True, wiggle_interpolation=False,
                     clip_mode="manual", vmin=-1, vmax=2))
     overlay = build_trace_overlay(x, time, z, view, -1, 2)
     polygon = segments(overlay["variable_area"])[0]
@@ -166,7 +169,7 @@ def test_gain_reaches_into_view_and_time_boundary_keeps_continuous_lobe():
 def test_aligned_raster_handles_irregular_coordinates_and_four_ms_samples():
     x, time = np.array([30, 33, 38]), np.array([200, 204, 208, 212])
     z = time[:, None] * 2 + x[None, :] * 3
-    raster, gx, gt, extent = aligned_raster(x, time, z, 100, 80, "bilinear")
+    raster, gx, gt, extent = resample.seismic_raster(x, time, z, 100, 4)
     assert extent == (28.5, 40.5, 198, 214)
     inside = np.ix_((gt >= 200) & (gt <= 212), (gx >= 30) & (gx <= 38))
     expected = gt[:, None] * 2 + gx[None, :] * 3
@@ -174,20 +177,20 @@ def test_aligned_raster_handles_irregular_coordinates_and_four_ms_samples():
     assert coordinate_edges(time) == (198, 214)
 
 
-def test_aligned_nearest_downsample_uses_world_pixel_centres():
+def test_sinc_regular_native_grid_preserves_original_amplitudes():
     x, time = np.arange(10) * 4, np.array([0])
-    raster, gx, _, extent = aligned_raster(x, time, np.arange(10)[None, :], 3, 1, "nearest")
-    np.testing.assert_array_equal(raster, [[1, 5, 8]])
-    np.testing.assert_allclose(gx, [-2 + 20 / 3, 18, 38 - 20 / 3])
+    raster, gx, _, extent = resample.seismic_raster(x, time, np.arange(10, dtype=np.float32)[None, :], 10, 1)
+    np.testing.assert_array_equal(raster, np.arange(10)[None, :])
+    np.testing.assert_allclose(gx, x)
     assert extent[:2] == (-2, 38)
 
 
 def test_interactive_reuses_one_original_section_and_off_path_has_no_overlay():
     survey = SectionSurvey([30, 33, 38], [200, 204, 208, 212], np.arange(12).reshape(4, 3))
-    default = interactive_section(survey, {}, SectionRequest(section_number=1))
+    default = interactive_section(survey, {}, SectionRequest(section_number=1, seismic={"background_interpolation": False}))
     assert survey.calls == 1
-    assert "trace_overlay" not in default and "raster_extent" not in default
-    np.testing.assert_allclose(default["x"], [30, 34, 38])
+    assert "trace_overlay" not in default
+    np.testing.assert_allclose(default["x"], [30, 33, 38])
     enabled = interactive_section(survey, {}, SectionRequest(section_number=1,
                 seismic={"wiggle": True, "variable_area": True}, target_width=24, target_height=24))
     assert survey.calls == 2

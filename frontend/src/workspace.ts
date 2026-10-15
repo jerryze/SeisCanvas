@@ -25,14 +25,19 @@ export type HorizonMapState = {
 };
 
 export type MapWorkspace = {
+  activeView: "map" | "section";
   state: HorizonMapState;
   settings: ExportDialogSettings;
   profileOn: boolean;
   profileA: [number, number] | null;
   profileB: [number, number] | null;
-  profileShare: number;
+  profileXRange: [number, number] | null;
+  profileTimeRange: [number, number] | null;
+  /** Plot width / height; null fills the available workspace automatically. */
+  profileAspectRatio: number | null;
   profileSettings: ExportDialogSettings;
   drag: "zoom" | "pan";
+  profileDrag: "zoom" | "pan";
 };
 
 export function initialMapWorkspace(): MapWorkspace {
@@ -50,8 +55,20 @@ export function initialMapWorkspace(): MapWorkspace {
       contours: true, interval_auto: true, interval: 10, line_width: 0.5,
       labels: false, colorbar: true, x_range: null, y_range: null,
     },
-    settings, profileOn: false, profileA: null, profileB: null, profileShare: 45, drag: "zoom",
+    activeView: "map", settings, profileOn: false, profileA: null, profileB: null, drag: "zoom", profileDrag: "zoom",
+    profileXRange: null, profileTimeRange: null, profileAspectRatio: null,
     profileSettings: { ...settings, height: 80, show_curves: true, show_legend: true, show_ab: true },
+  };
+}
+
+/** Upgrade old split-pane workspaces without retaining their height control. */
+export function normalizeMapWorkspace(map: MapWorkspace): MapWorkspace {
+  const { profileShare: _obsoleteHeight, ...saved } = map as MapWorkspace & { profileShare?: number };
+  return { ...initialMapWorkspace(), ...saved,
+    activeView: saved.activeView === "section" ? "section" : "map",
+    profileDrag: saved.profileDrag === "pan" ? "pan" : "zoom",
+    profileAspectRatio: typeof saved.profileAspectRatio === "number" && Number.isFinite(saved.profileAspectRatio)
+      && saved.profileAspectRatio >= 0.02 && saved.profileAspectRatio <= 50 ? saved.profileAspectRatio : null,
   };
 }
 
@@ -107,7 +124,7 @@ export function reconcileMapWorkspace(map: MapWorkspace, horizons: Pick<HS, "id"
 export function restoreState(defaults: WorkspaceState, saved: WorkspaceState | null, horizons: HS[]): WorkspaceState {
   const state = saved?.version === 1 ? saved : defaults;
   const ids = new Set(horizons.map(h => h.id));
-  const map = state.map || defaults.map;
+  const map = normalizeMapWorkspace(state.map || defaults.map);
   return {
     ...defaults, ...state,
     view: {

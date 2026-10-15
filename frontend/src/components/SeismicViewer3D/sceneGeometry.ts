@@ -1,4 +1,4 @@
-import type { VS, Export3D } from "../../types";
+import type { VS, Export3D, Section } from "../../types";
 import { PLOT_DASH } from "../plotStyle";
 export type SliceData = {
   id: string;
@@ -9,6 +9,12 @@ export type SliceData = {
   b: number[];
   amplitude: (number | null)[][];
   native_shape: number[];
+  a_edges?: number[];
+  b_edges?: number[];
+  trace_overlay?: Section["trace_overlay"];
+  source_a_range?: number[];
+  source_b_range?: number[];
+  interpolation?: "sinc8" | "linear" | "native";
 };
 export type Intersection = {
   slice_id: string;
@@ -21,6 +27,8 @@ export type Intersection = {
 };
 export type Mesh = {
   scalar: (number | null)[];
+  amplitude?: (number | null)[];
+  amplitude_faces?: { i: number[]; j: number[]; k: number[] };
   twt_range: [number, number];
   x: number[];
   y: number[];
@@ -55,6 +63,12 @@ const symbols: Record<string, string> = {
 };
 const safe = (name: string) =>
   name.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+// Plotly otherwise matches actors by array index. Inserting a Wiggle/VA actor
+// can then give a seismic mesh a horizon's persistent GPU colormap texture.
+// Plotly uses UIDs in CSS selectors too. Hex-encode the identity without
+// discarding punctuation/Unicode that could distinguish two source IDs.
+const actorUid = (...parts: string[]) => "seis-" +
+  Array.from(new TextEncoder().encode(JSON.stringify(parts)), byte => byte.toString(16).padStart(2, "0")).join("");
 function line(
   x: any[],
   y: any[],
@@ -76,6 +90,122 @@ function line(
     ...extra,
   };
 }
+
+/** All slice geometry uses the same Trace/TWT-to-world transform. */
+export function planePoint(plane: Pick<SliceData, "kind" | "position">, a: number, b: number) {
+  return [plane.kind === "crossline" ? plane.position : a,
+    plane.kind === "inline" ? plane.position : plane.kind === "crossline" ? a : b,
+    plane.kind === "time" ? plane.position : b];
+}
+
+function rgb(color: string): number[] {
+  if (color.startsWith("#")) {
+    const hex = color.length === 4 ? color.slice(1).split("").map(c => c + c).join("") : color.slice(1);
+    return [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16));
+  }
+  return (color.match(/[\d.]+/g) || ["0", "0", "0"]).slice(0, 3).map(Number);
+}
+
+/** Colormap mapping follows amplitude interpolation/clipping. Every rendered
+ * sample cell has constant face color, so WebGL never smooths an RGB texture. */
+function sliceCells(plane: SliceData, colorscale: any[], data: SceneData, view: VS) {
+  const colors = colorscale.map(([value, color]) => [value, rgb(color)]);
+  const palette = Array.from({ length: 256 }, (_, index) => {
+    const value = index / 255;
+    let next = colors.findIndex(([at]) => at >= value);
+    if (next < 1) next = next === 0 ? 1 : colors.length - 1;
+    const [lo, a] = colors[next - 1], [hi, b] = colors[next];
+    const fraction = hi === lo ? 0 : (value - lo) / (hi - lo);
+    return `rgb(${a.map((v: number, i: number) => Math.round(v + fraction * (b[i] - v))).join(",")})`;
+  });
+  const x: number[] = [], y: number[] = [], z: number[] = [],
+    i: number[] = [], j: number[] = [], k: number[] = [], facecolor: string[] = [];
+  const width = plane.a_edges!.length;
+  for (const b of plane.b_edges!) for (const a of plane.a_edges!) {
+    const point = planePoint(plane, a, b);
+    x.push(point[0]); y.push(point[1]); z.push(point[2]);
+  }
+  plane.amplitude.forEach((row, r) => row.forEach((sample, c) => {
+    if (sample === null || !Number.isFinite(sample)) return;
+    const value = view.seismic.reverse_polarity ? -sample : sample;
+    const index = Math.max(0, Math.min(255, Math.floor(256 * (value - data.vmin) / (data.vmax - data.vmin))));
+    const a = r * width + c, b = a + 1, d = a + width, e = d + 1;
+    i.push(a, a); j.push(b, e); k.push(e, d);
+    facecolor.push(palette[index], palette[index]);
+  }));
+  return { type: "mesh3d", x, y, z, i, j, k, facecolor, flatshading: true };
+}
+
+/** Positive lobes are time-directed strips. Triangulating each strip keeps
+ * concave lobes and their exact zero-crossing boundaries inside the fill. */
+export function variableAreaMesh(plane: SliceData) {
+  const path = plane.trace_overlay?.variable_area;
+  const x: number[] = [], y: number[] = [], z: number[] = [],
+    i: number[] = [], j: number[] = [], k: number[] = [];
+  let polygon: [number, number][] = [];
+  function append() {
+    if (polygon.length < 4) { polygon = []; return; }
+    const baseline = polygon[0][0];
+    const boundary = polygon.slice(0, -1);
+    for (let n = 1; n < boundary.length; n++) {
+      const [a, at] = boundary[n - 1], [b, bt] = boundary[n];
+      if (bt <= at) continue;
+      const first = x.length;
+      for (const [horizontal, time] of [[baseline, at], [a, at], [b, bt], [baseline, bt]]) {
+        const left = plane.a_edges?.[0] ?? plane.a[0], right = plane.a_edges?.at(-1) ?? plane.a.at(-1)!;
+        const point = planePoint(plane, Math.max(left, Math.min(right, horizontal)), time);
+        x.push(point[0]); y.push(point[1]); z.push(point[2]);
+      }
+      i.push(first, first); j.push(first + 1, first + 2); k.push(first + 2, first + 3);
+    }
+    polygon = [];
+  }
+  path?.x.forEach((value, n) => {
+    const time = path.time[n];
+    if (value === null || time === null) append();
+    else polygon.push([value, time]);
+  });
+  append();
+  return { type: "mesh3d", x, y, z, i, j, k, flatshading: true };
+}
+
+/** Clip strokes at the finite seismic plane without moving trace baselines. */
+export function wiggleCoordinates(plane: SliceData) {
+  const path = plane.trace_overlay!.wiggle;
+  const left = plane.a_edges?.[0] ?? plane.a[0], right = plane.a_edges?.at(-1) ?? plane.a.at(-1)!;
+  const top = plane.b_edges?.[0] ?? plane.b[0], bottom = plane.b_edges?.at(-1) ?? plane.b.at(-1)!;
+  const points: (number | null)[][] = [];
+  let previous: [number, number] | null = null;
+  let last: [number, number] | null = null;
+  for (let n = 0; n < path.x.length; n++) {
+    const a = path.x[n], b = path.time[n];
+    if (a === null || b === null) { previous = last = null; continue; }
+    const current: [number, number] = [a, b];
+    if (previous) {
+      let low = 0, high = 1;
+      for (const [axis, lower, upper] of [[0, left, right], [1, top, bottom]]) {
+        const delta = current[axis] - previous[axis];
+        if (!delta) { if (current[axis] < lower || current[axis] > upper) high = -1; }
+        else {
+          const p = (lower - previous[axis]) / delta, q = (upper - previous[axis]) / delta;
+          low = Math.max(low, Math.min(p, q)); high = Math.min(high, Math.max(p, q));
+        }
+      }
+      if (low <= high) {
+        const start: [number, number] = [previous[0] + low * (a - previous[0]), previous[1] + low * (b - previous[1])];
+        const end: [number, number] = [previous[0] + high * (a - previous[0]), previous[1] + high * (b - previous[1])];
+        if (!last || last[0] !== start[0] || last[1] !== start[1]) {
+          if (points.length) points.push([null, null, null]);
+          points.push(planePoint(plane, ...start));
+        }
+        points.push(planePoint(plane, ...end)); last = end;
+      } else last = null;
+    }
+    previous = current;
+  }
+  return points;
+}
+
 export function buildTraces(
   data: SceneData,
   view: VS,
@@ -127,11 +257,9 @@ export function buildTraces(
       row.map((v) => (v === null ? null : s.reverse_polarity ? -v : v)),
     );
     traces.push({
-      type: "surface",
-      x,
-      y,
-      z,
-      surfacecolor,
+      ...(plane.a_edges && plane.b_edges ? sliceCells(plane, colorscale, data, view)
+        : { type: "surface", x, y, z, surfacecolor }),
+      uid: actorUid("slice", plane.kind, plane.id, "background"),
       colorscale,
       cmin: data.vmin,
       cmax: data.vmax,
@@ -156,6 +284,19 @@ export function buildTraces(
         plane.position +
         "</extra>",
     });
+    if (plane.kind !== "time" && plane.trace_overlay) {
+      if (s.variable_area && plane.trace_overlay.variable_area.x.length)
+        traces.push({ ...variableAreaMesh(plane), color: s.variable_area_color,
+          uid: actorUid("slice", plane.kind, plane.id, "variable-area"),
+          lighting: { ambient: 1, diffuse: 0, specular: 0, fresnel: 0 },
+          opacity: state.opacity, showlegend: false, hoverinfo: "skip", meta: { depthLayer: 1 } });
+      if (s.wiggle && plane.trace_overlay.wiggle.x.length) {
+        const points = wiggleCoordinates(plane);
+        traces.push(line(points.map(p => p[0]), points.map(p => p[1]), points.map(p => p[2]),
+          "#000000", 0.8, { uid: actorUid("slice", plane.kind, plane.id, "wiggle"),
+            opacity: state.opacity, meta: { depthLayer: 2 } }));
+      }
+    }
     if (state.border.visible) {
       const a0 = plane.a[0],
         a1 = plane.a.at(-1)!,
@@ -176,7 +317,8 @@ export function buildTraces(
           bb.map((b) => (plane.kind === "time" ? plane.position : b)),
           state.border.color,
           (state.border.width * 4) / 3,
-          { opacity: state.opacity, meta: { depthLayer: 1 } },
+          { uid: actorUid("slice", plane.kind, plane.id, "border"),
+            opacity: state.opacity, meta: { depthLayer: s.wiggle || s.variable_area ? 4 : 1 } },
         ),
       );
     }
@@ -188,16 +330,25 @@ export function buildTraces(
     if (h.display_mode === "full_surface" && hd.mesh) {
       const mesh = hd.mesh;
       const [tmin, tmax] = mesh.twt_range;
-      const twtColor = h.color_by !== "solid";
+      const amplitudeColor = h.color_by === "amplitude";
+      if (amplitudeColor && (!mesh.amplitude || !mesh.amplitude_faces?.i.length)) continue;
+      const twtColor = h.color_by !== "solid" && !amplitudeColor;
+      const intensity = amplitudeColor
+        ? mesh.amplitude!.map(v => v === null ? null : s.reverse_polarity ? -v : v)
+        : mesh.scalar;
+      const faces = amplitudeColor ? mesh.amplitude_faces! : mesh;
       // A constant-time horizon uses the middle color, with a nonzero scale.
       const padding = tmin === tmax ? Math.max(0.5, Math.abs(tmin) * 1e-6) : 0;
       traces.push({          type: "mesh3d",
+          // gl-mesh3d retains its texture when changing from intensity to
+          // solid color, so those two coloring modes need separate actors.
+          uid: actorUid("horizon", h.id, "surface", amplitudeColor ? "amplitude" : twtColor ? "twt" : "solid"),
           x: mesh.x,
           y: mesh.y,
           z: mesh.z,
-          i: mesh.i,
-          j: mesh.j,
-          k: mesh.k,
+          i: faces.i,
+          j: faces.j,
+          k: faces.k,
           color: h.color,
           ...(twtColor ? {
             intensity: mesh.scalar,
@@ -206,6 +357,11 @@ export function buildTraces(
             cauto: false,
             cmin: tmin - padding,
             cmax: tmax + padding,
+          } : {}),
+          ...(amplitudeColor ? {
+            intensity, intensitymode: "vertex", colorscale,
+            cauto: false, cmin: data.vmin, cmax: data.vmax,
+            customdata: intensity,
           } : {}),
           opacity: h.opacity,
           name: h.name,
@@ -225,7 +381,8 @@ export function buildTraces(
           lightposition: { x: 0, y: 0, z: -1 },
           showscale: false,
           showlegend: false,
-          hovertemplate: `${safe(h.name)}<br>Inline: %{y}<br>Crossline: %{x}<br>Time: %{z:.1f} ms<extra></extra>`,
+          hovertemplate: `${safe(h.name)}<br>Inline: %{y}<br>Crossline: %{x}<br>Time: %{z:.1f} ms` +
+            (amplitudeColor ? "<br>振幅: %{customdata:.4g}" : "") + "<extra></extra>",
         });
     }
     if (h.display_mode === "slice_intersections")
@@ -254,7 +411,8 @@ export function buildTraces(
         if (showLine && h.outline.enabled)
           traces.push({
             ...base,
-            meta: { depthLayer: 1 },
+            uid: actorUid("horizon", h.id, pts.kind, pts.slice_id, "outline"),
+            meta: { depthLayer: s.wiggle || s.variable_area ? 3 : 1 },
             mode: "lines",
             line: {
               color: "#000",
@@ -265,7 +423,8 @@ export function buildTraces(
           });
         traces.push({
           ...base,
-          meta: { depthLayer: 2 },
+          uid: actorUid("horizon", h.id, pts.kind, pts.slice_id, "foreground"),
+          meta: { depthLayer: s.wiggle || s.variable_area ? 4 : 2 },
           mode:
             showLine && showMarker
               ? "lines+markers"
@@ -311,7 +470,7 @@ export function buildTraces(
           yy.push(y[v[1]], y[w[1]], null);
           zz.push(z[v[2]], z[w[2]], null);
         }
-    traces.push(line(xx, yy, zz, "#7f919a", 1, { meta: { exportRole: "boundingBox",
+    traces.push(line(xx, yy, zz, "#7f919a", 1, { uid: actorUid("scene", "bounding-box"), meta: { exportRole: "boundingBox",
       interactiveVisible: exportSettings?.show_bounding_box ?? view.scene.show_bounding_box } }));
   }
   return traces;

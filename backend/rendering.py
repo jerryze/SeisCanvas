@@ -5,15 +5,16 @@ from matplotlib.figure import Figure
 from matplotlib.collections import LineCollection, PolyCollection
 from backend import resample
 from backend.figure_export import figure_size, save_figure
+from backend.horizon_display import sg_section, pchip_display
 from backend.style import get_cmap, font_family
 from backend.trace_overlay import (
-    WIGGLE_WIDTH, aligned_raster, build_trace_overlay, coordinate_edges, overlays_enabled,
+    DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH, WIGGLE_WIDTH,
+    build_trace_overlay, coordinate_cell_edges, coordinate_edges, overlays_enabled, reconstruction_extent,
 )
 
 #: A viewer-sized render grid, used when an export reuses the view resolution.
 VIEW_TARGET = (1600, 1000)
-#: Publication rasters may be upsampled far beyond the samples, but six real
-#: samples must not turn into ten million invented ones.
+#: Legacy compatibility export; 2D Sinc rendering is bounded by pixels instead.
 EXPORT_MAX_UPSCALE = 32.0
 
 
@@ -38,37 +39,25 @@ def display_raster(x, time, z, state, settings):
     """
     x0, x1 = window_indices(x, state.x_range)
     t0, t1 = window_indices(time, state.time_range)
-    window = np.ascontiguousarray(z[t0 : t1 + 1, x0 : x1 + 1])
+    window = z[t0 : t1 + 1, x0 : x1 + 1]
     native_height, native_width = window.shape
+    x_edges, t_edges = coordinate_cell_edges(x), coordinate_cell_edges(time)
+    extent = (float(x_edges[x0]), float(x_edges[x1 + 1]), float(t_edges[t0]), float(t_edges[t1 + 1]))
+    if not state.seismic.background_interpolation:
+        return window, extent, (native_width, native_height)
+    extent = reconstruction_extent(x, time, state.x_range, state.time_range)
     if settings.resolution == "view":
-        width, height = resample.fit_target(
-            native_width,
-            native_height,
-            *VIEW_TARGET,
-            budget=resample.INTERACTIVE_BUDGET,
-        )
+        width = int(state.trace_viewport_width or DEFAULT_VIEWPORT_WIDTH)
+        height = int(state.trace_viewport_height or DEFAULT_VIEWPORT_HEIGHT)
+        budget = resample.INTERACTIVE_BUDGET
     else:
         width, height = settings.canvas_pixels()
-        width, height = resample.fit_target(
-            native_width,
-            native_height,
-            width,
-            height,
-            budget=resample.MAX_RENDER_PIXELS,
-            max_upscale=EXPORT_MAX_UPSCALE,
-        )
-    if overlays_enabled(state.seismic):
-        raster, _, _, extent = aligned_raster(
-            x[x0:x1 + 1], time[t0:t1 + 1], window, width, height, settings.interpolation
-        )
-        return raster, extent, (native_width, native_height)
-    raster = resample.resample(window, width, height, settings.interpolation)
-    extent = (
-        float(x[x0]) - 0.5,
-        float(x[x1]) + 0.5,
-        float(time[t0]) - 0.5,
-        float(time[t1]) + 0.5,
+        budget = resample.MAX_RENDER_PIXELS
+    width, height = resample.fit_target(
+        native_width, native_height, width, height, budget=budget,
+        max_upscale=max(width / native_width, height / native_height, 1.0),
     )
+    raster, _, _, _ = resample.seismic_raster(x, time, z, width, height, extent)
     return raster, extent, (native_width, native_height)
 
 
@@ -109,31 +98,56 @@ def _path_segments(path):
     return segments
 
 
+def _publication_raster(x, time, amplitudes, width, height, extent):
+    """Bound the raster while preserving valid wide physical page dimensions."""
+    width, height = resample.fit_target(
+        len(x), len(time), width, height, budget=resample.MAX_RENDER_PIXELS,
+        max_upscale=max(width / len(x), height / len(time), 1.0),
+    )
+    return resample.seismic_raster(x, time, amplitudes, width, height, extent)[0]
+
+
+def draw_horizon(ax, points, style, zorder=3, label=None, display_points=None):
+    """Shared 2D/A–B horizon furniture, independent of amplitude sampling."""
+    if not len(points) or not style.visible:
+        return False
+    line = style.line.visible and style.line.style != "none"
+    marker = style.marker.visible and style.marker.shape != "none"
+    dash = {"solid": "-", "dashed": "--", "dotted": ":", "dashdot": "-."}
+    markers = {"circle": "o", "square": "s", "triangle": "^", "diamond": "D", "cross": "x", "plus": "+"}
+    curve = points if display_points is None else display_points
+    if line:
+        if style.outline.enabled:
+            ax.plot(curve[:, 0], curve[:, 1], color="black",
+                    lw=style.line.width + 2 * style.outline.width,
+                    ls=dash[style.line.style], zorder=zorder)
+        ax.plot(curve[:, 0], curve[:, 1], color=style.color, lw=style.line.width,
+                ls=dash[style.line.style], zorder=zorder, label=label)
+    if marker:
+        ax.plot(points[:, 0], points[:, 1], ls="none", marker=markers[style.marker.shape],
+                ms=style.marker.size, color=style.color,
+                markeredgecolor="black" if style.outline.enabled else style.color,
+                markeredgewidth=style.outline.width if style.outline.enabled else 0,
+                zorder=zorder, label=label if not line else None)
+    return line or marker
+
+
 def render(survey, horizons, state, settings):
     x, t, z = survey.section(state.view_type, state.section_number)
     # Amplitude clipping always comes from the original section: the colour
     # range must not change with the interpolation mode or the zoom window.
     z, lo, hi = amplitude(z, state.seismic)
     trace_display = overlays_enabled(state.seismic)
-    raster_sampler = None
-    if settings.canvas == "fit":
-        x0, x1 = window_indices(x, state.x_range)
-        t0, t1 = window_indices(t, state.time_range)
-        raster = z[t0:t1 + 1, x0:x1 + 1]
-        extent = (float(x[x0]) - .5, float(x[x1]) + .5, float(t[t0]) - .5, float(t[t1]) + .5)
-        if trace_display:
-            native = raster
-            visible_x, visible_t = x[x0:x1 + 1], t[t0:t1 + 1]
-            raster_sampler = lambda width, height: aligned_raster(
-                visible_x, visible_t, native, width, height, settings.interpolation
-            )[0]
-            raster, _, _, extent = aligned_raster(
-                visible_x, visible_t, native, native.shape[1], native.shape[0], settings.interpolation
-            )
-    else:
-        raster, extent, _ = display_raster(x, t, z, state, settings)
+    x0, x1 = window_indices(x, state.x_range)
+    t0, t1 = window_indices(t, state.time_range)
+    native = z[t0:t1 + 1, x0:x1 + 1]
+    x_edges = coordinate_cell_edges(x)[x0:x1 + 2]
+    t_edges = coordinate_cell_edges(t)[t0:t1 + 2]
+    extent = (float(x_edges[0]), float(x_edges[-1]), float(t_edges[0]), float(t_edges[-1]))
+    if state.seismic.background_interpolation:
+        extent = reconstruction_extent(x, t, state.x_range, state.time_range)
     ratio = (state.aspect_ratio_2d[0] / state.aspect_ratio_2d[1]
-             if state.aspect_ratio_2d else raster.shape[1] / raster.shape[0])
+             if state.aspect_ratio_2d else native.shape[1] / native.shape[0])
     fig = Figure(
         figsize=figure_size(settings, ratio),
         dpi=settings.dpi,
@@ -146,40 +160,33 @@ def render(survey, horizons, state, settings):
     if settings.canvas == "fit":
         ax.set_box_aspect(1 / ratio)
     cmap = get_cmap(state.seismic.colormap, state.seismic.reverse_colormap)
-    canvas_width, canvas_height = settings.canvas_pixels()
-    # The raster is normally already at the output resolution, so let Agg blit
-    # it 1:1; only a coarser (view-resolution) raster is filtered on the way up.
-    blend = (
-        "nearest"
-        if raster.size >= canvas_width * canvas_height
-        else "bilinear"
-    )
-    image = ax.imshow(
-        raster,
-        cmap=cmap,
-        vmin=lo,
-        vmax=hi,
-        extent=extent,
-        # Row 0 is the smallest Time; the time axis is inverted below, so the
-        # array origin belongs at the bottom of the extent.
-        origin="lower",
-        aspect="auto",
-        interpolation=blend,
-        rasterized=True,
-        zorder=0,
-    )
+    rasters = []
+    if state.seismic.background_interpolation:
+        # Native data is only a layout placeholder. Once axes size is known,
+        # the sampler reconstructs amplitudes directly to final output pixels.
+        image = ax.imshow(native, cmap=cmap, vmin=lo, vmax=hi, extent=extent,
+                          origin="lower", aspect="auto", interpolation="none",
+                          rasterized=True, zorder=0)
+        sampler = lambda width, height: _publication_raster(x, t, z, width, height, extent)
+        rasters = [(image, native, sampler)]
+    else:
+        # Rasterized cells retain every original value and irregular boundary;
+        # no image resizing, smoothing, or colour-space interpolation occurs.
+        ax.pcolormesh(x_edges, t_edges, native, cmap=cmap, vmin=lo, vmax=hi,
+                      shading="flat", edgecolors="none", antialiased=False,
+                      rasterized=True, zorder=0)
     if trace_display:
         overlay = build_trace_overlay(x, t, z, state, lo, hi)
         if state.seismic.variable_area:
             ax.add_collection(PolyCollection(
                 _path_segments(overlay["variable_area"]),
                 facecolors=state.seismic.variable_area_color,
-                edgecolors="none", linewidths=0, zorder=1,
+                edgecolors="none", linewidths=0, antialiaseds=True, zorder=1,
             ), autolim=False)
         if state.seismic.wiggle:
             ax.add_collection(LineCollection(
                 _path_segments(overlay["wiggle"]),
-                colors="#000000", linewidths=WIGGLE_WIDTH, zorder=2,
+                colors="#000000", linewidths=WIGGLE_WIDTH, antialiaseds=True, zorder=2,
             ), autolim=False)
         # Axes furniture is drawn last; overlays always sit below horizons.
         ax.set_axisbelow(False)
@@ -187,52 +194,18 @@ def render(survey, horizons, state, settings):
         ax.yaxis.set_zorder(4)
         for spine in ax.spines.values():
             spine.set_zorder(4)
-    dash = {"solid": "-", "dashed": "--", "dotted": ":", "dashdot": "-."}
-    markers = {
-        "circle": "o",
-        "square": "s",
-        "triangle": "^",
-        "diamond": "D",
-        "cross": "x",
-        "plus": "+",
-    }
     for h in state.horizons:
-        if not h.visible or h.id not in horizons:
-            continue
-        pts = np.asarray(horizons[h.id].section(state.view_type, state.section_number))
-        if not len(pts):
-            continue
-        if h.line.visible and h.line.style != "none":
-            if h.outline.enabled:
-                ax.plot(
-                    pts[:, 0],
-                    pts[:, 1],
-                    color="black",
-                    lw=h.line.width + 2 * h.outline.width,
-                    ls=dash[h.line.style],
-                    zorder=3 if trace_display else 2,
-                )
-            ax.plot(
-                pts[:, 0],
-                pts[:, 1],
-                color=h.color,
-                lw=h.line.width,
-                ls=dash[h.line.style],
-                zorder=3 if trace_display else 2,
-            )
-        if h.marker.visible and h.marker.shape != "none":
-            ax.plot(
-                pts[:, 0],
-                pts[:, 1],
-                ls="none",
-                marker=markers[h.marker.shape],
-                ms=h.marker.size,
-                color=h.color,
-                markeredgecolor="black" if h.outline.enabled else h.color,
-                markeredgewidth=h.outline.width if h.outline.enabled else 0,
-                zorder=3 if trace_display else 2,
-            )
-    ax.set_xlim(state.x_range or (coordinate_edges(x) if trace_display else [float(x[0]) - 0.5, float(x[-1]) + 0.5]))
+        if h.visible and h.id in horizons:
+            points = np.asarray(horizons[h.id].section(state.view_type, state.section_number))
+            curve = None
+            if state.horizon_sg:
+                curve = sg_section(horizons[h.id], state.view_type, state.section_number,
+                                   state.horizon_sg_window, x, points)
+                if state.smooth_horizons:
+                    curve = pchip_display(curve, state.x_range or coordinate_edges(x),
+                                          settings.canvas_pixels()[0] if settings.canvas == "fixed" else settings.long_edge)
+            draw_horizon(ax, points, h, 3 if trace_display else 2, display_points=curve)
+    ax.set_xlim(state.x_range or coordinate_edges(x))
     tr = state.time_range or [float(t[0]), float(t[-1])]
     ax.set_ylim(max(tr), min(tr))
     if not settings.show_axes:
@@ -251,5 +224,4 @@ def render(survey, horizons, state, settings):
     ]:
         txt.set_fontfamily(font_family(settings.font))
         txt.set_fontsize(settings.font_size)
-    rasters = [(image, native, raster_sampler)] if raster_sampler else [(image, raster)]
     return save_figure(fig, settings, rasters)

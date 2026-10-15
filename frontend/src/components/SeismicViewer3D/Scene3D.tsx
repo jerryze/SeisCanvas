@@ -1,4 +1,4 @@
-import { captureScene, type Timing } from "./captureScene";
+import { captureScene, type Timing, type VectorOverlay } from "./captureScene";
 import {
   forwardRef,
   useState,
@@ -10,6 +10,7 @@ import Plotly from "plotly.js-dist-min";
 import { applyDepthLayers } from "./depthLayers";
 import { applyTimeAxisTitleRotation } from "./axisTitles";
 import { applySurfaceLighting } from "./surfaceLighting";
+import { measureSliceViewports } from "./sliceViewport";
 import {
   LoaderCircle,
   RotateCcw,
@@ -33,6 +34,7 @@ export type Scene3DCapture = {
   render_dpi?: number;
   camera: Camera;
   timings: Timing;
+  vector_overlay?: VectorOverlay;
 };
 export type Scene3DHandle = {
   captureFigure: (settings: Export3D, onStatus?: (message: string) => void) => Promise<Scene3DCapture>;
@@ -90,6 +92,12 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
   const renderVersion = useRef(0);
   const exporting = useRef(false);
   const [exportStatus, setExportStatus] = useState("");
+  const [sliceViewports, setSliceViewports] = useState<Record<string, [number, number]>>({});
+  function reportSliceViewports() {
+    if (exporting.current || !dataRef.current || !plot.current) return;
+    const measured = measureSliceViewports(plot.current, dataRef.current);
+    setSliceViewports(previous => JSON.stringify(previous) === JSON.stringify(measured) ? previous : measured);
+  }
   const displayedCamera = useRef("");
   // Saving an orbit must not rebuild surfaces or temporarily cover the canvas.
   const sceneStyle = JSON.stringify({
@@ -112,6 +120,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
       .map((h) => ({
         id: h.id,
         display_mode: h.display_mode,
+        amplitude: h.color_by === "amplitude",
         time_slice_tolerance: h.time_slice_tolerance,
       })),
     seismic: {
@@ -121,9 +130,14 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
       vmin: view.seismic.vmin,
       vmax: view.seismic.vmax,
       reverse_polarity: view.seismic.reverse_polarity,
-      interpolation: view.seismic.interpolation,
+      background_interpolation: view.seismic.background_interpolation,
+      wiggle_interpolation: view.seismic.wiggle_interpolation,
+      wiggle: view.seismic.wiggle,
+      variable_area: view.seismic.variable_area,
+      wiggle_gain: view.seismic.wiggle_gain,
     },
     quality: view.scene.quality,
+    slice_viewports: sliceViewports,
   });
   useEffect(() => {
     const abort = new AbortController();
@@ -136,11 +150,17 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
         const response = await api("/scene", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...latest.current.view, view_mode: "3d" }),
+          body: JSON.stringify({ ...latest.current.view, view_mode: "3d",
+            scene: { ...latest.current.view.scene, slice_viewports: sliceViewports } }),
           signal: abort.signal,
         });
         const next = await response.json();
         if (active) {
+          if (next.slices.some((plane: any) => plane.background_interpolation !== latest.current.view.seismic.background_interpolation))
+            throw new Error("三维显示后端版本不匹配，请重启 SeisCanvas 后端以启用插值和波形功能。");
+          if (latest.current.view.horizons.some(h => h.visible && h.display_mode === "full_surface"
+            && h.color_by === "amplitude" && !next.horizons[h.id]?.mesh?.amplitude))
+            throw new Error("三维层位后端版本不匹配，请重启 SeisCanvas 后端以启用振幅着色。");
           setData(next);
           latest.current.onError("");
         }
@@ -188,11 +208,13 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
         applySurfaceLighting(el);
         applyTimeAxisTitleRotation(el._fullLayout?.scene?._scene?.glplot?.axes);
         applyDepthLayers(el);
+        requestAnimationFrame(reportSliceViewports);
         displayedCamera.current = JSON.stringify(latest.current.view.scene.camera);
         el.on("plotly_relayout", (event: any) => {
           if (event["scene.camera"]) {
             displayedCamera.current = JSON.stringify(event["scene.camera"]);
             latest.current.onCamera(event["scene.camera"]);
+            requestAnimationFrame(reportSliceViewports);
           }
         });
         // Slice textures are resampled for display, so the amplitude readout
@@ -249,6 +271,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
         applySurfaceLighting(el);
         applyTimeAxisTitleRotation(el._fullLayout?.scene?._scene?.glplot?.axes);
         applyDepthLayers(el);
+        requestAnimationFrame(reportSliceViewports);
         displayedCamera.current = requestedKey;
       })
       .catch((e) => latest.current.onError(String(e)));
@@ -260,7 +283,8 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
     const el = plot.current;
     if (!el) return;
     const observer = new ResizeObserver(() => {
-      if ((el as any).data && !exporting.current) Plotly.Plots.resize(el);
+      if ((el as any).data && !exporting.current)
+        Promise.resolve(Plotly.Plots.resize(el)).then(reportSliceViewports);
     });
     observer.observe(el);
     return () => {
@@ -382,7 +406,8 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
               .map((h) => (
                 <span key={h.id}>
                   <i style={{ background: h.color }} />
-                  {h.name}{h.display_mode === "full_surface" && h.twt_range ? ` · ${Number(h.twt_range[0].toFixed(1))}–${Number(h.twt_range[1].toFixed(1))} ms` : ""} ·{" "}
+                  {h.name}{h.display_mode === "full_surface" && h.color_by === "amplitude" ? " · 振幅" :
+                    h.display_mode === "full_surface" && h.color_by !== "solid" && h.twt_range ? ` · ${Number(h.twt_range[0].toFixed(1))}–${Number(h.twt_range[1].toFixed(1))} ms` : ""} ·{" "}
                   {h.display_mode === "full_surface" ? "曲面" : "交线"}
                 </span>
               ))}

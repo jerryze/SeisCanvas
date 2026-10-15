@@ -24,11 +24,11 @@ def dimensions(data, fmt):
 
 def test_section_content_fit_all_formats_and_sampling(cube, monkeypatch, tmp_path):
     calls = []
-    original = resample.resample
-    def sample(data, width, height, method):
+    original = resample.seismic_raster
+    def sample(x, time, data, width, height, extent=None):
         calls.append((data.shape, width, height))
-        return original(data, width, height, method)
-    monkeypatch.setattr(resample, 'resample', sample)
+        return original(x, time, data, width, height, extent)
+    monkeypatch.setattr(resample, 'seismic_raster', sample)
     state = ViewState(section_number=10, aspect_ratio_2d=(3, 1))
     ratios = []
     for fmt in ['png', 'svg', 'pdf']:
@@ -132,9 +132,9 @@ def test_3d_publication_sampling_uses_final_pixel_request(cube, monkeypatch):
     from backend import scene
     original = scene.slice_data
     calls = []
-    def sampled(survey, kind, position, maximum, interpolation):
+    def sampled(survey, kind, position, maximum, interpolation, **kwargs):
         calls.append(maximum)
-        return original(survey, kind, position, maximum, interpolation)
+        return original(survey, kind, position, maximum, interpolation, **kwargs)
     monkeypatch.setattr(scene, 'slice_data', sampled)
     scene.scene_data(cube, {}, ViewState3D(
         scene={'export_long_edge': 1500},

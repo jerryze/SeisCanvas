@@ -24,6 +24,7 @@ from backend.models import (
     QueueMapRequest,
     QueueProfileRequest,
     SceneExportRequest,
+    Seismic,
 )
 from backend.rendering import amplitude, render
 
@@ -69,6 +70,8 @@ def add_2d(survey, horizons, req: Queue2DRequest) -> dict:
         **location,
         "horizons": [h.name for h in visible],
         "horizon_styles": [h.model_dump() for h in state.horizons],
+        "horizon_sg": state.horizon_sg,
+        "horizon_sg_window": state.horizon_sg_window,
         "seismic_colormap": state.seismic.colormap,
         "reverse_colormap": state.seismic.reverse_colormap,
         "clip_mode": state.seismic.clip_mode,
@@ -82,7 +85,11 @@ def add_2d(survey, horizons, req: Queue2DRequest) -> dict:
         "variable_area": state.seismic.variable_area,
         "wiggle_gain": state.seismic.wiggle_gain,
         "variable_area_color": state.seismic.variable_area_color,
+        "background_interpolation": state.seismic.background_interpolation,
+        "wiggle_interpolation": state.seismic.wiggle_interpolation,
+        "background_algorithm": "sinc8_time_linear_trace" if state.seismic.background_interpolation else "native",
         "trace_viewport_width": state.trace_viewport_width,
+        "trace_viewport_height": state.trace_viewport_height,
         "x_range": list(state.x_range) if state.x_range else None,
         "time_range": list(state.time_range) if state.time_range else None,
         "aspect_ratio_2d": list(state.aspect_ratio_2d) if state.aspect_ratio_2d else None,
@@ -192,12 +199,14 @@ def add_profile(survey, horizons, req: QueueProfileRequest) -> dict:
         req.show_curves,
         req.show_legend,
         req.show_ab,
+        req.section_state(seismic=Seismic(colormap=req.colormap, reverse_colormap=req.reverse_colormap)),
+        req.horizons,
     )
     filename = naming.map_profile_name(
         dataset,
         horizon.name,
         "Seismic",
-        naming.colormap_label(req.colormap, "Seismic"),
+        naming.colormap_label(req.seismic.colormap if req.seismic else req.colormap, "Seismic"),
         req.settings.width,
         req.settings.height,
         req.settings.dpi,
@@ -212,13 +221,17 @@ def add_profile(survey, horizons, req: QueueProfileRequest) -> dict:
         "b_distance": info["b_distance"],
         "path_start": info["path_start"],
         "path_end": info["path_end"],
-        "colormap": req.colormap,
-        "reverse_colormap": req.reverse_colormap,
+        "colormap": (req.seismic.colormap if req.seismic else req.colormap),
+        "reverse_colormap": (req.seismic.reverse_colormap if req.seismic else req.reverse_colormap),
         "overlays": info["curves"] if req.show_curves else [],
         "show_curves": req.show_curves,
         "show_legend": req.show_legend,
         "show_ab": req.show_ab,
-        "amplitude_range": [-info["vmax"], info["vmax"]],
+        "amplitude_range": [info["vmin"], info["vmax"]],
+        "seismic": req.section_state(seismic=Seismic(colormap=req.colormap, reverse_colormap=req.reverse_colormap)).seismic.model_dump(),
+        "aspect_ratio_2d": req.aspect_ratio_2d,
+        "horizons": [h.model_dump() for h in req.horizons] if req.horizons is not None else None,
+        "x_range": req.x_range, "time_range": req.time_range,
     }
     return session().add(
         data=data,
@@ -260,13 +273,18 @@ def add_3d(survey, req: Queue3DRequest) -> dict:
         )
     else:
         view_type = "3d_horizon_surface"
+        amplitude_surfaces = [h for h in surfaces if h.color_by == "amplitude"]
+        if amplitude_surfaces:
+            scalar = "Amplitude" if len(amplitude_surfaces) == len(surfaces) else "Mixed"
+            colormap = state.seismic.colormap if scalar == "Amplitude" else "Mixed"
+        else:
+            scalar = "Time"
+            colormap = surfaces[0].horizon_colormap if surfaces else "petrel"
         filename = naming.horizon_surface_name(
             dataset,
             naming.horizons_label([h.name for h in surfaces]) or content or "Horizons",
-            "Time",
-            naming.colormap_label(
-                surfaces[0].horizon_colormap if surfaces else "petrel", "Petrel"
-            ),
+            scalar,
+            naming.colormap_label(colormap, "Petrel"),
             settings.width,
             settings.height,
             settings.dpi,
@@ -279,6 +297,8 @@ def add_3d(survey, req: Queue3DRequest) -> dict:
         width=req.width_px,
         height=req.height_px,
         scale=req.scale,
+        background=settings.background,
+        vector_overlay=req.vector_overlay,
     )
     phase = perf_counter()
     raw, pixels, size = decode_scene_png(request)
@@ -291,18 +311,22 @@ def add_3d(survey, req: Queue3DRequest) -> dict:
     logging.getLogger(__name__).info("3D export timings (ms): %s", timings)
     summary = {
         "export_timings_ms": timings,
+        "vector_axes": req.vector_overlay is not None,
+        "axis_text_representation": "glyph_outlines" if req.vector_overlay is not None else "raster",
         "slices": slice_positions,
-        "interpolation": state.seismic.interpolation,
+        "interpolation": "sinc8-time-linear-space" if state.seismic.background_interpolation else "native",
         "horizons": [h.model_dump() for h in state.horizons],
         "horizon_names": [h.name for h in state.horizons],
         "surface_horizons": [h.name for h in surfaces],
+        "horizon_amplitude_colormap": state.seismic.colormap if any(h.color_by == "amplitude" for h in surfaces) else None,
         "camera": state.scene.camera,
         "lighting": any(h.lighting for h in state.horizons),
         "opacity": {h.name: h.opacity for h in state.horizons},
         "vertical_exaggeration": state.scene.aspect_ratio[2],
         "aspect_ratio": list(state.scene.aspect_ratio),
         "quality": state.scene.quality,
-        "background": state.scene.background,
+        "background": settings.background,
+        "scene_background": state.scene.background,
         "seismic": state.seismic.model_dump(),
     }
     return session().add(

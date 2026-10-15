@@ -6,7 +6,7 @@ export function applyDepthLayers(element: any) {
   if (!scene?.glplot || !scene.traces) return;
   const gl = scene.glplot.gl as WebGLRenderingContext;
   for (const trace of Object.values(scene.traces) as any[]) {
-    for (const object of [trace.linePlot, trace.scatterPlot]) {
+    for (const object of [trace.linePlot, trace.scatterPlot, trace.mesh]) {
       if (!object || patched.has(object)) continue;
       patched.add(object);
       for (const method of ["draw", "drawTransparent", "drawPick"]) {

@@ -9,19 +9,12 @@ type Props = {
   onSeismic: (patch: Partial<SS>) => void;
 };
 
-/** Sidebar "地震显示" group: colormap, amplitude clipping and interpolation. */
-export default function SeismicPanel({
-  view,
-  maps,
-  onSeismic,
-}: Props) {
-  const s = view.seismic;
+/** Shared controls for 2D sections, 3D slices and the map's A–B profile. */
+export function SeismicSettings({ seismic: s, maps, onSeismic }: {
+  seismic: SS; maps: Record<string, any[]>; onSeismic: (patch: Partial<SS>) => void;
+}) {
   return (
-    <Group
-      icon={<Activity size={16} />}
-      title="地震显示"
-      defaultOpen={view.view_mode === "2d"}
-    >
+    <>
       <ColormapSelect label="色标" value={s.colormap} options={colormapOptions(maps)} reverse={s.reverse_colormap} onChange={(colormap) => onSeismic({ colormap })} />
 
       <div className="check-row">
@@ -38,7 +31,6 @@ export default function SeismicPanel({
         />
       </div>
 
-      {view.view_mode === "2d" && (
         <details className="subsettings">
           <SubsectionSummary
             title="波形与变面积"
@@ -81,7 +73,6 @@ export default function SeismicPanel({
             </label>
           </div>
         </details>
-      )}
 
       <details className="subsettings">
         <SubsectionSummary
@@ -140,36 +131,28 @@ export default function SeismicPanel({
             </div>
           )}
 
-          <div className="segmented" role="group" aria-label="插值方式">
-            {(
-              [
-                ["nearest", "最近邻"],
-                ["bilinear", "双线性"],
-                ["bicubic", "双三次"],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                className={s.interpolation === value ? "active" : ""}
-                aria-pressed={s.interpolation === value}
-                onClick={() => onSeismic({ interpolation: value })}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
 
-          {view.view_mode === "2d" && (
-            <Toggle
-              label="自适应分辨率"
-              checked={s.adaptive_resolution}
-              onChange={(adaptive_resolution) =>
-                onSeismic({ adaptive_resolution })
-              }
-            />
-          )}
+              <Toggle
+                label="背景插值"
+                title="Sinc8 插值；关闭后直接显示原始采样单元"
+                checked={s.background_interpolation}
+                onChange={(background_interpolation) => onSeismic({ background_interpolation })}
+              />
+              <Toggle
+                label="Wiggle 插值"
+                title="对地震道时间采样使用 Sinc8；关闭后连接原始采样点"
+                checked={s.wiggle_interpolation}
+                onChange={(wiggle_interpolation) => onSeismic({ wiggle_interpolation })}
+              />
         </div>
       </details>
-    </Group>
+    </>
   );
+}
+
+/** Sidebar container; all section renderers edit the same seismic state. */
+export default function SeismicPanel({ view, maps, onSeismic }: Props) {
+  return <Group icon={<Activity size={16} />} title="地震显示" defaultOpen={view.view_mode === "2d"}>
+    <SeismicSettings seismic={view.seismic} maps={maps} onSeismic={onSeismic} />
+  </Group>;
 }

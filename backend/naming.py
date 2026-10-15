@@ -18,7 +18,7 @@ ILLEGAL = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 COLORMAP_LABELS = {
     "seismic": "Seismic",
     "red_white_blue": "RedWhiteBlue",
-    "reference_seismic": "ReferenceSeismic",
+    "reference_seismic": "RedWhiteBlack",
     "RdBu": "RdBu",
     "coolwarm": "Coolwarm",
     "viridis": "Viridis",

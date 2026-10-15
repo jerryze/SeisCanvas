@@ -15,7 +15,7 @@ export function overlapsAtJunction(a: Endpoint, b: Endpoint) {
   );
 }
 
-function project(point: number[], uniforms: any): Point {
+export function project(point: number[], uniforms: any): Point {
   let v = [...point, 1];
   for (const matrix of [uniforms.model, uniforms.view, uniforms.projection])
     v = [0, 1, 2, 3].map((r) =>
@@ -30,7 +30,7 @@ function project(point: number[], uniforms: any): Point {
 
 /** Mirror gl-axes3d's text shader alignment so collision bounds use the
  * existing glyph geometry, including font, size and text rotation. */
-function textAngle(
+export function textAngle(
   point: number[],
   axis: number[],
   alignDir: number[],
@@ -49,7 +49,7 @@ function textAngle(
     if (Math.sin(a) < 0) a += Math.PI;
     return a;
   };
-  const a = direction(axis),
+  const a = axis.every(v => v === 0) ? Math.PI / 2 : direction(axis),
     b = direction(alignDir);
   const flip =
     Math.cos(a) * Math.sin(b) - Math.sin(a) * Math.cos(b) > 0 ? Math.PI : 0;

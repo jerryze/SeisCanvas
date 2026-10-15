@@ -31,7 +31,7 @@ class Seismic(BaseModel):
     vmin: float | None = None
     vmax: float | None = None
     reverse_polarity: bool = False
-    #: Display resampling only. Bilinear while browsing, bicubic for figures.
+    #: Compatibility with older saved workspaces; seismic sections use the switches below.
     interpolation: Literal["nearest", "bilinear", "bicubic"] = "bilinear"
     #: Match the render grid to the viewport pixels instead of a fixed grid.
     adaptive_resolution: bool = True
@@ -40,6 +40,9 @@ class Seismic(BaseModel):
     variable_area: bool = False
     wiggle_gain: float = Field(1.0, ge=0, le=100)
     variable_area_color: str = Field("#000000", pattern=r"^#[0-9a-fA-F]{6}$")
+    #: Shared seismic reconstruction for 2D, 3D slices and A–B profiles.
+    background_interpolation: bool = True
+    wiggle_interpolation: bool = True
 
 
 class Line(BaseModel):
@@ -79,7 +82,13 @@ class ViewState(BaseModel):
     aspect_ratio_2d: tuple[float, float] | None = None
     #: Inner 2D axes width in CSS pixels, independent of export resolution/DPI.
     trace_viewport_width: float | None = Field(None, gt=0, le=16000)
+    trace_viewport_height: float | None = Field(None, gt=0, le=16000)
     seismic: Seismic = Field(default_factory=Seismic)
+    #: Shared 2D display preference; native data and export geometry stay raw.
+    smooth_horizons: bool = False
+    #: SG is independent of PCHIP and never changes stored horizon picks.
+    horizon_sg: bool = False
+    horizon_sg_window: Literal[5, 7, 11, 15] = 7
     horizons: list[HorizonStyle] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -118,7 +127,7 @@ class Settings(BaseModel):
     show_labels: bool = True
     show_title: bool = True
     format: Literal["png", "pdf", "svg"] = "png"
-    #: Publication rendering: bicubic at the final output resolution.
+    #: Scalar-map compatibility; seismic sections use their display switches.
     interpolation: Literal["nearest", "bilinear", "bicubic"] = "bicubic"
     #: ``export`` re-renders the raster at the output pixels, ``view`` reuses
     #: the interactive (viewport matched) render grid.
@@ -170,7 +179,7 @@ class Slices(BaseModel):
 class Horizon3DStyle(HorizonStyle):
     display_mode: Literal["full_surface", "slice_intersections"] = "full_surface"
     opacity: float = Field(1, ge=0, le=1)
-    color_by: Literal["twt", "solid"] = "twt"
+    color_by: Literal["twt", "amplitude", "solid"] = "twt"
     horizon_colormap: Literal["petrel"] = "petrel"
     smooth_shading: bool = True
     lighting: bool = True
@@ -189,6 +198,15 @@ class SceneState(BaseModel):
     #: Plotly camera. The backend never renders it, but the export manifest must
     #: be able to reproduce the exact viewpoint.
     camera: dict | None = None
+    #: Transient projected CSS dimensions, supplied by the 3D viewer.
+    slice_viewports: dict[str, tuple[float, float]] = Field(default_factory=dict, max_length=18)
+
+    @field_validator("slice_viewports")
+    @classmethod
+    def valid_viewports(cls, values):
+        if any(not all(0 < size <= 16000 for size in viewport) for viewport in values.values()):
+            raise ValueError("Slice viewport dimensions must be between 0 and 16000.")
+        return values
 
     @model_validator(mode="after")
     def valid_aspect(self):
@@ -328,6 +346,34 @@ class LocalHorizonRequest(BaseModel):
     time_column: int = Field(default=2, ge=0)
 
 
+class SceneVectorPath(BaseModel):
+    #: Exact projected glyph/line triangles, expressed in output pixel units.
+    points: list[tuple[float, float]] = Field(min_length=3, max_length=4096)
+    color: str = Field("#000000", pattern=r"^#[0-9a-fA-F]{6}$")
+    opacity: float = Field(1, ge=0, le=1)
+    layer: Literal["back", "front"] = "front"
+
+
+class SceneVectorLine(BaseModel):
+    points: list[tuple[float, float]] = Field(min_length=2, max_length=4096)
+    color: str = Field("#000000", pattern=r"^#[0-9a-fA-F]{6}$")
+    width: float = Field(1, gt=0, le=100)
+    opacity: float = Field(1, ge=0, le=1)
+    layer: Literal["back", "front"] = "front"
+
+
+class SceneVectorOverlay(BaseModel):
+    paths: list[SceneVectorPath] = Field(default_factory=list, max_length=50_000)
+    lines: list[SceneVectorLine] = Field(default_factory=list, max_length=10_000)
+    labels: list[Annotated[str, Field(max_length=500)]] = Field(default_factory=list, max_length=1000)
+
+    @model_validator(mode="after")
+    def bounded_vertices(self):
+        if sum(len(item.points) for item in [*self.paths, *self.lines]) > 500_000:
+            raise ValueError("3D vector furniture exceeds 500000 vertices.")
+        return self
+
+
 class SceneExportRequest(BaseModel):
     dpi: float | None = Field(None, ge=1, le=2000)
     png: str = Field(max_length=135_000_000)
@@ -335,6 +381,8 @@ class SceneExportRequest(BaseModel):
     width: int = Field(ge=64, le=4000)
     height: int = Field(ge=64, le=4000)
     scale: int = Field(ge=1, le=4)
+    background: str = Field("white", pattern=r"^(white|transparent|#[0-9a-fA-F]{6})$")
+    vector_overlay: SceneVectorOverlay | None = None
 
 
 class HorizonMapState(BaseModel):
@@ -382,7 +430,27 @@ class HorizonMapExport(BaseModel):
     settings: Settings
 
 
-class HorizonProfileRequest(BaseModel):
+class ProfileDisplayState(BaseModel):
+    seismic: Seismic | None = None
+    x_range: tuple[float, float] | None = None
+    time_range: tuple[float, float] | None = None
+    aspect_ratio_2d: tuple[float, float] | None = None
+    trace_viewport_width: float | None = Field(None, gt=0, le=16000)
+    trace_viewport_height: float | None = Field(None, gt=0, le=16000)
+
+    def section_state(self, **fallback):
+        return ViewState(section_number=0, **{
+            **fallback, **self.model_dump(include={"x_range", "time_range", "aspect_ratio_2d", "trace_viewport_width", "trace_viewport_height"}),
+            "seismic": self.seismic or fallback.get("seismic", Seismic()),
+        })
+
+    @model_validator(mode="after")
+    def valid_profile_display(self):
+        self.section_state()
+        return self
+
+
+class HorizonProfileRequest(ProfileDisplayState):
     """A–B horizon profile: sample the map scalars along a straight line."""
 
     state: HorizonMapState
@@ -425,6 +493,7 @@ class Queue3DRequest(BaseModel):
     timings: dict[str, float] = Field(default_factory=dict, max_length=20)
     settings: Scene3DSettings = Field(default_factory=Scene3DSettings)
     state: ViewState3D
+    vector_overlay: SceneVectorOverlay | None = None
 
     @model_validator(mode="after")
     def pixels(self):
@@ -433,7 +502,7 @@ class Queue3DRequest(BaseModel):
         return self
 
 
-class QueueProfileRequest(BaseModel):
+class QueueProfileRequest(ProfileDisplayState):
     """Standalone A–B profile figure: interpolated seismic section + overlays."""
 
     kind: Literal["profile"] = "profile"
@@ -443,6 +512,7 @@ class QueueProfileRequest(BaseModel):
     b: tuple[float, float]
     #: Horizon id -> line color, so overlays match the on-screen styles.
     curve_colors: dict[str, str] = Field(default_factory=dict)
+    horizons: list[HorizonStyle] | None = Field(None, max_length=512)
     #: Section background colormap, shared with the 2D window display.
     colormap: str = "seismic"
     reverse_colormap: bool = False

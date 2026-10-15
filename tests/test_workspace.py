@@ -142,6 +142,7 @@ def test_trace_display_settings_restore_after_restart(cube):
     state["view"]["seismic"].update({
         "wiggle": True, "variable_area": True, "wiggle_gain": 2.5,
         "variable_area_color": "#224466",
+        "background_interpolation": False, "wiggle_interpolation": False,
     })
     assert save(client, result, state).status_code == 200
     restart()

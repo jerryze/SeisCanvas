@@ -23,9 +23,26 @@ def figure_size(settings, ratio):
 
 def save_figure(fig, settings, rasters=(), colorbars=()):
     """Rasters are (artist, native data[, coordinate-aware sampler])."""
+    transparent = settings.background == "transparent"
+    background = "none" if transparent else "white"
+    # Preserve text as SVG text / embedded TrueType glyphs in every page mode.
+    vector_fonts = {"svg.fonttype": "none", "pdf.fonttype": 42}
     if settings.canvas == "fixed":
+        # Custom 2D samplers also need the actual subplot size on fixed pages.
+        # Other renderers keep their existing pre-rendered raster path.
+        custom = [raster for raster in rasters if len(raster) > 2]
+        if custom:
+            canvas = FigureCanvasAgg(fig)
+            canvas.draw()
+            fig.set_layout_engine("none")
+            for artist, native, sampler in custom:
+                box = artist.axes.get_window_extent()
+                artist.set_data(sampler(max(1, math.ceil(box.width)), max(1, math.ceil(box.height))))
+                artist.set_interpolation("none")
         out = io.BytesIO()
-        fig.savefig(out, format=settings.format, dpi=settings.dpi)
+        with rc_context(vector_fonts):
+            fig.savefig(out, format=settings.format, dpi=settings.dpi,
+                        transparent=transparent, facecolor=background, edgecolor=background)
         return out.getvalue()
     canvas = FigureCanvasAgg(fig)
     fig.set_dpi(100)
@@ -58,12 +75,11 @@ def save_figure(fig, settings, rasters=(), colorbars=()):
         w, h = max(1, math.ceil(box.width * dpi)), max(1, math.ceil(box.height * dpi))
         artist.set_data(raster[2](w, h) if len(raster) > 2 else resample.resample(native, w, h, settings.interpolation))
         artist.set_interpolation("none")
-    transparent = settings.format == "png" and settings.background == "transparent"
     out = io.BytesIO()
     # Small epsilon avoids Agg truncating an exact integer due to floating
     # point arithmetic. Vector page dimensions retain the measured bounds.
-    with rc_context({"svg.fonttype": "none", "pdf.fonttype": 42}):
+    with rc_context(vector_fonts):
         fig.savefig(out, format=settings.format, dpi=dpi + 1e-7,
                     bbox_inches=bbox, pad_inches=0,
-                    transparent=transparent, facecolor="none" if transparent else "white")
+                    transparent=transparent, facecolor=background, edgecolor=background)
     return out.getvalue()

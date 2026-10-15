@@ -96,6 +96,32 @@ def trace_ids_at(survey, ils, xls):
     return result
 
 
+def sample_horizon_amplitude(survey, ils, xls, times):
+    """Original seismic samples at exact spatial nodes, linear in horizon TWT.
+
+    This reads only the two bracketing samples per vertex. Missing traces,
+    off-grid nodes and out-of-range times remain NaN; the final sample is valid.
+    """
+    ils, xls, times = [np.asarray(a, dtype=float) for a in (ils, xls, times)]
+    shape = times.shape
+    ils, xls, times = ils.ravel(), xls.ravel(), times.ravel()
+    valid = (np.isfinite(ils) & np.isfinite(xls) & np.isfinite(times)
+             & np.isin(ils, survey.inlines) & np.isin(xls, survey.crosslines)
+             & (times >= survey.times[0]) & (times <= survey.times[-1]))
+    result = np.full(len(times), np.nan)
+    if not valid.any():
+        return result.reshape(shape)
+    ids = trace_ids_at(survey, ils[valid], xls[valid])
+    position = np.clip((times[valid] - survey.times[0]) / survey.interval, 0, len(survey.times) - 1)
+    lower = np.floor(position).astype(np.int64)
+    fraction = position - lower
+    low = read_samples(survey, ids, lower)
+    high = read_samples(survey, ids, np.minimum(lower + 1, len(survey.times) - 1))
+    sampled = np.where(fraction == 0, low, low * (1 - fraction) + high * fraction)
+    result[valid] = np.where(np.isfinite(sampled), sampled, np.nan)
+    return result.reshape(shape)
+
+
 def preview_ids(survey, ils, xls):
     if survey.regular is not None:
         return survey.regular.trace_id(np.asarray(ils)[:, None], np.asarray(xls)[None, :])

@@ -48,13 +48,54 @@ export default function HorizonPanel({
 }: Props) {
   const active = view.horizons.find((h) => h.id === selected);
   const [styleOpen, setStyleOpen] = useState(false);
+  const mapMode = view.view_mode === "map";
 
   return (
     <Group
       icon={<Layers size={20} />}
-      title="层位"
+      title={mapMode ? "层位管理" : "层位"}
       count={view.horizons.length}
     >
+      {view.view_mode === "2d" && (
+        <>
+          <Toggle
+            label="平滑曲线"
+            checked={view.smooth_horizons ?? false}
+            onChange={(smooth_horizons) =>
+              onPatch((v) => ({ ...v, smooth_horizons }))
+            }
+          />
+          <Toggle
+            label="SG 平滑显示"
+            checked={view.horizon_sg ?? false}
+            onChange={(horizon_sg) => onPatch((v) => ({ ...v, horizon_sg }))}
+          />
+          {view.horizon_sg && (
+            <label className="field">
+              平滑窗口
+              <Select
+                aria-label="平滑窗口"
+                value={view.horizon_sg_window ?? 7}
+                onChange={(e) =>
+                  onPatch((v) => ({
+                    ...v,
+                    horizon_sg_window: Number(
+                      e.target.value,
+                    ) as VS["horizon_sg_window"],
+                  }))
+                }
+              >
+                {[5, 7, 11, 15].map((window) => (
+                  <option key={window} value={window}>
+                    {window} 道
+                  </option>
+                ))}
+              </Select>
+            </label>
+          )}
+        </>
+      )}
+
       <div className="horizon-list">
         {view.horizons.map((h) => (
           <div
@@ -64,7 +105,8 @@ export default function HorizonPanel({
             }
           >
             <input
-              aria-label={`显示 ${h.name}`}
+              aria-label={mapMode ? `在 A–B 剖面中显示 ${h.name}` : `显示 ${h.name}`}
+              title={mapMode ? "与 2D/3D 视图共用层位显隐" : undefined}
               type="checkbox"
               checked={h.visible}
               onChange={(e) =>
@@ -79,7 +121,7 @@ export default function HorizonPanel({
 
             <button
               className="horizon-select"
-              title={`设置 ${h.name}`}
+              title={mapMode ? `设置 ${h.name} 的剖面层位样式` : `设置 ${h.name}`}
               aria-pressed={selected === h.id}
               onClick={() => {
                 onSelect(h.id);
@@ -109,8 +151,12 @@ export default function HorizonPanel({
         onClick={onAdd}
       >
         <Plus size={14} />
-        添加层位
+        {mapMode ? "导入层位" : "添加层位"}
       </button>
+
+      {mapMode && (
+        <p className="control-note">导入、移除和重命名会同步所有视图。</p>
+      )}
 
       {active && (
         <details
@@ -120,7 +166,7 @@ export default function HorizonPanel({
         >
           <summary>
             <SlidersHorizontal size={14} />
-            <span>层位样式</span>
+            <span>{mapMode ? "剖面层位样式" : "层位样式"}</span>
             <small className="group-summary-hint" title={active.name}>
               {active.name}
             </small>
@@ -128,10 +174,11 @@ export default function HorizonPanel({
           </summary>
           <div className="style-body">
             {view.view_mode === "3d" && (
-              <Horizon3DControls horizon={active} onChange={onStyle} />
+              <Horizon3DControls horizon={active} seismic={view.seismic} onChange={onStyle} />
             )}
 
             {(view.view_mode === "2d" ||
+              view.view_mode === "map" ||
               active.display_mode === "slice_intersections") && (
               <>
                 <StrokeControl

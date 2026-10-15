@@ -23,6 +23,7 @@ import {
   SliceCollection,
   SceneSettings,
   HS,
+  SS,
   Export3D,
   ExportDialogSettings,
   makeSlice,
@@ -132,7 +133,11 @@ export function SliceManager({
                   {slice.position}
                   {kind === "time" ? " ms" : ""}
                 </span>
-                <span className="slice-opacity">
+                <span
+                  className="slice-opacity"
+                  aria-label={`不透明度 ${Math.round(slice.opacity * 100)}%`}
+                  title="不透明度：0% 完全透明，100% 完全不透明"
+                >
                   {Math.round(slice.opacity * 100)}%
                 </span>
                 <ChevronDown
@@ -212,7 +217,7 @@ export function SliceManager({
                   }
                 />
                 <OpacityControl
-                  label={`${prefixes[kind]} 切片透明度`}
+                  label={`${prefixes[kind]} 切片不透明度`}
                   disabled={disabled}
                   value={slice.opacity}
                   onChange={(opacity) => update(kind, slice.id, { opacity })}
@@ -378,9 +383,11 @@ export function SceneControls({
 }
 export function Horizon3DControls({
   horizon: h,
+  seismic,
   onChange,
 }: {
   horizon: HS;
+  seismic: SS;
   onChange: (p: Partial<HS>) => void;
 }) {
   return (
@@ -399,7 +406,7 @@ export function Horizon3DControls({
         </Select>
       </label>
       <OpacityControl
-        label="层位透明度"
+        label="层位不透明度"
         value={h.opacity}
         onChange={(opacity) => onChange({ opacity })}
       />
@@ -415,6 +422,7 @@ export function Horizon3DControls({
               }
             >
               <option value="twt">Time 时间</option>
+              <option value="amplitude">振幅</option>
               <option value="solid">单色</option>
             </Select>
           </label>
@@ -428,6 +436,13 @@ export function Horizon3DControls({
                 onChange={(e) => onChange({ color: e.target.value })}
               />
             </label>
+          ) : h.color_by === "amplitude" ? (
+            <div className="field">
+              <span>振幅色标</span>
+              <span title="使用地震显示的色标、极性和振幅裁剪设置">
+                {seismic.colormap} · 跟随地震显示
+              </span>
+            </div>
           ) : (
             <ColormapSelect
               label="层位色标"

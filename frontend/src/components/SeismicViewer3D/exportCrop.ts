@@ -5,11 +5,12 @@ export function contentBounds(
   width: number,
   height: number,
   padding = 8,
+  vectorPoints: readonly (readonly number[])[] = [],
 ) {
-  let x0 = width,
-    y0 = height,
-    x1 = -1,
-    y1 = -1;
+  let x0 = Infinity,
+    y0 = Infinity,
+    x1 = -Infinity,
+    y1 = -Infinity;
   for (let y = 0; y < height; y++)
     for (let x = 0; x < width; x++) {
       if (rgba[(y * width + x) * 4 + 3] > 0) {
@@ -19,7 +20,14 @@ export function contentBounds(
         y1 = Math.max(y1, y);
       }
     }
-  if (x1 < 0) throw new Error("场景没有可导出的可见内容。");
+  for (const point of vectorPoints) {
+    if (!point.every(Number.isFinite)) continue;
+    x0 = Math.min(x0, Math.floor(point[0]));
+    y0 = Math.min(y0, Math.floor(point[1]));
+    x1 = Math.max(x1, Math.ceil(point[0]));
+    y1 = Math.max(y1, Math.ceil(point[1]));
+  }
+  if (!Number.isFinite(x1)) throw new Error("场景没有可导出的可见内容。");
   return {
     x: x0 - padding,
     y: y0 - padding,

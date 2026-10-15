@@ -118,23 +118,22 @@ def test_display_raster_windows_the_source_and_keeps_world_extent():
     # window_indices adds one sample of slack on each side of the range:
     # crossline 4..12 -> x index 1..7, TWT 8..20 -> t index 1..6.
     assert source == (7, 6)  # (width, height) of the source window
-    assert extent == (1.5, 14.5, 3.5, 24.5)
-    # Export resolution is matched per axis, up to the 32x upscale guard.
-    assert raster.shape == (192, 224)
+    assert extent == (4, 12, 8, 20)
+    # Seismic reconstruction is matched to pixels, independent of native count.
+    assert raster.shape == (709, 709)
     # The source array is never modified: rendering stays in the render layer.
     np.testing.assert_array_equal(survey.z, FakeSurvey().z)
 
 
-@pytest.mark.parametrize("resolution,expected", [("export", 320), ("view", 30)])
+@pytest.mark.parametrize("resolution,expected", [("export", (709, 709)), ("view", (600, 1000))])
 def test_export_raster_resolution_modes(resolution, expected):
     survey = FakeSurvey()
     state = ViewState(section_number=1)
     settings = Settings(width=60, height=60, dpi=300, resolution=resolution, interpolation="bicubic")
     raster, _, _ = display_raster(survey.x, survey.t, survey.z, state, settings)
-    # 60 mm at 300 dpi is 708 px. The export grid stops at 32x the real samples;
-    # the view grid is the interactive one (3x cap on a 10 sample source).
+    # Export or CSS viewport pixels, without a native-sample upscale limit.
     assert settings.canvas_pixels() == (709, 709)
-    assert raster.shape == (expected, expected)
+    assert raster.shape == expected
 
 
 # ------------------------------------------------------------------ /api/section
@@ -146,9 +145,10 @@ def post_section(client, **body):
     return response.json()
 
 
-def test_section_defaults_to_interactive_bilinear(client):
+def test_section_defaults_to_interactive_seismic_sinc(client):
     data = post_section(client)
-    assert data["interpolation"] == "bilinear"
+    assert data["interpolation"] == "sinc8"
+    assert data["background_interpolation"] and data["wiggle_interpolation"]
     assert data["adaptive"] is True
     assert data["quality"] == "interactive"
     assert data["native_shape"] == [4, 3]
@@ -168,9 +168,10 @@ def test_section_zoom_returns_a_new_window_from_the_original(client):
     assert zoomed["window"]["x_range"] == [30.0, 38.0]
     assert zoomed["window"]["time_range"] == [200.0, 212.0]
     assert zoomed["render_shape"] == [4, 3]
-    # Three real traces never become 30 invented ones: the grid stops at 3x.
-    assert zoomed["preview_shape"] == [12, 9]
-    assert len(zoomed["z"]) == 12 and len(zoomed["z"][0]) == 9
+    # Reconstruction matches the viewport even for a narrow native window.
+    assert zoomed["preview_shape"] == [24, 30]
+    assert len(zoomed["z"]) == 24 and len(zoomed["z"][0]) == 30
+    assert zoomed["raster_extent"] == [30, 33, 200, 208]
     # The colour range always comes from the original section, never from the
     # interpolated raster, so zooming does not change colours.
     assert (zoomed["vmin"], zoomed["vmax"]) == (full["vmin"], full["vmax"])
@@ -207,30 +208,31 @@ def test_section_zoom_fetches_less_than_the_full_section(wide_cube, tmp_path):
 
 
 def test_section_nearest_returns_real_samples_and_interpolation_is_recorded(client):
-    nearest = post_section(client, interpolation="nearest", target_width=8, target_height=8)
-    assert nearest["interpolation"] == "nearest"
-    original = np.array(post_section(client)["z"]).reshape(-1)
-    resampled = np.array(nearest["z"]).reshape(-1)
-    assert set(np.unique(resampled)).issubset(set(np.unique(original)))
-    # A grid that matches the source is never quantized either.
-    assert sorted(np.unique(original)) == sorted(np.unique(np.array(post_section(client)["z"])))
-    smooth = post_section(client, target_width=8, target_height=8, interpolation="bicubic")
-    assert smooth["interpolation"] == "bicubic"
-    assert not np.allclose(np.sort(smooth["z"]), np.sort(nearest["z"]))
+    native = post_section(client, seismic={"background_interpolation": False}, target_width=8, target_height=8)
+    exact = post_section(client, seismic={"background_interpolation": False})
+    np.testing.assert_array_equal(native["z"], exact["z"])
+    assert native["preview_shape"] == native["render_shape"] == [4, 3]
+    assert native["x"] == [30, 33, 38]
+    assert native["interpolation"] == "native"
+    smooth = post_section(client, target_width=8, target_height=8)
+    assert smooth["interpolation"] == "sinc8" and smooth["preview_shape"] == [8, 8]
 
 
-def test_section_request_overrides_the_state_interpolation(client):
+def test_section_legacy_selectors_do_not_override_seismic_switch(client):
     body = {"seismic": {"interpolation": "nearest"}}
-    assert post_section(client, **body)["interpolation"] == "nearest"
-    assert post_section(client, **body, interpolation="bicubic")["interpolation"] == "bicubic"
+    assert post_section(client, **body)["interpolation"] == "sinc8"
+    assert post_section(client, **body, interpolation="bicubic")["interpolation"] == "sinc8"
+    assert post_section(client, seismic={"background_interpolation": False}, interpolation="bicubic")["interpolation"] == "native"
 
 
-def test_section_adaptive_resolution_can_be_disabled(client):
+def test_section_native_switch_controls_resolution_independently_of_legacy_flag(client):
     adaptive = post_section(client, target_width=30, target_height=24)
-    fixed = post_section(
+    legacy = post_section(
         client, target_width=30, target_height=24, seismic={"adaptive_resolution": False}
     )
-    assert adaptive["adaptive"] is True and adaptive["preview_shape"] == [12, 9]
+    assert adaptive["adaptive"] is True and adaptive["preview_shape"] == [24, 30]
+    assert legacy["preview_shape"] == adaptive["preview_shape"]
+    fixed = post_section(client, target_width=30, target_height=24, seismic={"background_interpolation": False})
     assert fixed["adaptive"] is False
     # Without adaptive resolution the grid follows the real samples.
     assert fixed["preview_shape"] == [4, 3]
@@ -239,13 +241,13 @@ def test_section_adaptive_resolution_can_be_disabled(client):
 def test_section_render_cache_reuses_the_same_window(client, monkeypatch):
     import backend.resample as resample_module
     calls = []
-    original = resample_module.resample
+    original = resample_module.seismic_raster
 
     def counted(*args, **kwargs):
-        calls.append(args[1:3])
+        calls.append(args[3:5])
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(resample_module, "resample", counted)
+    monkeypatch.setattr(resample_module, "seismic_raster", counted)
     body = {"target_width": 200, "target_height": 150, "interpolation": "bilinear"}
     post_section(client, **body)
     post_section(client, **body)
@@ -318,14 +320,13 @@ def test_publication_export_renders_the_raster_at_the_output_resolution(cube, mo
     image = figures[0].axes[0].images[0]
     extent = image.get_extent()
     # Cell edges of the visible window: half a sample outside the coordinates.
-    assert extent == [29.5, 38.5, 199.5, 212.5]
-    # 3 traces and 4 samples cannot honestly fill 4252 x 2362 pixels.
-    assert image.get_array().shape == (128, 96)
-    assert figures[0].axes[0].get_xlim() == (29.5, 38.5)
+    assert extent == [28.5, 40.5, 198, 214]
+    assert min(image.get_array().shape) > 1000
+    assert figures[0].axes[0].get_xlim() == (28.5, 40.5)
     assert figures[0].axes[0].get_ylim() == (212, 200)
 
 
-def test_view_resolution_export_reuses_the_interactive_grid(cube, monkeypatch):
+def test_export_uses_final_axes_pixels_even_for_legacy_view_resolution(cube, monkeypatch):
     from matplotlib.figure import Figure
 
     figures = []
@@ -342,7 +343,7 @@ def test_view_resolution_export_reuses_the_interactive_grid(cube, monkeypatch):
         ViewState(section_number=12),
         Settings(format="png", width=180, height=100, dpi=600, resolution="view"),
     )
-    assert figures[0].axes[0].images[0].get_array().shape == (12, 9)
+    assert min(figures[0].axes[0].images[0].get_array().shape) > 1000
 
 
 def test_export_clipping_ignores_interpolation_and_window(cube, monkeypatch):

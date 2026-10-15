@@ -7,7 +7,9 @@ const moduleURL = source => 'data:text/javascript;base64,' + Buffer.from(compile
 const cropURL = moduleURL(await readFile(new URL('../src/components/SeismicViewer3D/exportCrop.ts',import.meta.url),'utf8'));
 const junctionURL = moduleURL(await readFile(new URL('../src/components/SeismicViewer3D/axisJunctions.ts',import.meta.url),'utf8'));
 const titleURL = moduleURL(await readFile(new URL('../src/components/SeismicViewer3D/axisTitles.ts',import.meta.url),'utf8'));
-const source = (await readFile(new URL('../src/components/SeismicViewer3D/captureScene.ts',import.meta.url),'utf8')).replace('"./exportCrop"',JSON.stringify(cropURL)).replace('"./axisJunctions"',JSON.stringify(junctionURL)).replace('"./axisTitles"',JSON.stringify(titleURL));
+const uniformURL = moduleURL(await readFile(new URL('../src/components/SeismicViewer3D/shaderUniforms.ts',import.meta.url),'utf8'));
+const vectorURL = moduleURL((await readFile(new URL('../src/components/SeismicViewer3D/vectorAxes.ts',import.meta.url),'utf8')).replace('"./axisJunctions"',JSON.stringify(junctionURL)).replace('"./shaderUniforms"',JSON.stringify(uniformURL)));
+const source = (await readFile(new URL('../src/components/SeismicViewer3D/captureScene.ts',import.meta.url),'utf8')).replace('"./exportCrop"',JSON.stringify(cropURL)).replace('"./axisJunctions"',JSON.stringify(junctionURL)).replace('"./axisTitles"',JSON.stringify(titleURL)).replaceAll('"./vectorAxes"',JSON.stringify(vectorURL));
 const {projectedBounds,cropProjection,unpackPixels,captureScene} = await import(moduleURL(source));
 const identity = () => [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1];
 

@@ -1,17 +1,23 @@
 import ExportDialog from "./ExportDialog";
 import { Layers, MousePointer2, Move, Plus, RotateCcw, ScanLine, X } from "lucide-react";
-import { useEffect, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useId, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import type { HorizonMapState, MapWorkspace } from "../workspace";
 import { reconcileMapWorkspace } from "../workspace";
-import { mapPresentation, mapSelectionError, profileEndpointError, profileRequestKey } from "./horizonMapLogic";
+import { mapPresentation, mapSelectionError, profileEndpointError, profileRequestKey, profileProbeRequest, profileHorizonStyleKey,
+  PROFILE_MARGIN, profileContainerViewport, profileAspectPair, mapViewForKey } from "./horizonMapLogic";
+import { createProfilePlotRenderer } from "./profilePlotRenderer";
 import { createPortal } from "react-dom";
 import Plotly from "plotly.js-dist-min";
-import type { HS } from "../types";
+import type { HS, Section, VS } from "../types";
 import type { ExportDialogSettings, SS } from "../types";
 import { api } from "../api/client";
 import { formatAmplitude } from "../format";
 import { Group, Num, Toggle, SubsectionSummary, Select } from "./Controls";
 import ColormapSelect, { colormapOptions } from "./ColormapSelect";
+import { SeismicSettings } from "./panels/SeismicPanel";
+import { buildTraces as sectionTraces } from "./SeismicViewer2D/sectionGeometry";
+import { measureSectionViewport, samplingViewport, type SectionViewport } from "./SeismicViewer2D/sectionDisplay";
+import { useOriginalProbe, ProbeReadout } from "./Probe";
 
 type State = HorizonMapState;
 type ProfileCurve = { id: string; name: string; values: (number | null)[] };
@@ -21,6 +27,7 @@ type ProfileData = {
   /** Time-major heatmap rows: amplitude[time][position]. */
   amplitude: (number | null)[][];
   curves: ProfileCurve[];
+  curve_distance: number[];
   a_distance: number;
   b_distance: number;
   path_start: [number, number];
@@ -28,6 +35,14 @@ type ProfileData = {
   vmin: number;
   vmax: number;
   label_y: string;
+  distance_edges: number[];
+  time_edges: number[];
+  raster_extent: [number, number, number, number];
+  x_range: [number, number];
+  time_range: [number, number];
+  trace_overlay: Section["trace_overlay"];
+  background_interpolation: boolean;
+  wiggle_interpolation: boolean;
 };
 type DifferenceStats = {
   mae: number | null;
@@ -58,9 +73,7 @@ export default function HorizonMap({
   maps,
   mapColors,
   seismic,
-  aspect,
   onSeismic,
-  onAspect,
   onAddProfileToExport,
   exportOpen,
   onCloseExport,
@@ -78,9 +91,7 @@ export default function HorizonMap({
   mapColors: Record<string, any[]>;
   /** Shared with the 2D window: the profile reuses its display settings. */
   seismic: SS;
-  aspect: [number, number] | null;
   onSeismic: (patch: Partial<SS>) => void;
-  onAspect: (ratio: [number, number] | null) => void;
   /** Queue the standalone A–B profile figure (payload built here). */
   onAddProfileToExport: (payload: {
     state: State;
@@ -90,6 +101,16 @@ export default function HorizonMap({
     colormap: string;
     reverse_colormap: boolean;
     settings: Record<string, unknown>;
+    seismic: SS;
+    aspect_ratio_2d: [number, number] | null;
+    x_range: [number, number] | null;
+    time_range: [number, number] | null;
+    trace_viewport_width: number | null;
+    trace_viewport_height: number | null;
+    horizons: HS[];
+    show_curves: boolean;
+    show_legend: boolean;
+    show_ab: boolean;
   }) => Promise<void>;
   exportOpen: boolean;
   onCloseExport: () => void;
@@ -100,9 +121,15 @@ export default function HorizonMap({
   onAddToExport: (payload: { state: State; settings: Record<string, unknown> }) => Promise<void>;
 }) {
   const { state: savedState, settings, drag, profileOn, profileA, profileB, profileSettings } = workspace;
+  const activeView = workspace.activeView ?? "map";
+  const mapActive = activeView === "map";
+  const sectionActive = activeView === "section";
+  const profileAspectRatio = workspace.profileAspectRatio ?? null;
+  const tabId = useId();
+  const [mapDrawn, setMapDrawn] = useState(false);
+  const [profileDrawn, setProfileDrawn] = useState(false);
   // Display mode controls contour visibility, including for older saved workspaces.
   const state = { ...savedState, contours: savedState.display !== "filled" };
-  const profileShare = Math.min(70, Math.max(30, workspace.profileShare ?? 45));
   const presentation = mapPresentation(state, horizons);
   const horizonKey = JSON.stringify(horizons.map(h => [h.id, h.name]));
   const mapIssue = mapSelectionError(state, horizons);
@@ -120,6 +147,7 @@ export default function HorizonMap({
   const setState = (value: SetStateAction<State>) => update("state", value);
   const setSettings = (value: SetStateAction<ExportDialogSettings>) => update("settings", value);
   const setDrag = (value: "zoom" | "pan") => update("drag", value);
+  const setProfileDrag = (value: "zoom" | "pan") => update("profileDrag", value);
   const setProfileOn = (value: boolean) => update("profileOn", value);
   const setProfileA = (value: [number, number] | null) => update("profileA", value);
   const setProfileB = (value: [number, number] | null) => update("profileB", value);
@@ -135,11 +163,24 @@ export default function HorizonMap({
     latest = useRef(state);
   latest.current = state;
   const [picking, setPicking] = useState<null | "a" | "b">(null);
-  const [profileResult, setProfileResult] = useState<{ key: string; data: ProfileData } | null>(null);
+  const setActiveView = (view: "map" | "section") => { update("activeView", view); setPicking(null); };
+  const returnToMap = () => { setActiveView("map"); setProfileOn(true); setPicking("a"); };
+  const [profileResult, setProfileResult] = useState<{ key: string; pathKey: string; data: ProfileData } | null>(null);
   const [profileFailure, setProfileFailure] = useState<{ key: string; message: string } | null>(null);
   const [profileExportOpen, setProfileExportOpen] = useState(false);
   const [profileExportBusy, setProfileExportBusy] = useState(false);
   const profileRef = useRef<HTMLDivElement>(null);
+  const profileRenderer = useRef<ReturnType<typeof createProfilePlotRenderer> | null>(null);
+  const profileRenderedInputs = useRef<unknown[] | null>(null);
+  const mapRenderedInputs = useRef<unknown[] | null>(null);
+  const profileStyleKey = profileHorizonStyleKey(horizons);
+  const profileVisibilityKey = JSON.stringify(horizons.map(h => [h.id, h.visible]));
+  const [profileViewport, setProfileViewport] = useState<SectionViewport | null>(null);
+  const { reading: profileReading, probe: probeProfile, reset: resetProfileProbe } = useOriginalProbe();
+  function reportProfileViewport(el: any) {
+    const viewport = measureSectionViewport(el._fullLayout);
+    if (viewport) setProfileViewport(previous => previous?.width === viewport.width && previous?.height === viewport.height ? previous : viewport);
+  }
   const pickingRef = useRef(picking);
   pickingRef.current = picking;
   const patch = (p: Partial<State>) => setState((s) => ({ ...s, ...p }));
@@ -156,17 +197,33 @@ export default function HorizonMap({
     next[index] = value;
     setter(next);
   };
-  const ready = useRef(onReady);
-  ready.current = onReady;
   useEffect(() => {
     onWorkspace(current => reconcileMapWorkspace(current, horizons));
   }, [horizons, state.horizon, state.difference_reference, state.difference_comparison]);
-  const profileQueryKey = profileRequestKey(state, horizonKey, profileA, profileB, seismic);
+  const profileSampling = samplingViewport(seismic, profileViewport);
+  const profileQueryKey = profileRequestKey(state, horizonKey, profileA, profileB, seismic,
+    profileSampling,
+    workspace.profileXRange, workspace.profileTimeRange);
+  const pathKey = JSON.stringify([profileA, profileB]);
+  // Path geometry survives pending raster resampling and hidden-view resizing.
+  const profilePath = profileResult?.pathKey === pathKey ? profileResult.data : null;
+  const profilePathKey = profilePath ? JSON.stringify([profilePath.path_start, profilePath.path_end]) : "";
+  const previousPath = useRef(pathKey);
+  useEffect(() => {
+    resetProfileProbe();
+    if (previousPath.current !== pathKey) {
+      previousPath.current = pathKey;
+      onWorkspace(current => ({ ...current, profileXRange: null, profileTimeRange: null }));
+    }
+  }, [pathKey]);
   const endpointError = profileEndpointError(profileA, profileB);
   const profileData = !endpointError && !mapIssue && profileResult?.key === profileQueryKey ? profileResult.data : null;
   const profileError = endpointError || (profileFailure?.key === profileQueryKey ? profileFailure.message : "");
-  const profilePending = profileOn && !!profileA && !!profileB && !profileError && !mapIssue && !profileData;
+  const validEndpoints = !!profileA && !!profileB && !endpointError;
+  const profilePending = sectionActive && validEndpoints && !profileError && !mapIssue && !profileData;
   const setProfileError = (message: string) => setProfileFailure(message ? { key: profileQueryKey, message } : null);
+  const profileErrorHandler = useRef(setProfileError);
+  profileErrorHandler.current = setProfileError;
   const clearProfile = () => {
     setProfileA(null);
     setProfileB(null);
@@ -186,7 +243,7 @@ export default function HorizonMap({
     const abort = new AbortController();
     let active = true;
     version.current++;
-    ready.current(false);
+    setMapDrawn(false);
     setMapResult(null);
     setError("");
     setLoading(!!state.horizon && !mapIssue);
@@ -223,16 +280,24 @@ export default function HorizonMap({
   }, [query, horizonKey, mapIssue]);
   useEffect(() => {
     const el = plot.current as any;
-    if (!el || !data) {
+    if (!mapActive) return;
+    if (!el || !data || !el.clientWidth || !el.clientHeight) {
       version.current++;
-      ready.current(false);
+      setMapDrawn(false);
       return;
     }
+    const inputs = [data, state.x_range, state.y_range, drag, profileOn, profileA, profileB, profilePathKey, presentation.scalar, presentation.unit];
     const token = ++version.current;
     queue.current = queue.current
       .catch(() => {})
       .then(async () => {
         if (token !== version.current) return;
+        if (mapRenderedInputs.current?.every((value, i) => Object.is(value, inputs[i]))) {
+          if (el._fullLayout?.width !== el.clientWidth || el._fullLayout?.height !== el.clientHeight)
+            await Plotly.relayout(el, { width: el.clientWidth, height: el.clientHeight });
+          if (token === version.current) setMapDrawn(true);
+          return;
+        }
         el.removeAllListeners?.("plotly_relayout");
         el.removeAllListeners?.("plotly_click");
         const scalarHover = (value: string) => `${presentation.scalar}: %{${value}:.2f}${presentation.unit ? ` ${presentation.unit}` : ""}`;
@@ -317,10 +382,10 @@ export default function HorizonMap({
           // The section covers the path beyond A/B as well: draw the extended
           // reaches as a finer dotted line so map and profile agree. Black
           // stays visible on every colormap (same choice as the contours).
-          if (profileData) {
+          if (profilePath) {
             for (const [from, to] of [
-              [profileData.path_start, profileA],
-              [profileB, profileData.path_end],
+              [profilePath.path_start, profileA],
+              [profileB, profilePath.path_end],
             ]) {
               traces.push({
                 type: "scatter",
@@ -371,12 +436,14 @@ export default function HorizonMap({
           el,
           traces,
           {
+            width: el.clientWidth, height: el.clientHeight,
             margin: { l: 70, r: 100, t: 30, b: 60 },
             showlegend: false,
             dragmode: drag,
             paper_bgcolor: "#fff",
             plot_bgcolor: "#fff",
             font: { family: "DM Sans, 'PingFang SC', Arial, sans-serif", color: "#425367", size: 11 },
+            annotations: abAnnotations,
             xaxis: {
               title: { text: "Crossline" },
               range: state.x_range || [data.x[0] - 0.5, data.x.at(-1)! + 0.5],
@@ -392,7 +459,7 @@ export default function HorizonMap({
               showgrid: false,
             },
           } as any,
-          { responsive: true, scrollZoom: true, displayModeBar: false },
+          { responsive: false, scrollZoom: true, displayModeBar: false },
         );
         if (token !== version.current) return;
         // Profile picking: the next map click lands on A, the one after on B.
@@ -427,26 +494,25 @@ export default function HorizonMap({
                   : latest.current.y_range,
             });
         });
-        ready.current(true);
+        mapRenderedInputs.current = inputs;
+        setMapDrawn(true);
       })
       .catch((e) => {
         setError(String(e));
-        ready.current(false);
+        setMapDrawn(false);
       });
-  }, [data, state.x_range, state.y_range, drag, profileOn, profileA, profileB, profileData, presentation.scalar, presentation.unit]);
+  }, [mapActive, data, state.x_range, state.y_range, drag, profileOn, profileA, profileB, profilePathKey, presentation.scalar, presentation.unit]);
   // Map coloring does not change the A–B seismic raster or horizon curves.
   useEffect(() => {
-    setProfileResult(null);
+    if (!sectionActive || !profileA || !profileB || endpointError || mapIssue || profileResult?.key === profileQueryKey) return;
+    const box = profileRef.current;
+    if (!box?.clientWidth || !box.clientHeight) return;
     setProfileFailure(null);
-    if (!profileOn || !profileA || !profileB || endpointError || mapIssue) return;
     const abort = new AbortController();
     let active = true;
     const timer = setTimeout(async () => {
       try {
-        // Same adaptive-resolution contract as the 2D window: ask for the
-        // subplot's real pixels; the raster is resampled server-side with the
-        // selected filter (and not at all when 自适应分辨率 is off).
-        const box = profileRef.current;
+        const box = profileRef.current!;
         const ratio = Math.min(window.devicePixelRatio || 1, 2);
         const res = await api("/horizon-map/profile", {
           method: "POST",
@@ -455,18 +521,21 @@ export default function HorizonMap({
             state: JSON.parse(query),
             a: profileA,
             b: profileB,
-            ...(seismic.adaptive_resolution
-              ? {
-                  target_width: box ? Math.round(box.clientWidth * ratio) : null,
-                  target_height: box ? Math.round(box.clientHeight * ratio) : null,
-                }
-              : {}),
-            interpolation: seismic.interpolation,
+            seismic,
+            target_width: Math.max(8, Math.round((profileViewport?.width || box.clientWidth) * ratio)),
+            target_height: Math.max(8, Math.round((profileViewport?.height || box.clientHeight) * ratio)),
+            trace_viewport_width: profileViewport?.width || box.clientWidth,
+            trace_viewport_height: profileViewport?.height || box.clientHeight,
+            x_range: workspace.profileXRange, time_range: workspace.profileTimeRange,
           }),
           signal: abort.signal,
         });
         const result = await res.json();
-        if (active) setProfileResult({ key: profileQueryKey, data: result });
+        if (active) {
+          if (result.background_interpolation !== seismic.background_interpolation)
+            throw new Error("剖面显示后端版本不匹配，请重启 SeisCanvas 后端以启用插值和波形功能。");
+          setProfileResult({ key: profileQueryKey, pathKey, data: result });
+        }
       } catch (e) {
         if (active && (e as Error).name !== "AbortError")
           setProfileError((e as Error).message);
@@ -477,97 +546,83 @@ export default function HorizonMap({
       clearTimeout(timer);
       abort.abort();
     };
-  }, [profileOn, profileQueryKey, endpointError, mapIssue]);
+  }, [sectionActive, profileQueryKey, endpointError, mapIssue, profileResult?.key]);
 
-  // Profile subplot: interpolated seismic section with horizon Time overlays.
+  useEffect(() => {
+    onReady(mapActive ? mapDrawn && !!data && !loading : profileDrawn && !!profileData && !profilePending && !profileError);
+  }, [mapActive, mapDrawn, data, loading, profileDrawn, profileData, profilePending, profileError, onReady]);
+
+  // The section occupies the same workspace as the map, with independent axes.
   useEffect(() => {
     const el = profileRef.current as any;
-    if (!el) return;
-    // Keep the hidden plot mounted while a new result is pending. Purging it
-    // here would discard its measured dimensions and reset Plotly's layout.
-    if (!profileData) return;
-    // Same colormap the 2D window uses, reversal included.
-    const base = maps?.[seismic.colormap]?.length
-      ? maps[seismic.colormap]
-      : "RdBu";
-    const colorscale =
-      seismic.reverse_colormap && Array.isArray(base)
-        ? base.map((c, i) => [c[0], base[base.length - 1 - i][1]])
-        : base;
-    const traces: any[] = [
-      {
-        type: "heatmap",
-        x: profileData.distance,
-        y: profileData.time,
-        z: profileData.amplitude,
-        colorscale,
-        zmin: profileData.vmin,
-        zmax: profileData.vmax,
-        showscale: false,
-        zsmooth: false,
-        hovertemplate: "距离 %{x:.1f}<br>Time %{y:.1f} ms<br>振幅 %{z}<extra></extra>",
-      },
-    ];
-    for (const curve of profileData.curves) {
-      const style = horizons.find((h) => h.id === curve.id);
-      if (!style || !style.visible) continue;
-      traces.push({
-        type: "scatter",
-        mode: "lines",
-        name: style.name,
-        x: profileData.distance,
-        y: curve.values,
-        connectgaps: false,
-        line: { color: style?.color || "#e6b450", width: 2.5 },
-        hovertemplate: `${style.name}<br>Time %{y:.1f} ms<extra></extra>`,
-      });
+    if (!sectionActive || !el || !el.clientWidth || !el.clientHeight) return;
+    if (!profileData) { setProfileDrawn(false); return; }
+    const renderer = profileRenderer.current ??= createProfilePlotRenderer(Plotly as any, el,
+      message => profileErrorHandler.current(message));
+    void renderer.visibility(horizons);
+    const inputs = [profileData, maps, profileStyleKey, seismic, profileAspectRatio, workspace.profileDrag,
+      workspace.profileXRange, workspace.profileTimeRange];
+    if (profileRenderedInputs.current?.every((value, i) => Object.is(value, inputs[i]))) {
+      void renderer.resize(el.clientWidth, el.clientHeight, () => reportProfileViewport(el));
+      setProfileDrawn(true);
+      return;
     }
-    // Aspect lock shared with the 2D window: the same 横向/纵向 ratio.
-    const distSpan = Math.abs(
-      (profileData.distance.at(-1) ?? 1) - (profileData.distance[0] ?? 0),
-    );
-    const timeSpan = Math.abs(
-      (profileData.time.at(-1) ?? 1) - (profileData.time[0] ?? 0),
-    );
+    setProfileDrawn(false);
+    // Same colormap the 2D window uses, reversal included.
+    const sharedSection: Section = { x: profileData.distance, time: profileData.time,
+      x_edges: profileData.distance_edges, time_edges: profileData.time_edges,
+      raster_extent: profileData.raster_extent, z: profileData.amplitude,
+      vmin: profileData.vmin, vmax: profileData.vmax, trace_overlay: profileData.trace_overlay,
+      horizons: Object.fromEntries(profileData.curves.map(curve => [curve.id,
+        profileData.curve_distance.map((x, n) => [x, curve.values[n]])])) as Section["horizons"] };
+    // Keep every loaded horizon's trace slot. Toggling it only restyles visibility.
+    const traces = sectionTraces(sharedSection, { seismic, horizons: horizons.map(h => ({ ...h, visible: true })), view_type: "inline", section_number: 0 } as VS,
+      maps[seismic.colormap] || [], "距离 (网格)");
+    traces[0].hovertemplate = "距离 %{x:.1f}<br>Time %{y:.1f} ms<extra></extra>";
+    const xRange = workspace.profileXRange || profileData.x_range;
+    const timeRange = workspace.profileTimeRange || profileData.time_range;
     const abShape = (x: number) => ({
       type: "line",
       x0: x,
       x1: x,
-      yref: "paper",
+      yref: "y domain",
       y0: 0,
       y1: 1,
       line: { color: "#365985", width: 1.5, dash: "dot" },
     });
     const abLabel = (x: number, text: string) => ({
       x,
-      yref: "paper",
-      y: 1.03,
+      yref: "y domain",
+      y: 1,
+      yshift: 4,
+      yanchor: "bottom",
       text,
       showarrow: false,
       font: { color: "#365985", size: 11 },
     });
-    Plotly.react(
-      el,
+    void renderer.render(
       traces,
       {
-        margin: { l: 62, r: 14, t: 20, b: 38 },
+        width: el.clientWidth, height: el.clientHeight,
+        margin: PROFILE_MARGIN,
+        dragmode: workspace.profileDrag,
         showlegend: false,
         paper_bgcolor: "#fff",
         plot_bgcolor: "#fff",
         font: { family: "DM Sans, 'PingFang SC', Arial, sans-serif", color: "#425367", size: 11 },
-        xaxis: { title: { text: "距离 (网格)", standoff: 8 }, showgrid: false, linecolor: "#bcc8cf", ticks: "outside" },
+        xaxis: { title: { text: "距离 (网格)", standoff: 8 }, showgrid: false, linecolor: "#bcc8cf", ticks: "outside",
+          range: xRange, autorange: false, constrain: "domain", layer: "above traces" },
         yaxis: {
           title: { text: profileData.label_y, standoff: 4 },
-          range: [profileData.time.at(-1) ?? 0, profileData.time[0] ?? 0],
+          range: [...timeRange].reverse(),
           autorange: false,
-          scaleanchor: aspect ? "x" : undefined,
-          scaleratio: aspect
-            ? (aspect[1] / aspect[0]) * (distSpan / timeSpan)
-            : undefined,
+          scaleanchor: profileAspectRatio === null ? false : "x",
+          scaleratio: profileAspectRatio === null ? 1 : Math.abs((xRange[1] - xRange[0]) / (timeRange[1] - timeRange[0])) / profileAspectRatio,
           constrain: "domain",
           showgrid: false,
           linecolor: "#bcc8cf",
           ticks: "outside",
+          layer: "above traces",
         },
         hovermode: "closest",
         shapes: [
@@ -579,39 +634,84 @@ export default function HorizonMap({
           abLabel(profileData.b_distance, "B"),
         ],
       } as any,
-      { responsive: true, displayModeBar: false, scrollZoom: true },
+      { responsive: false, displayModeBar: false, scrollZoom: true },
+      () => {
+        profileRenderedInputs.current = inputs;
+        setProfileDrawn(true);
+        reportProfileViewport(el);
+        el.removeAllListeners?.("plotly_relayout");
+        el.removeAllListeners?.("plotly_hover");
+        el.on("plotly_hover", (event: any) => {
+          const point = event?.points?.[0];
+          if (!point) return;
+          const request = profileProbeRequest(profileData, point);
+          if (request) probeProfile(request);
+        });
+        el.on("plotly_relayout", (event: any) => {
+          if (event["xaxis.autorange"] || event["yaxis.autorange"]) {
+            onWorkspace(current => ({ ...current, profileXRange: null, profileTimeRange: null }));
+          } else if (event["xaxis.range[0]"] !== undefined || event["yaxis.range[0]"] !== undefined) {
+            onWorkspace(current => ({ ...current,
+              profileXRange: event["xaxis.range[0]"] !== undefined ? [event["xaxis.range[0]"], event["xaxis.range[1]"]] : current.profileXRange,
+              profileTimeRange: event["yaxis.range[0]"] !== undefined ? [event["yaxis.range[1]"], event["yaxis.range[0]"]] : current.profileTimeRange,
+            }));
+          }
+        });
+      },
     );
-  }, [profileData, maps, horizons, seismic, aspect]);
+  }, [sectionActive, profileData, maps, profileStyleKey, seismic, profileAspectRatio, workspace.profileDrag, workspace.profileXRange, workspace.profileTimeRange]);
 
   useEffect(() => {
-    if (!profileOn) return;
+    if (sectionActive && profileData) void profileRenderer.current?.visibility(horizons);
+  }, [sectionActive, profileData, profileVisibilityKey]);
+
+  useEffect(() => {
+    if (!sectionActive) return;
     const el = profileRef.current;
     if (!el) return;
-    const observer = new ResizeObserver(() => {
-      if ((el as any).data && el.clientWidth && el.clientHeight) {
-        Plotly.relayout(el, { width: el.clientWidth, height: el.clientHeight });
-      }
-    });
-    observer.observe(el);
-    return () => {
-      observer.disconnect();
-      Plotly.purge(el);
+    let frame = 0;
+    const resize = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const viewport = profileContainerViewport(el.clientWidth, el.clientHeight, profileAspectRatio);
+        if (!viewport) return;
+        setProfileViewport(previous => previous?.width === viewport.width && previous?.height === viewport.height ? previous : viewport);
+        void profileRenderer.current?.resize(el.clientWidth, el.clientHeight, () => reportProfileViewport(el));
+      });
     };
-  }, [profileOn]);
+    const observer = new ResizeObserver(resize);
+    observer.observe(el);
+    resize();
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); };
+  }, [sectionActive, profileAspectRatio]);
 
   useEffect(() => {
+    if (!mapActive) return;
     const el = plot.current!;
+    let frame = 0;
     const observer = new ResizeObserver(() => {
-      if ((el as any).data && el.clientWidth && el.clientHeight) {
-        Plotly.relayout(el, { width: el.clientWidth, height: el.clientHeight });
-      }
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const chart = el as any;
+        if (chart.data && el.clientWidth && el.clientHeight &&
+            (chart._fullLayout?.width !== el.clientWidth || chart._fullLayout?.height !== el.clientHeight)) {
+          queue.current = queue.current.catch(() => {}).then(() =>
+            Plotly.relayout(el, { width: el.clientWidth, height: el.clientHeight })).then(() => {}).catch(error => setError(String(error)));
+        }
+      });
     });
     observer.observe(el);
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); version.current++; };
+  }, [mapActive]);
+
+  // Only unmounting the module releases graphs; tabs preserve their instances.
+  useEffect(() => {
+    const el = plot.current!;
     return () => {
-      observer.disconnect();
       version.current++;
       queue.current.finally(() => Plotly.purge(el));
-      ready.current(false);
+      void profileRenderer.current?.dispose();
+      profileRenderer.current = null;
     };
   }, []);
   async function addToExport() {
@@ -650,7 +750,7 @@ export default function HorizonMap({
       <Group icon={<Layers size={16} />} title="层位地图">
         {state.color_by !== "difference" &&
           select(
-            "当前层位",
+            "地图层位",
             state.horizon,
             horizons.map((h) => [h.id, h.name]),
             (horizon) =>
@@ -922,18 +1022,19 @@ export default function HorizonMap({
       </Group>
       <Group
         icon={<ScanLine size={16} />}
-        title="A–B 剖面"
-        defaultOpen={profileOn}
+        title="剖面设置"
+        defaultOpen={profileOn || sectionActive}
       >
         <Toggle
-          label="显示 A–B 剖面"
+          label="绘制剖面线"
+          title="在地图上拾取 A、B 端点；在“A–B 剖面”页签查看结果"
           checked={profileOn}
           onChange={(value) => {
             setProfileOn(value);
             setPicking(null);
           }}
         />
-        {profileOn && (
+        {(profileOn || sectionActive) && (
           <div className="map-profile-controls">
             <div className="field-row">
               <label>
@@ -971,48 +1072,29 @@ export default function HorizonMap({
                 />
               </label>
             </div>
+            <div className="section-number" role="group" aria-label="A–B 剖面横纵比">
+              <Toggle label="固定横纵比" title="固定横向与纵向的比例；取消后自动适应工作区"
+                checked={profileAspectRatio !== null}
+                onChange={enabled => update("profileAspectRatio", enabled ? 2 : null)} />
+              <Num label="A–B 横纵比（横÷纵）" title="横÷纵，例如 2 表示 2:1"
+                disabled={profileAspectRatio === null} value={profileAspectRatio ?? 2}
+                min={0.02} max={50} step={0.1}
+                onChange={ratio => update("profileAspectRatio", ratio)} />
+            </div>
+            <button className="panel-action" disabled={!profileA && !profileB} onClick={clearProfile}>
+              清除 A–B 端点
+            </button>
             <details className="subsettings">
-              <SubsectionSummary title="剖面显示" />
+              <SubsectionSummary title="地震显示" />
               <div className="subsettings-body">
-                <ColormapSelect label="剖面色标" value={seismic.colormap} options={colormapOptions(maps)} reverse={seismic.reverse_colormap} onChange={(colormap) => onSeismic({ colormap })} />
-                <Toggle
-                  label="反转剖面色标"
-                  checked={seismic.reverse_colormap}
-                  onChange={(reverse_colormap) =>
-                    onSeismic({ reverse_colormap })
-                  }
-                />
-                <Toggle
-                  label="固定横纵比例"
-                  checked={!!aspect}
-                  onChange={(enabled) => onAspect(enabled ? [2, 1] : null)}
-                />
-                {aspect && (
-                  <div className="field-row">
-                    {["横向比例", "纵向比例"].map((label, index) => (
-                      <label key={label}>
-                        {label}
-                        <Num
-                          value={aspect[index]}
-                          min={0.1}
-                          max={5}
-                          step={0.1}
-                          onChange={(n) => {
-                            const ratio = [...aspect] as [number, number];
-                            ratio[index] = n;
-                            onAspect(ratio);
-                          }}
-                        />
-                      </label>
-                    ))}
-                  </div>
-                )}
+                <p className="control-note">与 2D 剖面、3D 切片共用地震显示设置。</p>
+                <SeismicSettings seismic={seismic} maps={maps} onSeismic={onSeismic} />
               </div>
             </details>
           </div>
         )}
       </Group>
-      <Group icon={<ScanLine size={16} />} title="等值线" defaultOpen={false}>
+      <Group icon={<ScanLine size={16} />} title="地图等值线" defaultOpen={false}>
         <fieldset
           className="map-contour-fields"
           disabled={state.display === "filled"}
@@ -1059,13 +1141,29 @@ export default function HorizonMap({
   return (
     <>
       {controlsHost && createPortal(controls, controlsHost)}
-      <div className={`viewer-card map-viewer${profileOn ? " with-profile" : ""}`} style={{ "--profile-share": profileShare, "--map-share": 100 - profileShare } as CSSProperties}>
+      <div className="viewer-card map-viewer">
+        <div className="map-view-tabs" role="tablist" aria-label="层位地图视图">
+          {(["map", "section"] as const).map(view => <button key={view}
+            id={`${tabId}-${view}-tab`} role="tab" aria-selected={activeView === view}
+            aria-controls={`${tabId}-${view}-panel`} tabIndex={activeView === view ? 0 : -1}
+            onClick={() => setActiveView(view)} onKeyDown={event => {
+              const next = mapViewForKey(view, event.key);
+              if (!next) return;
+              event.preventDefault();
+              setActiveView(next);
+              document.getElementById(`${tabId}-${next}-tab`)?.focus();
+            }}>{view === "map" ? "地图" : "A–B 剖面"}</button>)}
+        </div>
+        <div className="map-view-content">
+        <section id={`${tabId}-map-panel`} role="tabpanel" aria-labelledby={`${tabId}-map-tab`}
+          aria-hidden={!mapActive} inert={!mapActive} className={`map-view-panel${mapActive ? " is-active" : ""}`}>
         <div className="viewer-toolbar">
           <b title={presentation.title}>{presentation.title}</b>
           <div className="tools">
             <button aria-pressed={profileOn} className={profileOn ? "chosen" : ""}
+              title="在地图上拾取 A、B 端点；在“A–B 剖面”页签查看结果"
               onClick={() => { setProfileOn(!profileOn); setPicking(null); }}>
-              <ScanLine size={14} /> A–B 剖面
+              <ScanLine size={14} /> 绘制剖面线
             </button>
             {profileOn && <div className="profile-pick-tools" role="group" aria-label="拾取剖面端点">
               {(["a", "b"] as const).map(point => <button key={point}
@@ -1112,7 +1210,7 @@ export default function HorizonMap({
           className="map-plot"
           data-picking={picking ? "true" : undefined}
           style={{
-            visibility: data ? "visible" : "hidden",
+            visibility: mapActive && data ? "visible" : "hidden",
           }}
         />
         {(error || mapIssue || loading) && (
@@ -1121,49 +1219,63 @@ export default function HorizonMap({
           </p>
         )}
         </div>
-        {profileOn && (
-          <div className="map-profile">
-            <div className="map-profile-head">
-              <b>A–B 剖面</b>
+        </section>
+        <section id={`${tabId}-section-panel`} role="tabpanel" aria-labelledby={`${tabId}-section-tab`}
+          aria-hidden={!sectionActive} inert={!sectionActive} className={`map-view-panel map-profile${sectionActive ? " is-active" : ""}`}>
+            <div className="viewer-toolbar">
+              <div className="viewer-label"><b>A–B 剖面</b>
               <span className="profile-status" role="status">
-                {profileData ? `${profileData.curves.length} 条层位曲线` : ""}
+                {profileData ? `${profileData.curves.filter(curve => horizons.some(h => h.id === curve.id && h.visible)).length} 条层位曲线` : ""}
               </span>
-              <label className="profile-height-control">
-                剖面高度
-                <input type="range" min={30} max={70} value={profileShare} onChange={e => update("profileShare", +e.target.value)} />
-              </label>
-              <button className="icon" title="清除 A–B 端点" disabled={!profileA && !profileB} onClick={clearProfile}><RotateCcw size={14} /></button>
-              <button className="secondary profile-export" disabled={!profileData || !!profileError || profilePending}
-                onClick={() => setProfileExportOpen(true)}><Plus size={14} /> 保存剖面</button>
+              </div>
+              <div className="tools">
+                <button title="框选缩放" className={`icon${workspace.profileDrag === "zoom" ? " chosen" : ""}`}
+                  onClick={() => setProfileDrag("zoom")}><MousePointer2 size={16} /></button>
+                <button title="平移" className={`icon${workspace.profileDrag === "pan" ? " chosen" : ""}`}
+                  onClick={() => setProfileDrag("pan")}><Move size={16} /></button>
+                <span className="divider" />
+                <button className="reset" disabled={!profileData} onClick={() => onWorkspace(current => ({
+                  ...current, profileXRange: null, profileTimeRange: null,
+                }))}><RotateCcw size={14} /> 重置</button>
+                <button className="profile-export" disabled={!profileData || !!profileError || profilePending}
+                  onClick={() => setProfileExportOpen(true)}><Plus size={14} /> 保存剖面</button>
+              </div>
             </div>
             <div className="map-profile-plot-region" aria-busy={profilePending}>
-            <div ref={profileRef} className="map-profile-plot" style={{ visibility: profileData ? "visible" : "hidden" }} />
-            {!profileData && <p role={profileError ? "alert" : "status"} className={`map-profile-hint${profileError ? " map-status-error" : ""}`}>
-              {profileError || (profilePending ? "正在更新剖面…" : mapIssue || "待选择 A、B 点")}
-            </p>}
+            <div ref={profileRef} className="map-profile-plot" style={{ visibility: sectionActive && profileData ? "visible" : "hidden" }} />
+            {!profileData && <div role={validEndpoints && profileError ? "alert" : "status"} className="map-profile-hint">
+              <p>{!validEndpoints ? endpointError || "请返回地图拾取 A、B 点。" : profileError || mapIssue || "正在更新剖面…"}</p>
+              {(!validEndpoints || mapIssue || profileError) && <button className="secondary" onClick={returnToMap}>返回地图</button>}
+            </div>}
             </div>
-            <div className="profile-legend" aria-label="剖面层位图例" style={{ visibility: profileData ? "visible" : "hidden" }}>
-              {horizons.filter(h => h.visible).map(h => (
-                <span key={h.id}><i style={{ background: h.color }} />{h.name}</span>
+            <div className="profile-footer" style={{ visibility: sectionActive && profileData ? "visible" : "hidden" }}>
+            <div className="profile-readout-slot"><ProbeReadout reading={profileReading} /></div>
+            <div className="profile-legend" aria-label="剖面层位图例">
+              {horizons.map(h => (
+                <span key={h.id} aria-hidden={!h.visible || !profileData}
+                  style={{ visibility: sectionActive && h.visible && profileData ? "visible" : "hidden" }}>
+                  <i style={{ background: h.color }} />{h.name}
+                </span>
               ))}
             </div>
-          </div>
-        )}
+            </div>
+        </section>
+        </div>
       </div>
-      {exportOpen && <ExportDialog title="层位地图 · 保存图件" settings={settings}
+      {exportOpen && mapActive && <ExportDialog title="层位地图 · 保存图件" settings={settings}
         onChange={p => setSettings(s => ({...s, ...p}))}
         onClose={onCloseExport} onExport={addToExport} busy={saving}
         disabled={!data || loading || !!mapIssue} error={error || mapIssue} rendering={false}
         dataset={dataset} onDataset={onDataset} datasetPlaceholder={datasetPlaceholder}
         colorbar={state.colorbar} onColorbar={colorbar => patch({colorbar})} />}
 
-      {profileExportOpen && profileA && profileB && (
+      {(profileExportOpen || (exportOpen && sectionActive)) && profileA && profileB && (
         <ExportDialog
           title="A–B 剖面 · 保存图件"
           profile
           settings={profileSettings}
           onChange={(p) => setProfileSettings((s) => ({ ...s, ...p }))}
-          onClose={() => setProfileExportOpen(false)}
+          onClose={() => { setProfileExportOpen(false); onCloseExport(); }}
           onExport={async () => {
             if (!profileData || profileError || profilePending) return;
             setProfileExportBusy(true);
@@ -1180,8 +1292,17 @@ export default function HorizonMap({
                 colormap: seismic.colormap,
                 reverse_colormap: seismic.reverse_colormap,
                 settings: profileSettings,
+                seismic, aspect_ratio_2d: profileAspectPair(profileAspectRatio),
+                x_range: workspace.profileXRange, time_range: workspace.profileTimeRange,
+                trace_viewport_width: profileViewport?.width || null,
+                trace_viewport_height: profileViewport?.height || null,
+                horizons,
+                show_curves: profileSettings.show_curves !== false,
+                show_legend: profileSettings.show_legend !== false,
+                show_ab: profileSettings.show_ab !== false,
               });
               setProfileExportOpen(false);
+              onCloseExport();
             } finally {
               setProfileExportBusy(false);
             }

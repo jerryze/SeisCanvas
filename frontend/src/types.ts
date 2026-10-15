@@ -1,5 +1,5 @@
 export type HS = {
-  color_by: "twt" | "solid";
+  color_by: "twt" | "amplitude" | "solid";
   horizon_colormap: "petrel";
   smooth_shading: boolean;
   lighting: boolean;
@@ -31,9 +31,12 @@ export type SS = {
   variable_area: boolean;
   wiggle_gain: number;
   variable_area_color: string;
-  /** Display interpolation: bilinear while browsing, bicubic for figures. */
+  /** Independent Sinc8 controls for the 2D raster and trace-time paths. */
+  background_interpolation: boolean;
+  wiggle_interpolation: boolean;
+  /** Compatibility field for older saved workspaces. */
   interpolation: Interpolation;
-  /** Match the render grid to the viewport pixels instead of a fixed grid. */
+  /** Legacy sampling setting; interpolated 2D sections always use viewport pixels. */
   adaptive_resolution: boolean;
 };
 export type VS = {
@@ -46,6 +49,10 @@ export type VS = {
   time_range: [number, number] | null;
   aspect_ratio_2d: [number, number] | null;
   seismic: SS;
+  /** Display-only PCHIP shared by every visible 2D horizon. */
+  smooth_horizons?: boolean;
+  horizon_sg?: boolean;
+  horizon_sg_window?: 5 | 7 | 11 | 15;
   horizons: HS[];
 };
 export type Meta = {
@@ -60,10 +67,18 @@ export type Meta = {
 export type Section = {
   x: number[];
   time: number[];
-  z: number[][];
+  z: (number | null)[][];
   vmin: number;
   vmax: number;
   horizons: Record<string, number[][]>;
+  /** Separate SG display geometry; raw horizons remain the only picks. */
+  horizon_display?: {
+    algorithm: "sg";
+    window: 5 | 7 | 11 | 15;
+    view_type: "inline" | "crossline";
+    section_number: number;
+    points: Record<string, (number | null)[][]>;
+  };
   /** Backend paths use original trace samples, including clipping and polarity. */
   trace_overlay?: {
     wiggle: { x: (number | null)[]; time: (number | null)[] };
@@ -71,14 +86,20 @@ export type Section = {
     trace_step: number;
     trace_count: number;
     viewport_width: number;
+    viewport_height?: number;
   } | null;
-  /** Native sample-cell bounds for the coordinate-aligned overlay raster. */
+  /** Exact sample-cell edges, supplied for native background display. */
+  x_edges?: number[];
+  time_edges?: number[];
+  /** Native sample-cell bounds independent of interpolation and trace overlays. */
   raster_extent?: [number, number, number, number];
   /** Display raster bookkeeping: the source window and the render grid. */
   native_shape?: number[];
   render_shape?: number[];
   preview_shape?: number[];
-  interpolation?: Interpolation;
+  interpolation?: Interpolation | "sinc8" | "native";
+  background_interpolation?: boolean;
+  wiggle_interpolation?: boolean;
   adaptive?: boolean;
   window?: { x_range: [number, number]; time_range: [number, number] };
 };

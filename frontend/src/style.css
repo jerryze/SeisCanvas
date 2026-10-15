@@ -637,6 +637,11 @@ main {
   height: 100%;
 }
 
+/* SVG horizon strokes retain subpixel positions and browser antialiasing. */
+.plot .scatterlayer .js-line {
+  shape-rendering: geometricPrecision;
+}
+
 /* ==========================================================================
    Empty state
    ========================================================================== */
@@ -1328,12 +1333,22 @@ main {
 }
 
 /* Horizon Map: compact, grouped controls with a shared visual hierarchy. */
-.map-plot-region { position: relative; flex: 1; min-height: 0; }
-.map-plot { width: 100%; height: 100%; min-height: 0; }
-.map-viewer { overflow: hidden; }
+.map-plot-region { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.map-plot { width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.map-viewer { min-width: 0; overflow: hidden; }
+.map-workspace { height: calc(100dvh - var(--topbar-height)); overflow: hidden; }
+.map-workspace > main { min-width: 0; min-height: 0; overflow: hidden; }
+.map-view-tabs { display: flex; flex-shrink: 0; gap: 24px; padding: 0 14px; border-bottom: 1px solid var(--border); }
+.map-view-tabs > button { position: relative; padding: 12px 2px 11px; border: 0; border-radius: 0; background: transparent; color: var(--text-muted); font-size: var(--ui-title-size); font-weight: 500; }
+.map-view-tabs > button:hover { color: var(--primary); background: transparent; }
+.map-view-tabs > button[aria-selected="true"] { color: var(--primary); font-weight: 600; }
+.map-view-tabs > button[aria-selected="true"]::after { content: ""; position: absolute; height: 2px; inset: auto 0 -1px; background: var(--primary); }
+.map-view-content { display: grid; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+/* Both graphs retain their DOM, but only the active panel is measured or drawn. */
+.map-view-panel { grid-area: 1 / 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; visibility: hidden; pointer-events: none; overflow: hidden; }
+.map-view-panel.is-active { visibility: visible; pointer-events: auto; }
 .map-viewer .viewer-toolbar > b { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .map-viewer .viewer-toolbar .tools { flex-shrink: 0; }
-.map-viewer.with-profile .map-plot-region { flex: var(--map-share) 1 0; }
 .map-status { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; margin: 0; padding: 16px; color: var(--text-secondary); font-size: var(--fs-md); text-align: center; background: #fff; }
 .map-status-error { color: var(--danger); }
 .profile-pick-tools { display: flex; gap: 3px; }
@@ -1342,20 +1357,25 @@ main {
 .map-picking-hint { display: flex; flex-shrink: 0; align-items: center; gap: 7px; padding: 6px 14px; background: var(--primary-soft); color: var(--primary); font-size: var(--fs-sm); }
 .map-picking-hint > button { margin-left: auto; }
 .map-plot[data-picking="true"] .nsewdrag { cursor: crosshair !important; }
-.map-profile-head .profile-export { min-height: 30px; padding: 5px 9px; font-size: var(--fs-sm); }
-.map-profile { display: flex; flex-direction: column; flex: var(--profile-share, 45) 1 0; min-height: 0; border-top: 1px solid var(--border-light); padding: 10px 14px 12px; background: #ffffff; }
-.map-profile-head { display: flex; flex-shrink: 0; justify-content: space-between; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 6px; font-size: var(--fs-md); font-weight: 600; color: var(--text); }
-.map-profile-head > span { font-weight: 400; font-size: var(--fs-xs); color: var(--text-muted); }
-.map-profile-plot-region { position: relative; flex: 1; min-height: 0; }
-.map-profile-plot { width: 100%; height: 100%; min-height: 0; }
-.profile-status { width: 118px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.profile-height-control { display: flex; align-items: center; gap: 8px; margin-left: auto; font-weight: 400; font-size: var(--fs-sm); color: var(--text-secondary); }
-.profile-height-control input { width: 86px; accent-color: var(--accent); }
+.map-profile-plot-region { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.map-profile-plot { width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.profile-status { color: var(--text-muted); font-size: var(--ui-meta-size); font-weight: 400; white-space: nowrap; }
+.profile-footer { flex-shrink: 0; min-width: 0; padding: 0 12px 8px; }
+.profile-readout-slot { min-height: 29px; }
+.profile-readout-slot .probe-readout { padding: 5px 8px; overflow: hidden; }
 .profile-legend { display: flex; flex-shrink: 0; flex-wrap: wrap; justify-content: center; gap: 4px 12px; font-size: var(--ui-meta-size); color: var(--text-secondary); }
 .profile-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .profile-legend i { width: 14px; height: 3px; border-radius: 2px; }
-.map-profile-hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; margin: 0; padding: 12px; font-size: var(--fs-xs); line-height: 1.6; color: var(--text-muted); text-align: center; background: #fff; }
+.map-profile-hint { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 14px; align-items: center; justify-content: center; padding: 20px; font-size: var(--fs-md); line-height: 1.6; color: var(--text-muted); text-align: center; background: #fff; }
+.map-profile-hint p { margin: 0; }
+.map-profile-hint > button { padding: 7px 12px; }
 .map-profile-hint.map-status-error { color: var(--danger); }
+
+@media (max-width: 720px) {
+  .map-workspace { min-height: 0; }
+  .map-workspace > .sidebar { flex: 0 1 28%; min-height: 0; }
+  .map-workspace > main { flex: 1; }
+}
 
 .delete-horizon-dialog { width: min(440px, calc(100vw - 32px)); }
 .delete-horizon-dialog h2 { margin: 0; font-size: var(--fs-xl); overflow-wrap: anywhere; }
