@@ -7,6 +7,8 @@ import { mapSelectionError } from "./components/horizonMapLogic";
 import HorizonImportModal, {
   HorizonImportState,
 } from "./components/HorizonImportModal";
+import Sidebar from "./components/Sidebar";
+import { SidebarStateProvider } from "./components/SidebarState";
 import DataPanel, { ImportProgress } from "./components/panels/DataPanel";
 import SectionPanel, { SectionNavigation } from "./components/panels/SectionPanel";
 import SeismicPanel from "./components/panels/SeismicPanel";
@@ -693,11 +695,11 @@ export default function App() {
   /* Horizon style                                                            */
   /* ------------------------------------------------------------------------ */
 
-  function style(p: Partial<HS>) {
+  function style(p: Partial<HS>, id: string) {
     setView((v) => ({
       ...v,
       horizons: v.horizons.map((h) =>
-        h.id === selected
+        h.id === id
           ? {
               ...h,
               ...p,
@@ -798,6 +800,7 @@ export default function App() {
   /* ------------------------------------------------------------------------ */
 
   return (
+    <SidebarStateProvider scope={`${project?.project_id ?? "empty"}:${view.view_mode}`}>
     <div className="app">
       {/* ------------------------------------------------------------------ */}
       {/* Top bar                                                            */}
@@ -868,8 +871,7 @@ export default function App() {
         {/* Sidebar                                                          */}
         {/* ---------------------------------------------------------------- */}
 
-          <aside className="sidebar">
-            <div className="sidebar-view-switch">
+          <Sidebar scope={`${project?.project_id ?? "empty"}:${view.view_mode}`} switcher={
               <div className="view-mode-switch segmented" role="group" aria-label="视图模式">
                 {(["2d", "3d", "map"] as const).map(mode => (
                   <button
@@ -883,7 +885,7 @@ export default function App() {
                   </button>
                 ))}
               </div>
-            </div>
+            }>
             <DataPanel
               datasetName={dataset || datasetPlaceholder}
               progress={importProgress}
@@ -927,6 +929,15 @@ export default function App() {
               />
             )}
 
+            {meta && view.view_mode !== "map" && (
+              <SeismicPanel
+                key={view.view_mode}
+                view={view}
+                maps={maps}
+                onSeismic={seismic}
+              />
+            )}
+
             {meta && (
               <HorizonPanel
                 view={view}
@@ -942,22 +953,13 @@ export default function App() {
               />
             )}
 
-            {meta && view.view_mode !== "map" && (
-              <SeismicPanel
-                key={view.view_mode}
-                view={view}
-                maps={maps}
-                onSeismic={seismic}
-              />
-            )}
-
             {meta && view.view_mode === "3d" && (
               <SceneControls
                 scene={view.scene}
                 onChange={(scene) => setView((v) => ({ ...v, scene }))}
               />
             )}
-          </aside>
+          </Sidebar>
 
         {/* ---------------------------------------------------------------- */}
         {/* Main                                                             */}
@@ -1260,5 +1262,6 @@ export default function App() {
         </div>
       )}
     </div>
+    </SidebarStateProvider>
   );
 }

@@ -10,9 +10,10 @@ import {
   Download,
   X,
   LoaderCircle,
-  ChevronDown,
 } from "lucide-react";
 import { Num, Toggle, Group, OpacityControl, StrokeControl, Select } from "../Controls";
+import SidebarObject from "../SidebarObject";
+import { useSidebarValue } from "../SidebarState";
 import { PETREL_COLORMAP } from "./sceneGeometry";
 import ColormapSelect from "../ColormapSelect";
 import {
@@ -58,6 +59,8 @@ export function SliceManager({
   const [message, setMessage] = useState("");
   const [addKind, setAddKind] = useState<SliceKind>("inline");
   const allSlices = Object.values(slices).flat();
+  const [openId, setOpenId] = useSidebarValue<string>("slice-open", "");
+  const [selectedId, setSelectedId] = useSidebarValue<string>("slice-selected", "");
   const positions = (kind: SliceKind) =>
     kind === "inline"
       ? meta.inlines
@@ -111,55 +114,30 @@ export function SliceManager({
       <div className="slice-list">
         {(["inline", "crossline", "time"] as const).flatMap((kind) =>
           slices[kind].map((slice) => (
-            <details
-              className={`slice-item ${slice.visible ? "" : "slice-hidden"}`}
-              key={slice.id}
+            <SidebarObject key={slice.id}
+              open={openId === slice.id} selected={selectedId === slice.id} hidden={!slice.visible}
+              title={`设置 ${prefixes[kind]} ${slice.position}${kind === "time" ? " ms" : ""} 切片`}
+              label={<><span className="slice-kind" title={titles[kind]}>{prefixes[kind]}</span>
+                <span className="slice-position">{slice.position}{kind === "time" ? " ms" : ""}</span></>}
+              onToggle={() => {
+                setOpenId(openId === slice.id ? "" : slice.id);
+                setSelectedId(slice.id);
+              }}
+              visibility={<input aria-label={`显示 ${prefixes[kind]} ${slice.position}`}
+                type="checkbox" disabled={disabled} checked={slice.visible}
+                onChange={event => update(kind, slice.id, { visible: event.target.checked })} />}
+              metadata={<span className="slice-opacity"
+                aria-label={`不透明度 ${Math.round(slice.opacity * 100)}%`}
+                title="不透明度：0% 完全透明，100% 完全不透明">
+                {Math.round(slice.opacity * 100)}%
+              </span>}
+              action={<button type="button" className="icon delete"
+                title={`删除 ${prefixes[kind]} ${slice.position} 切片`}
+                aria-label={`删除 ${prefixes[kind]} ${slice.position} 切片`}
+                disabled={disabled} onClick={() => setPendingDelete({ kind, slice })}>
+                <Trash2 size={13} />
+              </button>}
             >
-              <summary>
-                <input
-                  aria-label={`显示 ${prefixes[kind]} ${slice.position}`}
-                  type="checkbox"
-                  disabled={disabled}
-                  checked={slice.visible}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={(e) =>
-                    update(kind, slice.id, { visible: e.target.checked })
-                  }
-                />
-                <span className="slice-kind" title={titles[kind]}>
-                  {prefixes[kind]}
-                </span>
-                <span className="slice-position">
-                  {slice.position}
-                  {kind === "time" ? " ms" : ""}
-                </span>
-                <span
-                  className="slice-opacity"
-                  aria-label={`不透明度 ${Math.round(slice.opacity * 100)}%`}
-                  title="不透明度：0% 完全透明，100% 完全不透明"
-                >
-                  {Math.round(slice.opacity * 100)}%
-                </span>
-                <ChevronDown
-                  className="slice-chevron"
-                  size={16}
-                  strokeWidth={1.75}
-                />
-                <button
-                  type="button"
-                  className="icon delete"
-                  title={`删除 ${prefixes[kind]} ${slice.position} 切片`}
-                  aria-label={`删除 ${prefixes[kind]} ${slice.position} 切片`}
-                  disabled={disabled}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    setPendingDelete({ kind, slice });
-                  }}
-                >
-                  <Trash2 size={13} />
-                </button>
-              </summary>
               <div className="slice-body">
                 <div
                   className="range-number"
@@ -223,7 +201,7 @@ export function SliceManager({
                   onChange={(opacity) => update(kind, slice.id, { opacity })}
                 />
               </div>
-            </details>
+            </SidebarObject>
           )),
         )}
       </div>

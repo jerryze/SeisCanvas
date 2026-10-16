@@ -9,6 +9,7 @@ import {
   type RefObject,
 } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { useSidebarValue } from "./SidebarState";
 
 const controlSizes = [
   ["xs", 72],
@@ -314,9 +315,13 @@ export function Group({
   hintTitle?: string;
   count?: number;
 }) {
+  const [open, setOpen] = useSidebarValue(`group:${title}`, defaultOpen);
   return (
-    <details className="group" open={defaultOpen}>
-      <summary>
+    <details className="group" open={open} onToggle={event => {
+      if (event.target === event.currentTarget && event.currentTarget.open !== open)
+        setOpen(event.currentTarget.open);
+    }}>
+      <summary onClick={event => { event.preventDefault(); setOpen(!open); }}>
         <span className="group-icon" aria-hidden="true">
           {icon}
         </span>

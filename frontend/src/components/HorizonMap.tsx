@@ -1020,6 +1020,48 @@ export default function HorizonMap({
           </div>
         )}
       </Group>
+      <Group icon={<ScanLine size={16} />} title="地图等值线" defaultOpen={false}>
+        <fieldset
+          className="map-contour-fields"
+          disabled={state.display === "filled"}
+        >
+          <label className="field">
+            线宽 · pt
+            <Num
+              label="等值线线宽（pt）"
+              value={state.line_width}
+              min={0.1}
+              max={6}
+              step={0.1}
+              onChange={(line_width) => patch({ line_width })}
+            />
+          </label>
+          <div className="check-row">
+            <Toggle
+              label="自动间隔"
+              checked={state.interval_auto}
+              onChange={(interval_auto) => patch({ interval_auto })}
+            />
+            <Toggle
+              label="显示数值标签"
+              checked={state.labels}
+              onChange={(labels) => patch({ labels })}
+            />
+          </div>
+          {!state.interval_auto && (
+            <label className="field">
+              间隔{state.color_by === "amplitude" ? "" : " · ms"}
+              <Num
+                label="等值线间隔"
+                value={state.interval}
+                min={0.01}
+                step={1}
+                onChange={(interval) => patch({ interval })}
+              />
+            </label>
+          )}
+        </fieldset>
+      </Group>
       <Group
         icon={<ScanLine size={16} />}
         title="剖面设置"
@@ -1094,48 +1136,7 @@ export default function HorizonMap({
           </div>
         )}
       </Group>
-      <Group icon={<ScanLine size={16} />} title="地图等值线" defaultOpen={false}>
-        <fieldset
-          className="map-contour-fields"
-          disabled={state.display === "filled"}
-        >
-          <label className="field">
-            线宽 · pt
-            <Num
-              label="等值线线宽（pt）"
-              value={state.line_width}
-              min={0.1}
-              max={6}
-              step={0.1}
-              onChange={(line_width) => patch({ line_width })}
-            />
-          </label>
-          <div className="check-row">
-            <Toggle
-              label="自动间隔"
-              checked={state.interval_auto}
-              onChange={(interval_auto) => patch({ interval_auto })}
-            />
-            <Toggle
-              label="显示数值标签"
-              checked={state.labels}
-              onChange={(labels) => patch({ labels })}
-            />
-          </div>
-          {!state.interval_auto && (
-            <label className="field">
-              间隔{state.color_by === "amplitude" ? "" : " · ms"}
-              <Num
-                label="等值线间隔"
-                value={state.interval}
-                min={0.01}
-                step={1}
-                onChange={(interval) => patch({ interval })}
-              />
-            </label>
-          )}
-        </fieldset>
-      </Group>
+
     </div>
   );
   return (
