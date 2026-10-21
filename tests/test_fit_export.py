@@ -68,6 +68,31 @@ def test_map_portrait_colorbar_fits_and_white_background(cube, tmp_path):
     assert b'<text' in svg
 
 
+@pytest.mark.parametrize('background', ['white', 'transparent'])
+@pytest.mark.parametrize('shape', [(5, 9), (9, 5)])
+def test_bare_map_fits_to_data_without_an_outer_border(tmp_path, background, shape):
+    rows, cols = shape
+    path = tmp_path / 'bare-map.txt'
+    path.write_text('\n'.join(f'{il} {xl} 200' for il in range(rows) for xl in range(cols)))
+    horizon = Horizon(path)
+    state = HorizonMapState(horizon='h', colorbar=False, display='filled', colormap='viridis')
+    settings = Settings(canvas='fit', long_edge=800, show_axes=False, show_labels=False,
+                        show_title=False, background=background)
+    content = render_map(None, horizon, state, settings)
+    image = np.asarray(Image.open(io.BytesIO(content)).convert('RGBA'))
+    edges = np.concatenate((image[0], image[-1], image[:, 0], image[:, -1]))
+    # Both backgrounds must reach real map pixels on all four sides.
+    assert (edges[:, 3] == 255).all()
+    assert not (edges[:, :3] == 255).all(axis=1).any()
+    h, w = image.shape[:2]
+    assert max(w, h) == 800
+    assert abs(w / h - cols / rows) < .005
+    for fmt in ('svg', 'pdf'):
+        vector = render_map(None, horizon, state, settings.model_copy(update={'format': fmt}))
+        vw, vh = dimensions(vector, fmt)
+        assert vw / vh == pytest.approx(cols / rows)
+
+
 def test_default_long_edge_and_legacy_compatibility(cube):
     assert Settings().canvas == 'fit'
     assert Settings(width=180, height=100).canvas == 'fixed'

@@ -64,6 +64,13 @@ export function createProfilePlotRenderer(plotly: PlotAPI, el: any, onError: (er
         if (!disposed) onResized();
       });
     },
+    viewport(update: Record<string, unknown>, onRendered: () => void) {
+      return enqueue(async () => {
+        if (!traces) return;
+        await plotly.relayout(el, update);
+        if (!disposed) onRendered();
+      });
+    },
     dispose() {
       if (disposed) return queue;
       disposed = true;

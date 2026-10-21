@@ -26,6 +26,21 @@ test('intersection foreground and outline have distinct depth layers without mov
   assert.deepEqual(foreground.x,pts.x);assert.deepEqual(foreground.y,pts.y);assert.deepEqual(foreground.z,pts.z);
   assert.equal(foreground.line.width,4/3);assert.equal(outline.line.width,8/3);
 });
+test('3D intersection hollow circles use a white fill and coloured ring without black outlines', () => {
+  for (const kind of ['inline', 'time']) {
+    const v = state(), d = data();
+    v.horizons = [{ id: 'h', name: 'H', visible: true, display_mode: 'slice_intersections',
+      color: '#ff8800', opacity: 1, line: { visible: false, style: 'solid', width: 1 },
+      outline: { enabled: false, width: 0 }, marker: { visible: true, shape: 'circle-open', size: 5 } }];
+    d.horizons.h = { intersections: [{ slice_id: kind, kind, x: [30], y: [12], z: [300] }] };
+    const trace = buildTraces(d, v, colors).at(-1);
+    assert.equal(trace.mode, 'markers');
+    assert.equal(trace.marker.symbol, 'circle');
+    assert.equal(trace.marker.color, '#fff');
+    assert.equal(trace.marker.line.color, '#ff8800');
+    assert.equal(trace.marker.line.width, 1);
+  }
+});
 test('depth adapter biases each draw and restores GL state even after errors',async()=>{
   const src=await readFile(new URL('../src/components/SeismicViewer3D/depthLayers.ts',import.meta.url),'utf8');
   const js=ts.transpileModule(src,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;

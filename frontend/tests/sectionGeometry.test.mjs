@@ -61,6 +61,24 @@ test('disabled overlays preserve the existing color background and horizons', ()
   assert.ok(traces.slice(1).every(trace => !trace.fill));
 });
 
+test('hollow circles use a white fill and coloured ring in sections and A–B profiles without black outlines', () => {
+  for (const horizontalLabel of [undefined, '距离 (网格)']) {
+    for (const enabled of [false, true]) {
+      const view = state();
+      view.horizons = [{ ...horizon, outline: { enabled, width: 0 },
+        marker: { visible: true, shape: 'circle-open', size: 5 } }];
+      const trace = buildTraces(data(), view, colors, horizontalLabel).at(-1);
+      assert.equal(trace.mode, 'lines+markers');
+      assert.equal(trace.marker.symbol, 'circle');
+      assert.equal(trace.marker.color, '#fff');
+      assert.equal(trace.marker.line.color, horizon.color);
+      assert.equal(trace.marker.line.width, 1);
+      assert.deepEqual(trace.x, [10, 11]);
+      assert.deepEqual(trace.y, [100, 102]);
+    }
+  }
+});
+
 test('smoothing changes only visible line geometry, retaining raw markers and hover picks', () => {
   const section = data();
   section.horizons.h = [[10, 100.125], [10.4, 101.875], [11, 102.25]];

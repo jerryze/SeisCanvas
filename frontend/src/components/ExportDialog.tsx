@@ -16,6 +16,8 @@ type Props = {
   scene?: boolean;
   /** A–B profile dialog: exposes the removable figure furniture. */
   profile?: boolean;
+  /** Present only for map exports; false until two valid endpoints exist. */
+  mapProfileAvailable?: boolean;
   colorbar?: boolean;
   onColorbar?: (value: boolean) => void;
   rendering?: boolean;
@@ -35,6 +37,7 @@ export default function ExportDialog({
   error,
   scene = false,
   profile = false,
+  mapProfileAvailable,
   colorbar,
   onColorbar,
   dataset,
@@ -213,6 +216,16 @@ export default function ExportDialog({
                   checked={!!colorbar}
                   onChange={onColorbar}
                 />
+              )}
+              {mapProfileAvailable !== undefined && (
+                <fieldset disabled={!mapProfileAvailable}>
+                  <Toggle
+                    label="A–B 连线与标注"
+                    title={mapProfileAvailable ? "保存地图上的连线、端点和 A/B 标注" : "请先在地图上拾取两个不同的 A、B 端点"}
+                    checked={mapProfileAvailable && s.show_ab !== false}
+                    onChange={(show_ab) => patch({ show_ab })}
+                  />
+                </fieldset>
               )}
             </div>
           </section>

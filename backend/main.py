@@ -275,7 +275,7 @@ def horizon_map_export(req: HorizonMapExport):
         if req.state.horizon not in horizons:
             raise HTTPException(404, "Horizon not found.")
         try:
-            content = render_map(require_survey(), horizons[req.state.horizon], req.state, req.settings, horizons)
+            content = render_map(require_survey(), horizons[req.state.horizon], req.state, req.settings, horizons, req.profile)
             return Response(content, media_type=export_queue.MIME[req.settings.format])
         except ValueError as e:
             raise error(e)

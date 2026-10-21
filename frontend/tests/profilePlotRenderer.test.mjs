@@ -82,3 +82,15 @@ test('only real resizing changes dimensions, and disposal suppresses late callba
   assert.equal(h.calls.at(-1)[0], 'purge');
   assert.deepEqual(h.errors, []);
 });
+
+test('viewport updates preserve loaded background and foreground traces', async () => {
+  const h = harness();
+  await h.renderer.render(h.traces, {}, {}, () => {});
+  let drawn = 0;
+  await h.renderer.viewport({ 'xaxis.range': [15, 25], 'yaxis.range': [700, 300] }, () => drawn++);
+  assert.equal(h.calls.filter(c => c[0] === 'react').length, 1);
+  assert.equal(h.el.data, h.traces);
+  assert.equal(h.el.data[0], h.background);
+  assert.equal(drawn, 1);
+  assert.deepEqual(h.calls.at(-1), ['relayout', { 'xaxis.range': [15, 25], 'yaxis.range': [700, 300] }]);
+});

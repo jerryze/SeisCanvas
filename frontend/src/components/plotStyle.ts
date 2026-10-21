@@ -10,6 +10,8 @@ export const PLOT_DASH: Record<string, string> = {
 /** 2D scatter supports the full marker set; scatter3d has no triangle. */
 export const SYMBOLS_2D: Record<string, string> = {
   circle: "circle",
+  // The hollow-circle style uses a white fill and a coloured marker border.
+  "circle-open": "circle",
   square: "square",
   triangle: "triangle-up",
   diamond: "diamond",

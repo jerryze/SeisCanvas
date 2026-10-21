@@ -1,0 +1,18 @@
+.plot-scroll-frame { display: grid; grid-template: minmax(0, 1fr) 16px / minmax(0, 1fr) 16px; width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.plot-scroll-content { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+.plot-scrollbar { position: relative; min-width: 0; min-height: 0; background: #f6f8fa; touch-action: none; user-select: none; cursor: pointer; }
+.plot-scrollbar.is-vertical { grid-area: 1 / 2; border-left: 1px solid var(--border-light); }
+.plot-scrollbar.is-horizontal { grid-area: 2 / 1; border-top: 1px solid var(--border-light); }
+.plot-scroll-thumb { position: absolute; border-radius: 5px; background: #9aaebf; }
+.is-vertical > .plot-scroll-thumb { left: 4px; top: 0; width: 8px; }
+.is-horizontal > .plot-scroll-thumb { left: 0; top: 4px; height: 8px; }
+.plot-scrollbar:hover .plot-scroll-thumb { background: #6c879e; }
+.plot-scrollbar.is-dragging .plot-scroll-thumb { background: var(--accent); }
+.plot-scrollbar[aria-disabled="true"] { cursor: default; }
+.plot-scrollbar[aria-disabled="true"] .plot-scroll-thumb { background: #e1e7ec; }
+.plot-scrollbar:focus { outline: none; }
+.plot-scrollbar:focus-visible:not(.is-dragging) .plot-scroll-thumb { background: #5f7c94; }
+.plot-scroll-corner { grid-area: 2 / 2; background: #f6f8fa; border-left: 1px solid var(--border-light); border-top: 1px solid var(--border-light); }
+.plot-scroll-hint { position: absolute; z-index: 6; padding: 5px 8px; border: 1px solid var(--border); border-radius: 5px; background: white; color: var(--text-secondary); font-size: 12px; white-space: nowrap; box-shadow: 0 2px 8px #20344d15; pointer-events: none; }
+.is-horizontal > .plot-scroll-hint { right: 8px; bottom: 22px; }
+.is-vertical > .plot-scroll-hint { right: 22px; top: 8px; }

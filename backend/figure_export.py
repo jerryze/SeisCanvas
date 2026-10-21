@@ -21,7 +21,7 @@ def figure_size(settings, ratio):
     return (8 * min(ratio, 1) + 1.5, 8 / max(ratio, 1) + 1.0)
 
 
-def save_figure(fig, settings, rasters=(), colorbars=()):
+def save_figure(fig, settings, rasters=(), colorbars=(), *, padding=0.07):
     """Rasters are (artist, native data[, coordinate-aware sampler])."""
     transparent = settings.background == "transparent"
     background = "none" if transparent else "white"
@@ -63,12 +63,15 @@ def save_figure(fig, settings, rasters=(), colorbars=()):
         colorbar.ax.set_box_aspect(None)
         colorbar.ax.set_position([bar_box.x0, plot_box.y0, bar_box.width, plot_box.height])
     canvas.draw()
-    bbox = fig.get_tightbbox(canvas.get_renderer()).padded(0.07)
+    bbox = fig.get_tightbbox(canvas.get_renderer()).padded(padding)
     dpi = settings.long_edge / max(bbox.width, bbox.height)
     width = settings.long_edge if bbox.width >= bbox.height else max(1, math.ceil(bbox.width * dpi))
     height = settings.long_edge if bbox.height >= bbox.width else max(1, math.ceil(bbox.height * dpi))
-    # Round the shorter edge outwards; this is padding, never image resizing.
-    bbox = Bbox.from_bounds(bbox.x0, bbox.y0, width / dpi, height / dpi)
+    # Round the shorter edge outwards for figures with furniture. Borderless
+    # figures keep exact content bounds: adding a fraction of a pixel here
+    # would manufacture a white/transparent strip along the shorter edge.
+    if padding:
+        bbox = Bbox.from_bounds(bbox.x0, bbox.y0, width / dpi, height / dpi)
     for raster in rasters:
         artist, native = raster[:2]
         box = artist.axes.get_window_extent().transformed(fig.dpi_scale_trans.inverted())

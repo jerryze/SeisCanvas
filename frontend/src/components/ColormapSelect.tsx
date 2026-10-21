@@ -78,13 +78,14 @@ export default function ColormapSelect({
     const rect = trigger.current!.getBoundingClientRect();
     const below = window.innerHeight - rect.bottom - 8;
     const above = rect.top - 8;
-    const height = Math.min(240, options.length * 30 + 8);
+    const rowHeight = parseFloat(getComputedStyle(trigger.current!).height) || 32;
+    const height = Math.min(240, options.length * rowHeight + 8);
     const upward = below < height && above > below;
     const maxHeight = Math.max(
-      30,
+      rowHeight,
       Math.min(height, (upward ? above : below) - 4),
     );
-    const width = Math.min(Math.max(rect.width, 184), window.innerWidth - 16);
+    const width = Math.min(Math.max(rect.width, 212), window.innerWidth - 16);
     setPosition({
       left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
       top: upward ? rect.top - maxHeight - 4 : rect.bottom + 4,

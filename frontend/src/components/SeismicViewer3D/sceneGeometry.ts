@@ -55,6 +55,7 @@ export const PETREL_COLORMAP: [number, string][] = [
 // scatter3d supports a reduced marker set (no triangle); keep 3D-specific symbols here.
 const symbols: Record<string, string> = {
   circle: "circle",
+  "circle-open": "circle",
   square: "square",
   diamond: "diamond",
   triangle: "diamond",
@@ -397,6 +398,7 @@ export function buildTraces(
         const showLine = !points && h.line.visible && h.line.style !== "none";
         const showMarker =
           points || (h.marker.visible && h.marker.shape !== "none");
+        const hollow = h.marker.shape === "circle-open" && (!points || h.marker.visible);
         if (!showLine && !showMarker) continue;
         const base = {
           type: "scatter3d",
@@ -437,13 +439,15 @@ export function buildTraces(
             dash: PLOT_DASH[h.line.style],
           },
           marker: {
-            color: h.color,
+            color: hollow ? "#fff" : h.color,
             size: points && !h.marker.visible ? 1.5 : (h.marker.size * 4) / 3,
-            symbol: points ? "circle" : symbols[h.marker.shape] || "circle",
+            symbol: points && !hollow ? "circle" : symbols[h.marker.shape] || "circle",
             line: {
-              color: "#000",
+              color: hollow ? h.color : "#000",
               width:
-                h.outline.enabled && (!points || h.marker.visible)
+                hollow
+                  ? Math.max(1, h.outline.enabled ? (h.outline.width * 4) / 3 : 0)
+                  : h.outline.enabled && (!points || h.marker.visible)
                   ? (h.outline.width * 4) / 3
                   : 0,
             },

@@ -54,7 +54,7 @@ class Line(BaseModel):
 class Marker(BaseModel):
     visible: bool = False
     shape: Literal[
-        "circle", "square", "triangle", "diamond", "cross", "plus", "none"
+        "circle", "circle-open", "square", "triangle", "diamond", "cross", "plus", "none"
     ] = "circle"
     size: float = Field(3, ge=1, le=15)
 
@@ -425,9 +425,23 @@ class HorizonMapState(BaseModel):
         return self
 
 
+class MapProfileOverlay(BaseModel):
+    a: tuple[float, float]
+    b: tuple[float, float]
+    path_start: tuple[float, float] | None = None
+    path_end: tuple[float, float] | None = None
+
+    @model_validator(mode="after")
+    def distinct_endpoints(self):
+        if self.a == self.b:
+            raise ValueError("Profile end points A and B must be two different positions.")
+        return self
+
+
 class HorizonMapExport(BaseModel):
     state: HorizonMapState
     settings: Settings
+    profile: MapProfileOverlay | None = None
 
 
 class ProfileDisplayState(BaseModel):
@@ -472,11 +486,9 @@ class Queue2DRequest(BaseModel):
     settings: Settings
 
 
-class QueueMapRequest(BaseModel):
+class QueueMapRequest(HorizonMapExport):
     kind: Literal["map"] = "map"
     dataset: str | None = Field(None, max_length=120)
-    state: HorizonMapState
-    settings: Settings
 
 
 class Queue3DRequest(BaseModel):

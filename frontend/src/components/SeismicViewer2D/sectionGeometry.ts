@@ -140,12 +140,14 @@ export function buildTraces(section: Section, view: VS, colors: any[], horizonta
         simplify: false,
       },
       marker: {
-        color: h.color,
+        color: h.marker.shape === "circle-open" ? "#fff" : h.color,
         size: (h.marker.size * 4) / 3,
         symbol: SYMBOLS_2D[h.marker.shape],
         line: {
-          color: "#000",
-          width: h.outline.enabled ? (h.outline.width * 4) / 3 : 0,
+          color: h.marker.shape === "circle-open" ? h.color : "#000",
+          width: h.marker.shape === "circle-open"
+            ? Math.max(1, h.outline.enabled ? (h.outline.width * 4) / 3 : 0)
+            : h.outline.enabled ? (h.outline.width * 4) / 3 : 0,
         },
       },
       hovertemplate:

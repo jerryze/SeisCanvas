@@ -39,10 +39,61 @@ def test_map_manual_range_reverse_and_constant(tmp_path):
 
 
 @pytest.mark.parametrize('fmt,signature', [('png', b'\x89PNG'), ('pdf', b'%PDF'), ('svg', b'<?xml')])
-def test_map_publication_export(tmp_path, fmt, signature):
+@pytest.mark.parametrize('include_profile', [False, True])
+def test_map_publication_export(tmp_path, fmt, signature, include_profile):
+    from backend.models import MapProfileOverlay
     h = make_horizon(tmp_path, True)
-    content = render_map(None, h, HorizonMapState(horizon='h', interval=2, labels=True, x_range=(1, 4), y_range=(0, 3)), Settings(format=fmt, width=100, height=100))
+    profile = MapProfileOverlay(a=(1, 1), b=(3, 3)) if include_profile else None
+    content = render_map(None, h, HorizonMapState(horizon='h', interval=2, labels=True, x_range=(1, 4), y_range=(0, 3)), Settings(format=fmt, width=100, height=100), profile=profile)
     assert content.startswith(signature)
+
+
+def test_map_export_preserves_ab_coordinates_extensions_and_zoom(tmp_path, monkeypatch):
+    from backend.models import MapProfileOverlay
+    figures = []
+
+    def capture(*args, **kwargs):
+        fig = Figure(*args, **kwargs)
+        figures.append(fig)
+        return fig
+
+    from matplotlib.figure import Figure
+    monkeypatch.setattr('backend.horizon_map.Figure', capture)
+    profile = MapProfileOverlay(a=(1, 1), b=(3, 3), path_start=(.7, .7), path_end=(3.3, 3.3))
+    state = HorizonMapState(horizon='h', x_range=(0, 4), y_range=(.5, 3.5))
+    content = render_map(None, make_horizon(tmp_path), state,
+                         Settings(format='svg', long_edge=600), profile=profile)
+    ax = figures[0].axes[0]
+    line = next(line for line in ax.lines if line.get_gid() == 'map-ab-line')
+    np.testing.assert_array_equal(line.get_xydata(), [[1, 1], [3, 3]])
+    assert len([line for line in ax.lines if (line.get_gid() or '').startswith('map-ab-extension')]) == 2
+    assert [text.get_text() for text in ax.texts] == ['A', 'B']
+    assert ax.get_xlim() == (0, 4) and ax.get_ylim() == (.5, 3.5)
+    assert b'id="map-ab-line"' in content
+    assert b'id="map-ab-label-a"' in content and b'id="map-ab-label-b"' in content
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_map_export_api_ab_overlay_is_optional(client, enabled):
+    response = client.post('/api/horizon-map/export', json={
+        'state': {'horizon': 'h'}, 'settings': {'format': 'svg', 'long_edge': 600},
+        'profile': {'a': [10, 30], 'b': [12, 33]} if enabled else None,
+    })
+    assert response.status_code == 200, response.text
+    assert (b'id="map-ab-line"' in response.content) is enabled
+    assert (b'id="map-ab-label-a"' in response.content) is enabled
+
+
+@pytest.mark.parametrize('profile', [
+    {'a': [10, 30]},
+    {'a': [10, 30], 'b': [10, 30]},
+    {'a': ['NaN', 30], 'b': [12, 33]},
+])
+def test_map_export_rejects_invalid_ab_overlay(client, profile):
+    response = client.post('/api/horizon-map/export', json={
+        'state': {'horizon': 'h'}, 'settings': {}, 'profile': profile,
+    })
+    assert response.status_code == 422
 
 
 @pytest.mark.parametrize('mode', ['filled', 'contour', 'filled_contour'])
@@ -368,6 +419,60 @@ def test_profile_extends_and_stays_inside_the_survey(cube):
     assert result["b_distance"] == pytest.approx(1.15, abs=0.01)
     # Every interpolated sample is inside the cube and therefore finite.
     assert all(v is not None for row in result["amplitude"] for v in row)
+
+
+@pytest.fixture
+def boundary_cube(tmp_path):
+    """Sparse test volume with the same outer coordinates as the F3 survey."""
+    import segyio
+    from backend.core import Survey
+
+    path = tmp_path / "boundary.segy"
+    spec = segyio.spec()
+    spec.sorting, spec.format = 2, 5
+    spec.samples = list(range(200, 232, 4))
+    spec.ilines, spec.xlines = [110, 400, 695], [310, 700, 1205]
+    with segyio.create(str(path), spec) as f:
+        for k, (il, xl) in enumerate((il, xl) for il in spec.ilines for xl in spec.xlines):
+            f.header[k] = {189: il, 21: xl, 109: 200, 117: 4000}
+            f.trace[k] = il + xl + np.arange(len(spec.samples), dtype=np.float32)
+        f.bin[segyio.BinField.Interval] = 4000
+    return Survey(path)
+
+
+@pytest.mark.parametrize("a,b", [
+    ((115, 700), (400, 700)),  # Low inline edge.
+    ((400, 700), (690, 700)),  # High inline edge.
+    ((400, 315), (400, 700)),  # Low crossline edge.
+    ((400, 700), (400, 1200)),  # High crossline edge.
+    ((115, 320), (690, 1200)),  # Both ends exceed the extent.
+    # Clipping this diagonal used to produce crossline 309.99999999999994.
+    ((198.0570257963888, 741.5800874384062), (590.8100996147791, 312.4056949091382)),
+])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("interpolate", [False, True])
+def test_profile_clipped_extensions_include_valid_boundary_traces(boundary_cube, tmp_path, a, b, reverse, interpolate):
+    from backend.models import Seismic, ViewState
+
+    if reverse:
+        a, b = b, a
+    path = tmp_path / "boundary-horizon.txt"
+    path.write_text("".join(f"{il} {xl} 204\n" for il in (110, 695) for xl in (310, 1205)))
+    result = map_profile(
+        boundary_cube, None, HorizonMapState(horizon="h"), {"h": Horizon(path)}, a, b,
+        target_width=61, target_height=32,
+        display_state=ViewState(section_number=0, seismic=Seismic(background_interpolation=interpolate)),
+    )
+    for il, xl in (result["path_start"], result["path_end"]):
+        assert 110 <= il <= 695 and 310 <= xl <= 1205
+    # Neither the background nor the interpretation loses its edge sample.
+    assert np.isfinite(np.asarray(result["amplitude"], dtype=float)).all()
+    assert result["curves"][0]["values"] == pytest.approx([204] * len(result["curve_distance"]))
+    assert 0 <= result["a_distance"] <= result["x_range"][1] + .001
+    assert 0 <= result["b_distance"] <= result["x_range"][1] + .001
+    if not interpolate:
+        for column, endpoint in ((0, result["path_start"]), (-1, result["path_end"])):
+            assert result["amplitude"][0][column] == pytest.approx(sum(endpoint))
 
 
 def test_profile_horizon_overlays_follow_the_same_path(cube, tmp_path):

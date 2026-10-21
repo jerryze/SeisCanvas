@@ -8,7 +8,10 @@ import { mapPresentation, mapSelectionError, profileEndpointError, profileReques
 import { createProfilePlotRenderer } from "./profilePlotRenderer";
 import { createPortal } from "react-dom";
 import Plotly from "plotly.js-dist-min";
-import type { HS, Section, VS } from "../types";
+import PlotScrollFrame, { isScrollPreview, updatePlotLayout, updatePlotData } from "./PlotScrollFrame";
+import { coversViewport } from "./loadedRaster";
+import { ordered } from "./plotScrollMath";
+import type { HS, Section, VS, MapProfileOverlay } from "../types";
 import type { ExportDialogSettings, SS } from "../types";
 import { api } from "../api/client";
 import { formatAmplitude } from "../format";
@@ -38,6 +41,7 @@ type ProfileData = {
   distance_edges: number[];
   time_edges: number[];
   raster_extent: [number, number, number, number];
+  preview_shape?: number[];
   x_range: [number, number];
   time_range: [number, number];
   trace_overlay: Section["trace_overlay"];
@@ -118,7 +122,7 @@ export default function HorizonMap({
   dataset: string;
   datasetPlaceholder?: string;
   onDataset: (value: string) => void;
-  onAddToExport: (payload: { state: State; settings: Record<string, unknown> }) => Promise<void>;
+  onAddToExport: (payload: { state: State; settings: Record<string, unknown>; profile: MapProfileOverlay | null }) => Promise<void>;
 }) {
   const { state: savedState, settings, drag, profileOn, profileA, profileB, profileSettings } = workspace;
   const activeView = workspace.activeView ?? "map";
@@ -165,7 +169,7 @@ export default function HorizonMap({
   const [picking, setPicking] = useState<null | "a" | "b">(null);
   const setActiveView = (view: "map" | "section") => { update("activeView", view); setPicking(null); };
   const returnToMap = () => { setActiveView("map"); setProfileOn(true); setPicking("a"); };
-  const [profileResult, setProfileResult] = useState<{ key: string; pathKey: string; data: ProfileData } | null>(null);
+  const [profileResult, setProfileResult] = useState<{ key: string; contentKey: string; pathKey: string; data: ProfileData } | null>(null);
   const [profileFailure, setProfileFailure] = useState<{ key: string; message: string } | null>(null);
   const [profileExportOpen, setProfileExportOpen] = useState(false);
   const [profileExportBusy, setProfileExportBusy] = useState(false);
@@ -204,6 +208,7 @@ export default function HorizonMap({
   const profileQueryKey = profileRequestKey(state, horizonKey, profileA, profileB, seismic,
     profileSampling,
     workspace.profileXRange, workspace.profileTimeRange);
+  const profileContentKey = profileRequestKey(state, horizonKey, profileA, profileB, seismic, null);
   const pathKey = JSON.stringify([profileA, profileB]);
   // Path geometry survives pending raster resampling and hidden-view resizing.
   const profilePath = profileResult?.pathKey === pathKey ? profileResult.data : null;
@@ -217,10 +222,16 @@ export default function HorizonMap({
     }
   }, [pathKey]);
   const endpointError = profileEndpointError(profileA, profileB);
-  const profileData = !endpointError && !mapIssue && profileResult?.key === profileQueryKey ? profileResult.data : null;
+  const profileData = !endpointError && !mapIssue && profileResult?.contentKey === profileContentKey ? profileResult.data : null;
+  const profilePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  const profileFresh = profileResult?.key === profileQueryKey || !!profileData && coversViewport(profileData,
+    workspace.profileXRange ?? profileData.x_range, workspace.profileTimeRange ?? profileData.time_range,
+    Math.round((profileViewport?.width || profileRef.current?.clientWidth || 1) * profilePixelRatio),
+    Math.round((profileViewport?.height || profileRef.current?.clientHeight || 1) * profilePixelRatio),
+    seismic.background_interpolation, seismic.wiggle || seismic.variable_area);
   const profileError = endpointError || (profileFailure?.key === profileQueryKey ? profileFailure.message : "");
   const validEndpoints = !!profileA && !!profileB && !endpointError;
-  const profilePending = sectionActive && validEndpoints && !profileError && !mapIssue && !profileData;
+  const profilePending = sectionActive && validEndpoints && !profileError && !mapIssue && !profileFresh;
   const setProfileError = (message: string) => setProfileFailure(message ? { key: profileQueryKey, message } : null);
   const profileErrorHandler = useRef(setProfileError);
   profileErrorHandler.current = setProfileError;
@@ -286,15 +297,16 @@ export default function HorizonMap({
       setMapDrawn(false);
       return;
     }
-    const inputs = [data, state.x_range, state.y_range, drag, profileOn, profileA, profileB, profilePathKey, presentation.scalar, presentation.unit];
+    const inputs = [data, profileOn, profileA, profileB, profilePathKey, presentation.scalar, presentation.unit];
     const token = ++version.current;
     queue.current = queue.current
       .catch(() => {})
       .then(async () => {
         if (token !== version.current) return;
         if (mapRenderedInputs.current?.every((value, i) => Object.is(value, inputs[i]))) {
-          if (el._fullLayout?.width !== el.clientWidth || el._fullLayout?.height !== el.clientHeight)
-            await Plotly.relayout(el, { width: el.clientWidth, height: el.clientHeight });
+          await updatePlotLayout(el, { width: el.clientWidth, height: el.clientHeight, dragmode: drag,
+            "xaxis.range": state.x_range || [data.x[0] - .5, data.x.at(-1)! + .5],
+            "yaxis.range": state.y_range || [data.y[0] - .5, data.y.at(-1)! + .5] });
           if (token === version.current) setMapDrawn(true);
           return;
         }
@@ -446,13 +458,13 @@ export default function HorizonMap({
             annotations: abAnnotations,
             xaxis: {
               title: { text: "Crossline" },
-              range: state.x_range || [data.x[0] - 0.5, data.x.at(-1)! + 0.5],
+              range: [...(state.x_range || [data.x[0] - 0.5, data.x.at(-1)! + 0.5])],
               constrain: "domain",
               showgrid: false,
             },
             yaxis: {
               title: { text: "Inline" },
-              range: state.y_range || [data.y[0] - 0.5, data.y.at(-1)! + 0.5],
+              range: [...(state.y_range || [data.y[0] - 0.5, data.y.at(-1)! + 0.5])],
               scaleanchor: "x",
               scaleratio: 1,
               constrain: "domain",
@@ -477,6 +489,7 @@ export default function HorizonMap({
           }
         });
         el.on("plotly_relayout", (e: any) => {
+          if (isScrollPreview(el)) return;
           if (e["xaxis.autorange"] || e["yaxis.autorange"])
             patch({ x_range: null, y_range: null });
           else if (
@@ -504,7 +517,7 @@ export default function HorizonMap({
   }, [mapActive, data, state.x_range, state.y_range, drag, profileOn, profileA, profileB, profilePathKey, presentation.scalar, presentation.unit]);
   // Map coloring does not change the A–B seismic raster or horizon curves.
   useEffect(() => {
-    if (!sectionActive || !profileA || !profileB || endpointError || mapIssue || profileResult?.key === profileQueryKey) return;
+    if (!sectionActive || !profileA || !profileB || endpointError || mapIssue || profileFresh) return;
     const box = profileRef.current;
     if (!box?.clientWidth || !box.clientHeight) return;
     setProfileFailure(null);
@@ -534,7 +547,7 @@ export default function HorizonMap({
         if (active) {
           if (result.background_interpolation !== seismic.background_interpolation)
             throw new Error("剖面显示后端版本不匹配，请重启 SeisCanvas 后端以启用插值和波形功能。");
-          setProfileResult({ key: profileQueryKey, pathKey, data: result });
+          setProfileResult({ key: profileQueryKey, contentKey: profileContentKey, pathKey, data: result });
         }
       } catch (e) {
         if (active && (e as Error).name !== "AbortError")
@@ -546,7 +559,7 @@ export default function HorizonMap({
       clearTimeout(timer);
       abort.abort();
     };
-  }, [sectionActive, profileQueryKey, endpointError, mapIssue, profileResult?.key]);
+  }, [sectionActive, profileQueryKey, profileContentKey, endpointError, mapIssue, profileFresh]);
 
   useEffect(() => {
     onReady(mapActive ? mapDrawn && !!data && !loading : profileDrawn && !!profileData && !profilePending && !profileError);
@@ -557,14 +570,19 @@ export default function HorizonMap({
     const el = profileRef.current as any;
     if (!sectionActive || !el || !el.clientWidth || !el.clientHeight) return;
     if (!profileData) { setProfileDrawn(false); return; }
-    const renderer = profileRenderer.current ??= createProfilePlotRenderer(Plotly as any, el,
+    const renderer = profileRenderer.current ??= createProfilePlotRenderer({ react: updatePlotData, restyle: Plotly.restyle,
+      relayout: updatePlotLayout, purge: Plotly.purge } as any, el,
       message => profileErrorHandler.current(message));
     void renderer.visibility(horizons);
-    const inputs = [profileData, maps, profileStyleKey, seismic, profileAspectRatio, workspace.profileDrag,
-      workspace.profileXRange, workspace.profileTimeRange];
+    const inputs = [profileData, maps, profileStyleKey, seismic];
     if (profileRenderedInputs.current?.every((value, i) => Object.is(value, inputs[i]))) {
       void renderer.resize(el.clientWidth, el.clientHeight, () => reportProfileViewport(el));
-      setProfileDrawn(true);
+      const x = workspace.profileXRange || profileData.x_range;
+      const t = workspace.profileTimeRange || profileData.time_range;
+      void renderer.viewport({ "xaxis.range": x, "yaxis.range": [...t].reverse(), dragmode: workspace.profileDrag,
+        "yaxis.scaleanchor": profileAspectRatio === null ? false : "x",
+        "yaxis.scaleratio": profileAspectRatio === null ? 1 : Math.abs((x[1] - x[0]) / (t[1] - t[0])) / profileAspectRatio,
+      }, () => setProfileDrawn(true));
       return;
     }
     setProfileDrawn(false);
@@ -611,7 +629,7 @@ export default function HorizonMap({
         plot_bgcolor: "#fff",
         font: { family: "DM Sans, 'PingFang SC', Arial, sans-serif", color: "#425367", size: 11 },
         xaxis: { title: { text: "距离 (网格)", standoff: 8 }, showgrid: false, linecolor: "#bcc8cf", ticks: "outside",
-          range: xRange, autorange: false, constrain: "domain", layer: "above traces" },
+          range: [...xRange], autorange: false, constrain: "domain", layer: "above traces" },
         yaxis: {
           title: { text: profileData.label_y, standoff: 4 },
           range: [...timeRange].reverse(),
@@ -648,6 +666,7 @@ export default function HorizonMap({
           if (request) probeProfile(request);
         });
         el.on("plotly_relayout", (event: any) => {
+          if (isScrollPreview(el)) return;
           if (event["xaxis.autorange"] || event["yaxis.autorange"]) {
             onWorkspace(current => ({ ...current, profileXRange: null, profileTimeRange: null }));
           } else if (event["xaxis.range[0]"] !== undefined || event["yaxis.range[0]"] !== undefined) {
@@ -718,7 +737,12 @@ export default function HorizonMap({
     if (!data || loading || mapIssue) return;
     setSaving(true);
     try {
-      await onAddToExport({ state, settings });
+      await onAddToExport({ state, settings,
+        profile: validEndpoints && settings.show_ab !== false ? {
+          a: profileA!, b: profileB!,
+          ...(profileOn && profilePath ? { path_start: profilePath.path_start, path_end: profilePath.path_end } : {}),
+        } : null,
+      });
       setError("");
       onCloseExport();
     } catch (e) {
@@ -1206,6 +1230,11 @@ export default function HorizonMap({
           <button className="icon" title="取消拾取（Esc）" onClick={() => setPicking(null)}><X size={14} /></button>
         </div>}
         <div className="map-plot-region" aria-busy={loading}>
+        <PlotScrollFrame plotRef={plot}
+          xBounds={data ? [data.x[0] - .5, data.x.at(-1)! + .5] : null}
+          yBounds={data ? [data.y[0] - .5, data.y.at(-1)! + .5] : null}
+          xLabel="Crossline" yLabel="Inline" onError={setError}
+          onCommit={({ x, y }) => patch({ x_range: x, y_range: y })}>
         <div
           ref={plot}
           className="map-plot"
@@ -1214,6 +1243,7 @@ export default function HorizonMap({
             visibility: mapActive && data ? "visible" : "hidden",
           }}
         />
+        </PlotScrollFrame>
         {(error || mapIssue || loading) && (
           <p role={error ? "alert" : "status"} className={`map-status${error ? " map-status-error" : ""}`}>
             {error || mapIssue || "正在绘制层位地图…"}
@@ -1243,7 +1273,12 @@ export default function HorizonMap({
               </div>
             </div>
             <div className="map-profile-plot-region" aria-busy={profilePending}>
+            <PlotScrollFrame plotRef={profileRef}
+              xBounds={profilePath?.x_range ?? null} yBounds={profilePath?.time_range ?? null}
+              xLabel="距离 (网格)" yLabel="Time (ms)" onError={setProfileError}
+              onCommit={({ x, y }) => onWorkspace(current => ({ ...current, profileXRange: x, profileTimeRange: ordered(y) }))}>
             <div ref={profileRef} className="map-profile-plot" style={{ visibility: sectionActive && profileData ? "visible" : "hidden" }} />
+            </PlotScrollFrame>
             {!profileData && <div role={validEndpoints && profileError ? "alert" : "status"} className="map-profile-hint">
               <p>{!validEndpoints ? endpointError || "请返回地图拾取 A、B 点。" : profileError || mapIssue || "正在更新剖面…"}</p>
               {(!validEndpoints || mapIssue || profileError) && <button className="secondary" onClick={returnToMap}>返回地图</button>}
@@ -1264,6 +1299,7 @@ export default function HorizonMap({
         </div>
       </div>
       {exportOpen && mapActive && <ExportDialog title="层位地图 · 保存图件" settings={settings}
+        mapProfileAvailable={validEndpoints}
         onChange={p => setSettings(s => ({...s, ...p}))}
         onClose={onCloseExport} onExport={addToExport} busy={saving}
         disabled={!data || loading || !!mapIssue} error={error || mapIssue} rendering={false}

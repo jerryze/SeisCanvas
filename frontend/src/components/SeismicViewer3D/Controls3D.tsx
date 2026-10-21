@@ -404,17 +404,7 @@ export function Horizon3DControls({
               <option value="solid">单色</option>
             </Select>
           </label>
-          {h.color_by === "solid" ? (
-            <label className="field">
-              曲面颜色
-              <input
-                type="color"
-                aria-label="曲面颜色"
-                value={h.color}
-                onChange={(e) => onChange({ color: e.target.value })}
-              />
-            </label>
-          ) : h.color_by === "amplitude" ? (
+          {h.color_by === "solid" ? null : h.color_by === "amplitude" ? (
             <div className="field">
               <span>振幅色标</span>
               <span title="使用地震显示的色标、极性和振幅裁剪设置">

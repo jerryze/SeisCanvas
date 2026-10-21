@@ -65,15 +65,15 @@
   --fs-xl: 18px;
 
   /* Compact desktop chrome; plot and dialog typography stay independent. */
-  --ui-title-size: var(--fs-md);
-  --ui-label-size: var(--fs-sm);
-  --ui-meta-size: var(--fs-xs);
+  --ui-title-size: 14px;
+  --ui-label-size: 13px;
+  --ui-meta-size: 12px;
   --ui-icon-size: 14px;
   --ui-group-icon-size: 16px;
   --ui-disclosure-size: 12px;
   --ui-group-height: 40px;
-  --ui-row-height: 30px;
-  --ui-control-height: 30px;
+  --ui-row-height: 32px;
+  --ui-control-height: 32px;
   --ui-radius: 6px;
   --topbar-height: 52px;
 }
@@ -130,7 +130,7 @@ a:focus-visible,
 input:focus-visible,
 select:focus-visible,
 summary:focus-visible {
-  outline: 2px solid var(--accent-focus);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -541,7 +541,7 @@ main {
 }
 
 .viewer-toolbar {
-  min-height: 40px;
+  min-height: 44px;
   gap: 8px;
   flex-wrap: wrap;
 
@@ -1392,7 +1392,7 @@ main {
 .modal input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--accent); }
 /* Workbench controls share the desktop scale across all views. */
 .view-mode-switch button { white-space: nowrap; padding-inline: 5px; }
-.tools > button { min-height: 28px; padding: 4px 7px; border-radius: var(--ui-radius); background: var(--surface-subtle); color: var(--text-secondary); font-size: var(--ui-label-size); }
+.tools > button { min-height: 30px; padding: 4px 7px; border-radius: var(--ui-radius); background: var(--surface-subtle); color: var(--text-secondary); font-size: var(--ui-label-size); }
 .tools > button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
 .tools > button.chosen { background: var(--primary-soft); color: var(--primary); }
 .amplitude-key b { font-size: var(--ui-meta-size); color: var(--text-muted); font-weight: 400; }
@@ -1840,4 +1840,19 @@ main {
 }
 .recovery-issue > span {
   overflow-wrap: anywhere;
+}
+
+/* Shared chrome: stable status, tool states and compact, wrapping legends. */
+.topbar { gap: 10px; }
+.topbar .autosave-status { display: inline-block; min-width: 60px; }
+.topbar :is(.primary, .queue-button) { white-space: nowrap; }
+.viewer-toolbar .tools > button.chosen { box-shadow: inset 0 0 0 1px var(--primary-border); }
+.section-navigation > span { min-width: 60px; font-size: var(--ui-meta-size); }
+.section-navigation > button { width: 30px; height: 30px; border-radius: var(--ui-radius); }
+.scene-presets button { min-height: 30px; font-size: var(--ui-label-size); border-radius: var(--ui-radius); }
+.viewer-bottom:not(.scene-bottom) > .legend { flex: 1 1 240px; min-width: 0; }
+:is(.legend, .scene-legend, .profile-legend) > span { max-width: 100%; overflow-wrap: anywhere; line-height: 1.5; }
+.amplitude-key { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) {
+  :is(button, input, select, .colormap-trigger) { transition: none; }
 }

@@ -114,7 +114,7 @@ def draw_horizon(ax, points, style, zorder=3, label=None, display_points=None):
     line = style.line.visible and style.line.style != "none"
     marker = style.marker.visible and style.marker.shape != "none"
     dash = {"solid": "-", "dashed": "--", "dotted": ":", "dashdot": "-."}
-    markers = {"circle": "o", "square": "s", "triangle": "^", "diamond": "D", "cross": "x", "plus": "+"}
+    markers = {"circle": "o", "circle-open": "o", "square": "s", "triangle": "^", "diamond": "D", "cross": "x", "plus": "+"}
     curve = points if display_points is None else display_points
     if line:
         if style.outline.enabled:
@@ -124,10 +124,13 @@ def draw_horizon(ax, points, style, zorder=3, label=None, display_points=None):
         ax.plot(curve[:, 0], curve[:, 1], color=style.color, lw=style.line.width,
                 ls=dash[style.line.style], zorder=zorder, label=label)
     if marker:
+        hollow = style.marker.shape == "circle-open"
         ax.plot(points[:, 0], points[:, 1], ls="none", marker=markers[style.marker.shape],
                 ms=style.marker.size, color=style.color,
-                markeredgecolor="black" if style.outline.enabled else style.color,
-                markeredgewidth=style.outline.width if style.outline.enabled else 0,
+                markerfacecolor="white" if hollow else style.color,
+                markeredgecolor=style.color if hollow or not style.outline.enabled else "black",
+                markeredgewidth=max(.75, style.outline.width if style.outline.enabled else 0) if hollow
+                    else style.outline.width if style.outline.enabled else 0,
                 zorder=zorder, label=label if not line else None)
     return line or marker
 

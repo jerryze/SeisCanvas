@@ -6,6 +6,7 @@ export default function SidebarObject({
   selected,
   hidden = false,
   label,
+  labelControls,
   title,
   visibility,
   metadata,
@@ -17,6 +18,7 @@ export default function SidebarObject({
   selected: boolean;
   hidden?: boolean;
   label: ReactNode;
+  labelControls?: ReactNode;
   title: string;
   visibility: ReactNode;
   metadata?: ReactNode;
@@ -38,6 +40,24 @@ export default function SidebarObject({
     else if (bottom > area.bottom - 20)
       viewport.scrollTop += bottom - area.bottom + 20;
   };
+  const toggle = (
+    <button
+      type="button"
+      className={`object-toggle${labelControls ? " object-disclosure" : ""}`}
+      title={title}
+      aria-label={labelControls ? title : undefined}
+      aria-expanded={open}
+      aria-controls={id}
+      onClick={() => {
+        onToggle();
+        if (!open) requestAnimationFrame(reveal);
+      }}
+    >
+      {!labelControls && <span className="object-label">{label}</span>}
+      {metadata}
+      <ChevronDown className="object-chevron" size={12} />
+    </button>
+  );
   return (
     <div
       ref={row}
@@ -45,21 +65,14 @@ export default function SidebarObject({
     >
       <div className="object-row">
         {visibility}
-        <button
-          type="button"
-          className="object-toggle"
-          title={title}
-          aria-expanded={open}
-          aria-controls={id}
-          onClick={() => {
-            onToggle();
-            if (!open) requestAnimationFrame(reveal);
-          }}
-        >
-          <span className="object-label">{label}</span>
-          {metadata}
-          <ChevronDown className="object-chevron" size={12} />
-        </button>
+        {labelControls ? (
+          <div className="object-heading">
+            {labelControls}
+            {toggle}
+          </div>
+        ) : (
+          toggle
+        )}
         {action}
       </div>
       <div id={id} className="object-body" hidden={!open}>

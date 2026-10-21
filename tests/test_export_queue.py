@@ -256,6 +256,22 @@ def test_dataset_falls_back_to_the_segy_file_name(client):
     assert item["dataset"] == "My-Project"
 
 
+@pytest.mark.parametrize('include_profile', [False, True])
+def test_horizon_map_queue_keeps_ab_overlay_in_file_and_snapshot(client, include_profile):
+    profile = {'a': [10, 30], 'b': [12, 33], 'path_start': [10, 30], 'path_end': [12, 33]}
+    response = client.post('/api/export/queue', json={
+        'kind': 'map', 'state': {'horizon': 'h'},
+        'settings': {'format': 'svg', 'long_edge': 600},
+        'profile': profile if include_profile else None,
+    })
+    assert response.status_code == 200, response.text
+    item = response.json()
+    assert export_queue.session().items[-1]['summary']['profile'] == (profile if include_profile else None)
+    assert item['view_state']['profile'] == (profile if include_profile else None)
+    content = Path(item['temporary_path']).read_bytes()
+    assert (b'id="map-ab-line"' in content) is include_profile
+
+
 def test_horizon_map_is_queued_with_its_contour_parameters(client):
     body = {
         "kind": "map",

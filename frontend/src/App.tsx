@@ -14,6 +14,7 @@ import SectionPanel, { SectionNavigation } from "./components/panels/SectionPane
 import SeismicPanel from "./components/panels/SeismicPanel";
 import HorizonPanel from "./components/panels/HorizonPanel";
 import SectionPlot from "./components/SeismicViewer2D/SectionPlot";
+import { coversViewport } from "./components/loadedRaster";
 import { samplingViewport, sectionResponseError, SectionViewport } from "./components/SeismicViewer2D/sectionDisplay";
 import { useState, useEffect, useRef, useMemo } from "react";
 import {
@@ -37,6 +38,7 @@ import {
   Meta,
   Section,
   ExportDialogSettings,
+  MapProfileOverlay,
   defaultScene,
   makeSlice,
 } from "./types";
@@ -153,6 +155,7 @@ export default function App() {
   const deleteDialog = useRef<HTMLDivElement>(null);
 
   const requestId = useRef(0);
+  const loadedSection = useRef<{ meta: Meta; key: string; data: Section } | null>(null);
 
   /* ------------------------------------------------------------------------ */
   /* State                                                                    */
@@ -234,6 +237,7 @@ export default function App() {
     try { draft = readDraft(localStorage, result.project_id, result.revision, result.state); } catch { /* Storage may be disabled. */ }
     const state = restoreState(defaults, result.issues.length ? result.state : draft || result.state, result.horizons);
     requestId.current++;
+    loadedSection.current = null;
     setSection(null);
     setMeta(result.metadata);
     setView(result.metadata ? state.view : { ...state.view, view_mode: "2d" });
@@ -330,6 +334,7 @@ export default function App() {
     if (!result.metadata) return;
     requestId.current++;
 
+    loadedSection.current = null;
     setSection(null);
     setMeta(result.metadata);
     setDataset("");
@@ -518,6 +523,12 @@ export default function App() {
   // CSS plot dimensions control trace density/time sampling and stay transient.
   // Raster target pixels additionally include the display device pixel ratio.
   const samplingSize = samplingViewport(view.seismic, sectionViewport);
+  const sectionContentKey = JSON.stringify([revision, view.view_type, view.section_number,
+    view.horizon_sg, view.horizon_sg_window,
+    view.seismic.clip_mode, view.seismic.clip_percentile, view.seismic.symmetric,
+    view.seismic.vmin, view.seismic.vmax, view.seismic.reverse_polarity,
+    view.seismic.wiggle, view.seismic.variable_area, view.seismic.wiggle_gain,
+    view.seismic.variable_area_color, view.seismic.background_interpolation, view.seismic.wiggle_interpolation]);
 
   function measuredSectionViewport(viewport: SectionViewport) {
     sectionViewportRef.current = viewport;
@@ -534,12 +545,24 @@ export default function App() {
     const id = ++requestId.current;
     const abort = new AbortController();
 
-    setLoading(true);
-
     // Adaptive resolution: ask for the pixels the plot area really shows, so a
     // zoom can pull finer data out of the SEG-Y instead of magnifying a raster.
     const box = plotWrap.current;
     const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    const width = sectionViewportRef.current?.width ?? box?.clientWidth ?? 1;
+    const height = sectionViewportRef.current?.height ?? box?.clientHeight ?? 1;
+    const positions = view.view_type === "inline" ? meta.crosslines : meta.inlines;
+    const fullX = [positions[0] - (positions.length > 1 ? (positions[1] - positions[0]) / 2 : .5),
+      positions.at(-1)! + (positions.length > 1 ? (positions.at(-1)! - positions.at(-2)!) / 2 : .5)];
+    const loaded = loadedSection.current;
+    if (loaded?.meta === meta && loaded.key === sectionContentKey &&
+      coversViewport(loaded.data, view.x_range ?? fullX, view.time_range ?? meta.time_range,
+        Math.round(width * ratio), Math.round(height * ratio), view.seismic.background_interpolation,
+        view.seismic.wiggle || view.seismic.variable_area)) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
 
     // Two-stage refresh: the current raster stays visible until the debounce
     // expires and the viewport-matched window arrives.
@@ -570,6 +593,7 @@ export default function App() {
             throw new Error("二维层位平滑后端版本不匹配，请重启 SeisCanvas 后端以启用 SG 平滑。");
           }
           setSection(s);
+          loadedSection.current = { meta, key: sectionContentKey, data: s };
           setError("");
         }
       } catch (e) {
@@ -611,6 +635,7 @@ export default function App() {
     samplingSize.width,
     samplingSize.height,
     revision,
+    sectionContentKey,
   ]);
 
   /* ------------------------------------------------------------------------ */
@@ -776,13 +801,14 @@ export default function App() {
     });
   }
 
-  async function addMapToQueue(payload: { state: unknown; settings: unknown }) {
+  async function addMapToQueue(payload: { state: unknown; settings: unknown; profile: MapProfileOverlay | null }) {
     await task("正在保存层位地图…", async () => {
       await queueItem({
         kind: "map",
         dataset,
         state: payload.state,
         settings: payload.settings,
+        profile: payload.profile,
       });
     });
   }
@@ -877,6 +903,7 @@ export default function App() {
                   <button
                     key={mode}
                     disabled={!!busy || (mode !== "2d" && !meta) || (mode === "map" && !view.horizons.length)}
+                    title={busy ? busy : mode !== "2d" && !meta ? "导入 SEG-Y 后可用" : mode === "map" && !view.horizons.length ? "导入层位后可用" : undefined}
                     className={view.view_mode === mode ? "active" : ""}
                     aria-pressed={view.view_mode === mode}
                     onClick={() => { setExportOpen(false); setView(v => ({ ...v, view_mode: mode })); }}
@@ -1073,6 +1100,7 @@ export default function App() {
                 <div className="plot-wrap" ref={plotWrap}>
                   {section ? (
                     <SectionPlot
+                      meta={meta}
                       view={view}
                       section={section}
                       colors={colors}
@@ -1082,7 +1110,7 @@ export default function App() {
                       onError={setError}
                       onViewportSize={measuredSectionViewport}
                     />
-                  ) : (
+                  ) : !busy && !loading ? (
                     <div className="empty">
                       <div className="empty-icon">
                         <Activity size={32} strokeWidth={1.5} />
@@ -1110,7 +1138,7 @@ export default function App() {
                         </button>
                       </div>
                     </div>
-                  )}
+                  ) : null}
 
                   {(busy || loading) && (
                     <div className="loading">

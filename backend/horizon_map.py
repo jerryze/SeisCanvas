@@ -341,8 +341,12 @@ def _profile_data(survey, state, horizons, a, b, target_width=None, target_heigh
     step = step if step > 0 else 1.0
     count = int(min(PROFILE_MAX_TRACES, max(2, round((t_hi - t_lo) * length / step) + 1)))
     t = np.linspace(t_lo, t_hi, count)
-    qil = ail + d_il * t
-    qxl = axl + d_xl * t
+    # The parameter interval is already clipped to the survey rectangle.
+    # Floating arithmetic can still put an edge point a few ulps outside it
+    # (e.g. crossline 309.99999999999994 instead of 310), which both samplers
+    # would correctly reject as out of bounds. Keep those boundary traces.
+    qil = np.clip(ail + d_il * t, il_lo, il_hi)
+    qxl = np.clip(axl + d_xl * t, xl_lo, xl_hi)
     # Measured from the section start so the axis is strictly increasing
     # (a Plotly heatmap needs monotonic x); A and B sit inside it.
     distance = np.hypot(qil - qil[0], qxl - qxl[0])
@@ -677,7 +681,7 @@ def map_data(survey, horizon, state, horizons=None):
     return payload
 
 
-def render_map(survey, horizon, state, settings, horizons=None):
+def render_map(survey, horizon, state, settings, horizons=None, profile=None):
     data, lo, hi, vmin, vmax, cmap, levels = map_values(survey, horizon, state, horizons)
     xr = state.x_range or [float(data.x[0]) - .5, float(data.x[-1]) + .5]
     yr = state.y_range or [float(data.y[0]) - .5, float(data.y[-1]) + .5]
@@ -695,6 +699,20 @@ def render_map(survey, horizon, state, settings, horizons=None):
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(state.x_range or [float(data.x[0]) - .5, float(data.x[-1]) + .5])
     ax.set_ylim(state.y_range or [float(data.y[0]) - .5, float(data.y[-1]) + .5])
+    if profile is not None:
+        color = "#1a1a1a"
+        for index, (start, end) in enumerate(((profile.path_start, profile.a), (profile.b, profile.path_end))):
+            if start is not None and end is not None:
+                extension, = ax.plot([start[1], end[1]], [start[0], end[0]],
+                                     color=color, lw=1.125, ls=":", zorder=5)
+                extension.set_gid(f"map-ab-extension-{index}")
+        line, = ax.plot([profile.a[1], profile.b[1]], [profile.a[0], profile.b[0]],
+                        color=color, lw=1.5, ls="--", marker="o", ms=5.25, zorder=5)
+        line.set_gid("map-ab-line")
+        for label, (il, xl) in (("A", profile.a), ("B", profile.b)):
+            annotation = ax.annotate(label, (xl, il), xytext=(3, 3), textcoords="offset points",
+                                    ha="left", va="bottom", color=color, clip_on=True, zorder=6)
+            annotation.set_gid(f"map-ab-label-{label.lower()}")
     if not settings.show_axes:
         ax.set_axis_off()
     if settings.show_axes and settings.show_labels:
@@ -721,4 +739,5 @@ def render_map(survey, horizon, state, settings, horizons=None):
     for text in fig.findobj(Text):
         text.set_fontfamily(font_family(settings.font))
         text.set_fontsize(settings.font_size)
-    return save_figure(fig, settings, colorbars=colorbars)
+    bare_map = not (settings.show_axes or settings.show_title or state.colorbar)
+    return save_figure(fig, settings, colorbars=colorbars, padding=0 if bare_map else 0.07)

@@ -182,10 +182,17 @@ export type ExportDialogSettings = {
   background?: string;
   interpolation?: Interpolation;
   resolution?: ResolutionMode;
-  /** A–B profile figure furniture, all removable. */
+  /** A–B profile figure furniture; show_ab also controls the map connection. */
   show_curves?: boolean;
   show_legend?: boolean;
   show_ab?: boolean;
+};
+
+export type MapProfileOverlay = {
+  a: [number, number];
+  b: [number, number];
+  path_start?: [number, number];
+  path_end?: [number, number];
 };
 
 /** An immutable figure already rendered and stored in the export session. */

@@ -143,9 +143,11 @@ def add_map(survey, horizons, req: QueueMapRequest) -> dict:
         settings.format,
         difference_type=state.difference_type if difference is not None else None,
     )
-    data = render_map(survey, horizon, state, settings, horizons)
+    data = render_map(survey, horizon, state, settings, horizons, req.profile)
+    profile = req.profile.model_dump(mode="json") if req.profile is not None else None
     summary = {
         "horizon": horizon.name,
+        "profile": profile,
         "color_by": state.color_by,
         "clip_percentile": state.clip_percentile,
         "scalar": scalar,
@@ -170,7 +172,7 @@ def add_map(survey, horizons, req: QueueMapRequest) -> dict:
         filename=filename,
         view_type="horizon_map",
         dataset=dataset,
-        view_state=state.model_dump(),
+        view_state={**state.model_dump(), "profile": profile},
         summary=summary,
         render=settings.model_dump(),
         width_mm=settings.width,

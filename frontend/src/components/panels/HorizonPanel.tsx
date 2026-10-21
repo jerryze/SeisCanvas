@@ -1,14 +1,7 @@
-import { Layers, Plus, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Layers, Pencil, Plus, Trash2 } from "lucide-react";
 import { HS, Meta, VS } from "../../types";
-import {
-  Group,
-  Num,
-  Toggle,
-  SubsectionSummary,
-  StrokeControl,
-  Select,
-  TextInput,
-} from "../Controls";
+import { Group, Num, Toggle, SubsectionSummary, Select } from "../Controls";
 import SidebarObject from "../SidebarObject";
 import { useSidebarValue } from "../SidebarState";
 import { Horizon3DControls } from "../SeismicViewer3D/Controls3D";
@@ -55,12 +48,6 @@ export default function HorizonPanel({
       count={view.horizons.length}
       defaultOpen={!mapMode}
     >
-      {mapMode && (
-        <p className="control-note">
-          地图内容由“地图层位”选择。下方勾选与线条样式用于 A–B
-          剖面，并与其他视图共用。
-        </p>
-      )}
       <div className="horizon-list">
         {view.horizons.map((h) => {
           const onStyle = (patch: Partial<HS>) => onHorizonStyle(patch, h.id);
@@ -70,13 +57,28 @@ export default function HorizonPanel({
               open={openId === h.id}
               selected={selectedId === h.id}
               hidden={!h.visible}
-              title={
-                mapMode ? `设置 ${h.name} 的剖面层位样式` : `设置 ${h.name}`
-              }
-              label={
+              title={`${openId === h.id ? "收起" : "展开"} ${h.name} ${mapMode ? "的剖面层位样式" : "属性"}`}
+              label={h.name}
+              labelControls={
                 <>
-                  <i style={{ background: h.color }} />
-                  <span>{h.name}</span>
+                  <input
+                    className="horizon-color"
+                    aria-label={`${h.name} 层位颜色`}
+                    title="修改层位颜色：用于线条、图例和单色曲面"
+                    type="color"
+                    value={h.color}
+                    onChange={(e) => onStyle({ color: e.target.value })}
+                  />
+                  <HorizonName
+                    name={h.name}
+                    disabled={!!busy}
+                    onOpen={() => {
+                      setOpenId(h.id);
+                      setSelectedId(h.id);
+                      onSelect(h.id);
+                    }}
+                    onRename={(name) => onRename(h, name)}
+                  />
                 </>
               }
               onToggle={() => {
@@ -127,163 +129,169 @@ export default function HorizonPanel({
                 view.view_mode === "map" ||
                 h.display_mode === "slice_intersections") && (
                 <>
-                  <StrokeControl
-                    label={view.view_mode === "3d" ? "交线" : "线条"}
-                    visible={h.line.visible}
-                    color={h.color}
-                    width={h.line.width}
-                    disableColorWhenHidden={false}
-                    onVisible={(visible) =>
-                      onStyle({ line: { ...h.line, visible } })
-                    }
-                    onColor={(color) => onStyle({ color })}
-                    onWidth={(width) => onStyle({ line: { ...h.line, width } })}
-                  />
-
-                  <label className="field">
-                    线型
-                    <Select
-                      aria-label="线型"
-                      disabled={!h.line.visible}
-                      value={h.line.style}
-                      onChange={(e) =>
-                        onStyle({
-                          line: { ...h.line, style: e.target.value },
-                        })
-                      }
-                    >
-                      {[
-                        ["solid", "实线"],
-                        ["dashed", "虚线"],
-                        ["dotted", "点线"],
-                        ["dashdot", "点划线"],
-                        ["none", "无"],
-                      ].map(([value, label]) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </Select>
-                  </label>
-
-                  <details className="subsettings">
-                    <SubsectionSummary title="标记与描边" />
-                    <div className="subsettings-body">
-                      <Toggle
-                        label="显示标记点"
-                        checked={h.marker.visible}
-                        onChange={(visible) =>
-                          onStyle({ marker: { ...h.marker, visible } })
+                  <div
+                    className="horizon-style-section"
+                    role="group"
+                    aria-label="基础线条样式"
+                  >
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        aria-label={
+                          view.view_mode === "3d" ? "显示交线" : "显示线条"
+                        }
+                        checked={h.line.visible && h.line.style !== "none"}
+                        onChange={(e) =>
+                          onStyle({
+                            line: {
+                              ...h.line,
+                              visible: e.target.checked,
+                              style:
+                                h.line.style === "none"
+                                  ? "solid"
+                                  : h.line.style,
+                            },
+                          })
                         }
                       />
-
-                      <div className="field-row field-row--select-number">
-                        <label>
-                          点形
-                          <Select
-                            aria-label="点形"
-                            disabled={!h.marker.visible}
-                            value={h.marker.shape}
-                            onChange={(e) =>
-                              onStyle({
-                                marker: {
-                                  ...h.marker,
-                                  shape: e.target.value,
-                                },
-                              })
-                            }
-                          >
-                            {[
-                              ["circle", "圆形"],
-                              ["square", "方形"],
-                              ["triangle", "三角形"],
-                              ["diamond", "菱形"],
-                              ["cross", "叉形"],
-                              ["plus", "十字"],
-                              ["none", "无"],
-                            ].map(([value, label]) => (
-                              <option key={value} value={value}>
-                                {label}
-                              </option>
-                            ))}
-                          </Select>
-                        </label>
-
-                        <label>
-                          大小 · pt
-                          <Num
-                            disabled={!h.marker.visible}
-                            value={h.marker.size}
-                            min={1}
-                            max={15}
-                            onChange={(size) =>
-                              onStyle({ marker: { ...h.marker, size } })
-                            }
-                          />
-                        </label>
-                      </div>
-
-                      <div className="section-number">
-                        <Toggle
-                          label="黑色描边"
-                          checked={h.outline.enabled}
-                          onChange={(enabled) =>
-                            onStyle({ outline: { ...h.outline, enabled } })
+                      <span>
+                        {view.view_mode === "3d" ? "显示交线" : "显示线条"}
+                      </span>
+                    </label>
+                    <div className="field-row field-row--select-number">
+                      <label>
+                        线型
+                        <Select
+                          aria-label="线型"
+                          disabled={!h.line.visible || h.line.style === "none"}
+                          value={
+                            h.line.style === "none" ? "solid" : h.line.style
                           }
-                        />
-
+                          onChange={(e) =>
+                            onStyle({
+                              line: { ...h.line, style: e.target.value },
+                            })
+                          }
+                        >
+                          {[
+                            ["solid", "─ 实线"],
+                            ["dashed", "┄ 虚线"],
+                            ["dotted", "··· 点线"],
+                            ["dashdot", "┄· 点划线"],
+                          ].map(([value, label]) => (
+                            <option key={value} value={value}>
+                              {label}
+                            </option>
+                          ))}
+                        </Select>
+                      </label>
+                      <label>
+                        线宽 · pt
                         <Num
-                          label="描边宽度"
-                          disabled={!h.outline.enabled}
-                          value={h.outline.width}
-                          min={0}
-                          max={4}
+                          label={
+                            view.view_mode === "3d"
+                              ? "交线宽度（pt）"
+                              : "线条宽度（pt）"
+                          }
+                          title="线宽（pt）"
+                          disabled={!h.line.visible || h.line.style === "none"}
+                          value={h.line.width}
+                          min={0.2}
+                          max={6}
                           step={0.1}
                           onChange={(width) =>
-                            onStyle({ outline: { ...h.outline, width } })
+                            onStyle({ line: { ...h.line, width } })
                           }
                         />
-                      </div>
+                      </label>
                     </div>
-                  </details>
+                  </div>
+
+                  <div
+                    className="horizon-style-section"
+                    role="group"
+                    aria-label="标记样式"
+                  >
+                    <Toggle
+                      label="显示标记点"
+                      checked={h.marker.visible}
+                      onChange={(visible) =>
+                        onStyle({ marker: { ...h.marker, visible } })
+                      }
+                    />
+
+                    <div className="field-row field-row--select-number">
+                      <label>
+                        点形
+                        <Select
+                          aria-label="点形"
+                          disabled={!h.marker.visible}
+                          value={h.marker.shape}
+                          onChange={(e) =>
+                            onStyle({
+                              marker: {
+                                ...h.marker,
+                                shape: e.target.value,
+                              },
+                            })
+                          }
+                        >
+                          {[
+                            ["circle", "圆形"],
+                            ["circle-open", "空心圆"],
+                            ["square", "方形"],
+                            ["triangle", "三角形"],
+                            ["diamond", "菱形"],
+                            ["cross", "叉形"],
+                            ["plus", "十字"],
+                            ["none", "无"],
+                          ].map(([value, label]) => (
+                            <option key={value} value={value}>
+                              {label}
+                            </option>
+                          ))}
+                        </Select>
+                      </label>
+
+                      <label>
+                        大小 · pt
+                        <Num
+                          label="标记大小（pt）"
+                          disabled={!h.marker.visible}
+                          value={h.marker.size}
+                          min={1}
+                          max={15}
+                          onChange={(size) =>
+                            onStyle({ marker: { ...h.marker, size } })
+                          }
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="section-number">
+                    <Toggle
+                      label="黑色描边"
+                      checked={h.outline.enabled}
+                      onChange={(enabled) =>
+                        onStyle({ outline: { ...h.outline, enabled } })
+                      }
+                    />
+
+                    <Num
+                      label="描边宽度"
+                      disabled={!h.outline.enabled}
+                      value={h.outline.width}
+                      min={0}
+                      max={4}
+                      step={0.1}
+                      onChange={(width) =>
+                        onStyle({ outline: { ...h.outline, width } })
+                      }
+                    />
+                  </div>
                 </>
               )}
-              <details className="subsettings">
-                <SubsectionSummary title="名称与图例颜色" />
-                <div className="subsettings-body">
-                  <label className="field">
-                    层位名
-                    <TextInput
-                      key={`${h.id}:${h.name}`}
-                      aria-label="层位名"
-                      defaultValue={h.name}
-                      maxLength={200}
-                      disabled={!!busy}
-                      onBlur={(e) => {
-                        const name = e.target.value.trim();
-                        e.target.value = h.name;
-                        if (name && name !== h.name) onRename(h, name);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") e.currentTarget.blur();
-                        if (e.key === "Escape") {
-                          e.currentTarget.value = h.name;
-                          e.currentTarget.blur();
-                        }
-                      }}
-                    />
-                  </label>
-                  <label className="field">
-                    图例颜色
-                    <input
-                      aria-label="图例颜色"
-                      type="color"
-                      value={h.color}
-                      onChange={(e) => onStyle({ color: e.target.value })}
-                    />
-                  </label>
-                </div>
-              </details>
             </SidebarObject>
           );
         })}
@@ -297,9 +305,7 @@ export default function HorizonPanel({
         <Plus size={14} />
         {mapMode ? "导入层位" : "添加层位"}
       </button>
-      {mapMode && (
-        <p className="control-note">导入、移除和重命名会同步所有视图。</p>
-      )}
+
       {view.view_mode === "2d" && (
         <details className="subsettings">
           <SubsectionSummary title="全部层位显示设置" />
@@ -343,5 +349,92 @@ export default function HorizonPanel({
         </details>
       )}
     </Group>
+  );
+}
+
+function HorizonName({
+  name,
+  disabled,
+  onOpen,
+  onRename,
+}: {
+  name: string;
+  disabled: boolean;
+  onOpen: () => void;
+  onRename: (name: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(name);
+  const input = useRef<HTMLInputElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const cancelled = useRef(false);
+  const restoreFocus = useRef(false);
+  useEffect(() => {
+    if (editing) {
+      input.current?.focus();
+      input.current?.select();
+    } else if (!disabled && restoreFocus.current) {
+      if (document.activeElement === document.body) button.current?.focus();
+      restoreFocus.current = false;
+    }
+  }, [editing, disabled]);
+
+  const beginEditing = () => {
+    if (disabled) return;
+    onOpen();
+    cancelled.current = false;
+    restoreFocus.current = false;
+    setDraft(name);
+    setEditing(true);
+  };
+
+  if (editing)
+    return (
+      <input
+        ref={input}
+        className="horizon-name-input"
+        aria-label="层位名"
+        title="Enter 保存，Esc 取消"
+        type="text"
+        value={draft}
+        maxLength={200}
+        onClick={onOpen}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          setEditing(false);
+          const next = draft.trim();
+          if (!cancelled.current && next && next !== name) onRename(next);
+        }}
+        onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing) return;
+          if (e.key === "Enter" || e.key === "Escape") {
+            e.preventDefault();
+            cancelled.current = e.key === "Escape";
+            restoreFocus.current = true;
+            e.currentTarget.blur();
+          }
+        }}
+      />
+    );
+  return (
+    <button
+      ref={button}
+      type="button"
+      className="horizon-name"
+      aria-label={`重命名 ${name}`}
+      title={`${name} · 单击展开，双击重命名（键盘 Enter / F2）`}
+      disabled={disabled}
+      onClick={onOpen}
+      onDoubleClick={beginEditing}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === "F2") {
+          e.preventDefault();
+          beginEditing();
+        }
+      }}
+    >
+      <span>{name}</span>
+      <Pencil aria-hidden="true" size={12} />
+    </button>
   );
 }
