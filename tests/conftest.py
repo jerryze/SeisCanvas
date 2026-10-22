@@ -48,6 +48,21 @@ def clean_export_session(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "restored_project", None)
     monkeypatch.setattr(server, "survey", None)
     monkeypatch.setattr(server, "horizons", {})
+    # Test clients use the same explicit project identity as the browser. Tests
+    # can override any header to exercise stale/missing request handling.
+    original_request = TestClient.request
+    def scoped_request(self, method, url, **kwargs):
+        try:
+            document = server.project.document if method.upper() == "GET" and str(url).split("?")[0] in ("/api/workspace", "/api/projects") else server.project.read()
+        except ValueError:
+            document = None
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers.setdefault("X-SeisCanvas-Project", document["id"] if document else "none")
+        headers.setdefault("X-SeisCanvas-Epoch", server.project.epoch)
+        if document and method.upper() not in ("GET", "HEAD"):
+            headers.setdefault("X-SeisCanvas-Revision", str(document["revision"]))
+        return original_request(self, method, url, headers=headers, **kwargs)
+    monkeypatch.setattr(TestClient, "request", scoped_request)
     export_queue.reset()
     yield
     export_queue.reset()

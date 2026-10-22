@@ -91,16 +91,21 @@ export type WorkspaceState = {
   geometryMode: string;
   sidebar: boolean;
   drag: "zoom" | "pan";
+  sidebarValues?: Record<string, string | boolean>;
+  sidebarScroll?: Record<string, number>;
 };
 
 export type WorkspaceResponse = {
   project_id: string | null;
   revision: number;
+  name?: string;
+  activation_epoch?: string;
+  notice?: string;
   metadata: Meta | null;
   horizons: HS[];
   state: WorkspaceState | null;
   updated_at?: string;
-  source?: { ilbyte: number; xlbyte: number; geometry_mode: string };
+  source?: { ilbyte: number; xlbyte: number; geometry_mode: string } | null;
   issues: { horizon_id: string | null; message: string }[];
 };
 
@@ -153,12 +158,46 @@ export function restoreState(defaults: WorkspaceState, saved: WorkspaceState | n
 export type WorkspaceDraft = {
   version: 1; project_id: string; revision: number; state: WorkspaceState;
   inflight?: WorkspaceState | null;
+  updated_at?: string;
 };
 export const DRAFT_KEY = "seiscanvas.workspace.v1";
-
-export function readDraft(storage: Pick<Storage, "getItem">, projectId: string, revision: number, serverState: WorkspaceState | null = null): WorkspaceState | null {
+export function draftTabId(): string {
   try {
-    const draft = JSON.parse(storage.getItem(DRAFT_KEY) || "null") as WorkspaceDraft | null;
+    const key = "seiscanvas.tab";
+    let id = sessionStorage.getItem(key);
+    if (!id) { id = crypto.randomUUID(); sessionStorage.setItem(key, id); }
+    return id;
+  } catch { return "default"; }
+}
+export const draftKey = (projectId: string, tabId: string) => `seiscanvas.workspace.v2:${projectId}:${tabId}`;
+
+export type DraftCandidate = WorkspaceDraft & { key: string; compatible: boolean };
+
+/** A restarted browser has a new tab ID; recover only unambiguous drafts. */
+export function projectDrafts(storage: Pick<Storage, "getItem" | "key" | "length">, projectId: string, revision: number, serverState: WorkspaceState | null): DraftCandidate[] {
+  const result: DraftCandidate[] = [];
+  try {
+    const keys = [DRAFT_KEY];
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i);
+      if (key?.startsWith(`seiscanvas.workspace.v2:${projectId}:`)) keys.push(key);
+    }
+    for (const key of keys) {
+      try {
+        const draft = JSON.parse(storage.getItem(key) || "null") as WorkspaceDraft | null;
+        if (!draft || draft.version !== 1 || draft.project_id !== projectId || draft.state?.version !== 1 || !draft.state.view || !Array.isArray(draft.state.view.horizons)) continue;
+        if (JSON.stringify(draft.state) === JSON.stringify(serverState)) continue;
+        const compatible = draft.revision === revision || !!(draft.revision === revision - 1 && draft.inflight && serverState && JSON.stringify(draft.inflight) === JSON.stringify(serverState));
+        result.push({ ...draft, key, compatible });
+      } catch { /* Invalid drafts cannot overwrite a valid project. */ }
+    }
+  } catch { /* Browser storage is optional. */ }
+  return result;
+}
+
+export function readDraft(storage: Pick<Storage, "getItem">, projectId: string, revision: number, serverState: WorkspaceState | null = null, tabId?: string): WorkspaceState | null {
+  try {
+    const draft = JSON.parse((tabId ? storage.getItem(draftKey(projectId, tabId)) : null) || storage.getItem(DRAFT_KEY) || "null") as WorkspaceDraft | null;
     // A refresh can interrupt the response after the server saved the body.
     // Recover later edits only against that exact in-flight body and revision.
     const sameRevision = draft?.revision === revision;

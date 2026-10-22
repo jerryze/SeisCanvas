@@ -26,7 +26,7 @@ from backend.models import (
     SceneExportRequest,
     Seismic,
 )
-from backend.rendering import amplitude, render
+from backend.rendering import render_with_metadata
 
 
 def dataset_label(survey, requested=None) -> str:
@@ -62,9 +62,7 @@ def add_2d(survey, horizons, req: Queue2DRequest) -> dict:
         settings.dpi,
         settings.format,
     )
-    section = survey.section(state.view_type, state.section_number)
-    _, lo, hi = amplitude(section[2], state.seismic)
-    data = render(survey, horizons, state, settings)
+    rendered = render_with_metadata(survey, horizons, state, settings)
     location = {"inline" if inline else "crossline": state.section_number}
     summary = {
         **location,
@@ -79,7 +77,7 @@ def add_2d(survey, horizons, req: Queue2DRequest) -> dict:
         "symmetric": state.seismic.symmetric,
         "vmin": state.seismic.vmin,
         "vmax": state.seismic.vmax,
-        "colorbar_range": [lo, hi],
+        "colorbar_range": list(rendered.colorbar_range),
         "reverse_polarity": state.seismic.reverse_polarity,
         "wiggle": state.seismic.wiggle,
         "variable_area": state.seismic.variable_area,
@@ -95,7 +93,7 @@ def add_2d(survey, horizons, req: Queue2DRequest) -> dict:
         "aspect_ratio_2d": list(state.aspect_ratio_2d) if state.aspect_ratio_2d else None,
     }
     return session().add(
-        data=data,
+        data=rendered.data,
         filename=filename,
         view_type=view_type,
         dataset=dataset,

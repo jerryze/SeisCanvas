@@ -1,55 +1,46 @@
 from pathlib import Path
 from contextlib import asynccontextmanager
-from urllib.parse import quote
 import numpy as np
 from backend.file_picker import choose_segy
 from uuid import uuid4
 import shutil
 import tempfile
+import time
+from copy import deepcopy
 from threading import RLock
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Query
-from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 from matplotlib.colors import LinearSegmentedColormap, to_hex
-from matplotlib import font_manager
-from backend.export3d import package_scene
 from backend.segy import Survey
 from backend.horizon import Horizon, horizon_preview
-from backend.rendering import render
 from backend.style import CMAPS, get_cmap
 from backend.models import (
-    ExportRequest,
     Horizon3DStyle,
-    HorizonMapExport,
     HorizonMapState,
     HorizonProfileRequest,
     LocalHorizonRequest,
     HorizonRenameRequest,
     LocalSegyRequest,
     PickSegyRequest,
-    QueueAddRequest,
-    QueueArchiveRequest,
-    RenameRequest,
     SampleRequest,
-    SceneExportRequest,
     SectionRequest,
     ViewState3D,
     WorkspaceSave,
     WorkspaceRelink,
+    ProjectCreate,
+    ProjectRename,
+    ProjectSwitch,
+    ProjectRelink,
 )
 from backend.scene import slice_data, horizon_mesh, horizon_intersection, scene_data
 from backend.section_service import interactive_section
 from backend.preview import preview_ids, read_samples
 
-from backend.horizon_map import PETREL, map_data, map_profile, render_map
+from backend.horizon_map import PETREL, map_data, map_profile
 from backend import export_queue
-from backend.workspace import WorkspaceStore, source, check_source
-from backend.export_service import (
-    add_2d,
-    add_3d,
-    add_map,
-    add_profile,
-)
+from backend.workspace import WorkspaceStore, source, check_source, project_name
+from backend.project_scope import ProjectRoute, guarded_lock, configure, conflict
+from backend.api.exports import ExportContext, create_export_router
 
 ROOT = Path(__file__).resolve().parents[1]
 HORIZON_SUFFIXES = {".txt", ".dat"}
@@ -63,6 +54,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="SeisCanvas", version="0.3.0", lifespan=lifespan)
+app.router.route_class = ProjectRoute
 # Local single-user application. Serialize mutations and section/export reads.
 lock = RLock()
 workspace = tempfile.TemporaryDirectory(prefix="seiscanvas-")
@@ -70,6 +62,7 @@ survey = None
 horizons = {}
 project = WorkspaceStore()
 restored_project = None
+configure(lambda: project, lock)
 COLORS = ["#f5b942", "#42ddbc", "#ff6b86", "#69acff", "#d593ff", "#ff9559"]
 
 
@@ -130,56 +123,222 @@ def activate_survey(new, ilbyte, xlbyte, geometry_mode="auto", imported=()):
     horizons.clear()
     horizons.update(pending)
     restored_project = document["id"]
-    return {"metadata": new.metadata(), "horizons": styles, "project_id": document["id"], "revision": document["revision"]}
+    export_queue.bind(project.export_folder(document))
+    return workspace_response(document, new, pending)
+
+
+def load_document(document):
+    loaded_survey, loaded_horizons, issues = None, {}, []
+    if document["source"]:
+        try:
+            item = document["source"]
+            loaded_survey = Survey(check_source(item), item["ilbyte"], item["xlbyte"], geometry_mode=item["geometry_mode"])
+        except (ValueError, OSError, RuntimeError, IndexError, MemoryError) as e:
+            issues.append({"horizon_id": None, "message": str(e)})
+    for item in document["horizons"]:
+        try:
+            loaded_horizons[item["id"]] = Horizon(check_source(item), item["name"], columns=item["columns"])
+        except (ValueError, OSError) as e:
+            issues.append({"horizon_id": item["id"], "message": str(e)})
+    return loaded_survey, loaded_horizons, issues
+
+
+def workspace_response(document, loaded_survey, loaded_horizons, issues=()):
+    saved = (document.get("state") or {}).get("view", {}).get("horizons", [])
+    styles = {h["id"]: h for h in saved}
+    return {
+        "project_id": document["id"], "name": document.get("name", "恢复的项目"),
+        "activation_epoch": project.epoch, "revision": document["revision"],
+        "updated_at": document["updated_at"], "state": document["state"],
+        "metadata": loaded_survey.metadata() if loaded_survey else None,
+        "horizons": [{**styles.get(h["id"], h["style"]), "name": h["name"]} for h in document["horizons"] if h["id"] in loaded_horizons],
+        "source": {k: document["source"][k] for k in ("ilbyte", "xlbyte", "geometry_mode")} if document["source"] else None,
+        "issues": list(issues),
+    }
 
 
 def restore_workspace(force=False):
     global survey, restored_project
     document = project.read()
     if document is None:
-        return {"project_id": None, "metadata": None, "horizons": [], "state": None, "issues": []}
+        return {"project_id": None, "activation_epoch": project.epoch, "revision": 0, "metadata": None, "horizons": [], "state": None, "issues": []}
     issues = []
     if not force and restored_project == document["id"]:
         for item in [document["source"], *document["horizons"]]:
+            if not item:
+                continue
             try:
                 check_source(item)
             except (ValueError, OSError):
                 force = True
                 break
     if force or restored_project != document["id"]:
-        loaded_survey = None
-        loaded_horizons = {}
-        try:
-            item = document["source"]
-            loaded_survey = Survey(check_source(item), item["ilbyte"], item["xlbyte"], geometry_mode=item["geometry_mode"])
-        except (ValueError, OSError, RuntimeError, IndexError, MemoryError) as e:
-            issues.append({"horizon_id": None, "message": str(e)})
-        for item in document["horizons"]:
-            try:
-                loaded_horizons[item["id"]] = Horizon(check_source(item), item["name"], columns=item["columns"])
-            except (ValueError, OSError) as e:
-                issues.append({"horizon_id": item["id"], "message": str(e)})
-        survey = loaded_survey
+        survey, loaded_horizons, issues = load_document(document)
         horizons.clear()
         horizons.update(loaded_horizons)
-        # Retry failed restores on the next request; never rewrite the project.
         restored_project = document["id"] if not issues else None
-    saved = (document.get("state") or {}).get("view", {}).get("horizons", [])
-    styles = {h["id"]: h for h in saved}
-    return {
-        "project_id": document["id"], "revision": document["revision"],
-        "updated_at": document["updated_at"], "state": document["state"],
-        "metadata": survey.metadata() if survey else None,
-        "horizons": [{**styles.get(h["id"], h["style"]), "name": h["name"]} for h in document["horizons"] if h["id"] in horizons],
-        "source": {k: document["source"][k] for k in ("ilbyte", "xlbyte", "geometry_mode")},
-        "issues": issues,
-    }
+    export_queue.bind(project.export_folder(document))
+    return workspace_response(document, survey, horizons, issues)
+
+
+@app.get("/api/projects")
+def project_list():
+    try:
+        with guarded_lock():
+            return project.list()
+    except (ValueError, OSError) as e:
+        raise error(e)
+
+
+@app.post("/api/projects")
+def project_create(req: ProjectCreate):
+    try:
+        with guarded_lock():
+            template = project.get(req.template_id) if req.template_id else None
+            if template and (not project.read() or template["id"] != project.read()["id"]):
+                raise conflict("PROJECT_CHANGED", "只能复制当前已保存的项目。")
+            document = project.create(req.name, request_id=req.request_id, template=template)
+            return {"project_id": document["id"], "revision": document["revision"]}
+    except (ValueError, OSError) as e:
+        raise error(e)
+
+
+@app.patch("/api/projects/{project_id}")
+def project_rename(project_id: str, req: ProjectRename):
+    try:
+        with guarded_lock():
+            document = project.get(project_id)
+            if not project.read() or document["id"] != project.read()["id"]:
+                raise conflict("PROJECT_CHANGED", "请先打开该项目。")
+            document["name"] = project_name(req.name)
+            document["revision"] += 1
+            document = project.commit(document)
+            return {"name": document["name"], "revision": document["revision"]}
+    except (ValueError, OSError) as e:
+        raise error(e)
+
+
+@app.post("/api/project-switches")
+def prepare_project(req: ProjectSwitch):
+    try:
+        with guarded_lock():
+            current = project.read()
+            if current and req.source_revision != current["revision"]:
+                raise conflict("REVISION_CONFLICT", "当前项目仍有未保存更改，请重新保存。")
+            document = project.get(req.target_id)
+            origin = (current["id"] if current else None, project.epoch, current["revision"] if current else None)
+        candidate_survey, candidate_horizons, issues = load_document(document)
+        if issues:
+            raise HTTPException(422, {"code": "SOURCE_ISSUES", "message": "项目文件需要重新关联，当前项目已保留。", "project_id": document["id"], "issues": issues})
+        folder = project.export_folder(document)
+        if (folder / "queue.json").exists() or (folder / "queue.json.bak").exists():
+            export_queue.ExportSession.load(folder)  # do not activate a broken queue
+        with guarded_lock():
+            token = uuid4().hex
+            project.pending.clear()
+            project.pending[token] = {"document": document, "survey": candidate_survey, "horizons": candidate_horizons,
+                                      "origin": origin, "expires": time.monotonic() + 300}
+            return {"token": token}
+    except (ValueError, OSError, RuntimeError, MemoryError) as e:
+        raise error(str(e) or "内存不足，当前项目已保留。")
+
+
+@app.post("/api/project-switches/{token}/commit")
+def commit_project(token: str):
+    global survey, restored_project
+    try:
+        with guarded_lock():
+            pending = project.pending.get(token)
+            if pending is None or pending["expires"] < time.monotonic():
+                project.pending.pop(token, None)
+                raise conflict("SWITCH_EXPIRED", "切换准备已过期，请重新打开项目。")
+            if pending.get("committed"):
+                return restore_workspace()
+            current = project.read()
+            origin = (current["id"] if current else None, project.epoch, current["revision"] if current else None)
+            document = pending["document"]
+            if pending["origin"] != origin or project.get(document["id"])["revision"] != document["revision"]:
+                project.pending.pop(token, None)
+                raise conflict("REVISION_CONFLICT", "项目在准备期间发生变化，请重新打开。")
+            for item in [document["source"], *document["horizons"]]:
+                if item:
+                    check_source(item)
+            # Persist active identity before publishing the candidate in memory.
+            project.activate(document)
+            survey = pending.pop("survey")
+            horizons.clear()
+            horizons.update(pending.pop("horizons"))
+            restored_project = document["id"]
+            horizon_selections.clear()
+            pending["committed"] = True
+            pending["committed_epoch"] = project.epoch
+            project.pending[token] = pending
+            export_queue.bind(project.export_folder(document))
+            return workspace_response(document, survey, horizons)
+    except (ValueError, OSError) as e:
+        raise error(e)
+
+
+@app.delete("/api/project-switches/{token}")
+def cancel_project(token: str):
+    with guarded_lock():
+        project.pending.pop(token, None)
+    return {"ok": True}
+
+
+@app.post("/api/projects/{project_id}/relink")
+def project_relink(project_id: str, req: ProjectRelink):
+    try:
+        with guarded_lock():
+            document = project.get(project_id)
+            revision = document["revision"]
+            item = document["source"] if req.horizon_id is None else next(h for h in document["horizons"] if h["id"] == req.horizon_id)
+            if item is None:
+                raise ValueError("空项目尚未导入数据。")
+        path = req.path or choose_segy("Horizon" if req.horizon_id else "SEG-Y")
+        if not path:
+            return {"cancelled": True}
+        selected_source = source(path)
+        selected_identity = {key: str(selected_source[key]) for key in ("size", "mtime_ns")}
+        if req.confirm and req.file_identity != selected_identity:
+            raise conflict("SOURCE_CHANGED", "文件在确认前发生变化，请重新选择文件。")
+        if req.horizon_id:
+            loaded = Horizon(path, item["name"], columns=item["columns"])
+            summary = {"filename": Path(path).name, "points": len(loaded.data)}
+        else:
+            loaded = Survey(path, item["ilbyte"], item["xlbyte"], geometry_mode=item["geometry_mode"])
+            summary = loaded.metadata()
+        check_source(selected_source)
+        if not req.confirm:
+            return {"path": str(Path(path).resolve()), "revision": revision, "previous_path": item["path"], "metadata": summary, "file_identity": selected_identity}
+        with guarded_lock():
+            if req.revision != revision or project.get(project_id)["revision"] != revision:
+                raise conflict("REVISION_CONFLICT", "项目已更新，请重新选择文件。")
+            item.update(source(path))
+            document["revision"] += 1
+            # Source replacement can change coordinates; reset dependent viewports.
+            state = document.get("state")
+            if state and not req.horizon_id:
+                state["view"].update(x_range=None, time_range=None)
+                state["view"]["section_number"] = summary["inlines"][len(summary["inlines"]) // 2]
+                state["view"]["view_type"] = "inline"
+                state["view"]["slices"] = {"inline": [], "crossline": [], "time": []}
+                state.get("map", {}).get("state", {}).update(x_range=None, y_range=None)
+                state.get("map", {}).update(profileA=None, profileB=None, profileOn=False, profileXRange=None, profileTimeRange=None)
+            if project.read() and project.read()["id"] == project_id:
+                project.commit(document)
+                project.epoch = uuid4().hex
+                return restore_workspace(force=True)
+            project.write(document)
+            return {"relinked": True}
+    except (ValueError, OSError, RuntimeError, IndexError, StopIteration) as e:
+        raise error(str(e) or "找不到需要重新关联的文件。")
 
 
 @app.get("/api/workspace")
 def workspace_current():
     try:
-        with lock:
+        with guarded_lock():
             return restore_workspace()
     except (ValueError, OSError) as e:
         raise error(e)
@@ -187,7 +346,7 @@ def workspace_current():
 
 @app.put("/api/workspace")
 def workspace_save(req: WorkspaceSave):
-    with lock:
+    with guarded_lock():
         try:
             if restored_project != req.project_id:
                 raise ValueError("项目尚未完整恢复，已保留原来的保存记录。")
@@ -203,7 +362,7 @@ def workspace_save(req: WorkspaceSave):
 def workspace_relink(req: WorkspaceRelink):
     from copy import deepcopy
     try:
-        with lock:
+        with guarded_lock():
             document = project.read()
             if document is None or document["id"] != req.project_id:
                 raise ValueError("项目已切换，请刷新页面。")
@@ -218,7 +377,7 @@ def workspace_relink(req: WorkspaceRelink):
             Horizon(path, item["name"], columns=item["columns"])
         else:
             Survey(path, item["ilbyte"], item["xlbyte"], geometry_mode=item["geometry_mode"])
-        with lock:
+        with guarded_lock():
             if project.read()["id"] != req.project_id:
                 raise ValueError("项目已切换，请刷新页面。")
             document = deepcopy(project.read())
@@ -226,7 +385,9 @@ def workspace_relink(req: WorkspaceRelink):
                 h for h in document["horizons"] if h["id"] == req.horizon_id
             )
             item.update(source(path))
+            document["revision"] += 1
             project.commit(document)
+            project.epoch = uuid4().hex
             return restore_workspace(force=True)
     except (ValueError, OSError, RuntimeError, IndexError, StopIteration) as e:
         raise error(str(e) or "找不到需要重新定位的层位。")
@@ -238,7 +399,7 @@ def error(e):
 
 @app.post("/api/horizon-map")
 def horizon_map(state: HorizonMapState):
-    with lock:
+    with guarded_lock():
         if state.horizon not in horizons:
             raise HTTPException(404, "Horizon not found.")
         try:
@@ -249,7 +410,7 @@ def horizon_map(state: HorizonMapState):
 
 @app.post("/api/horizon-map/profile")
 def horizon_map_profile(req: HorizonProfileRequest):
-    with lock:
+    with guarded_lock():
         if req.state.horizon not in horizons:
             raise HTTPException(404, "Horizon not found.")
         try:
@@ -265,18 +426,6 @@ def horizon_map_profile(req: HorizonProfileRequest):
                 req.interpolation,
                 req.section_state(),
             )
-        except ValueError as e:
-            raise error(e)
-
-
-@app.post("/api/horizon-map/export")
-def horizon_map_export(req: HorizonMapExport):
-    with lock:
-        if req.state.horizon not in horizons:
-            raise HTTPException(404, "Horizon not found.")
-        try:
-            content = render_map(require_survey(), horizons[req.state.horizon], req.state, req.settings, horizons, req.profile)
-            return Response(content, media_type=export_queue.MIME[req.settings.format])
         except ValueError as e:
             raise error(e)
 
@@ -320,7 +469,7 @@ def example(ilbyte: int = 189, xlbyte: int = 21):
             raise ValueError("No example SEG-Y found in data/.")
         new = Survey(paths[0], ilbyte, xlbyte)
         hs = [Horizon(p) for p in sorted((ROOT / "data/horizons").glob("*.txt"))]
-        with lock:
+        with guarded_lock():
             return activate_survey(new, ilbyte, xlbyte, imported=hs)
     except (ValueError, OSError, RuntimeError, IndexError) as e:
         raise error(e)
@@ -378,7 +527,7 @@ def open_local_segy(req: LocalSegyRequest, progress=None):
         raise HTTPException(400, "文件不存在，或不是 .sgy / .segy 文件。")
     try:
         new = Survey(path, req.ilbyte, req.xlbyte, progress=progress, geometry_mode=req.geometry_mode)
-        with lock:
+        with guarded_lock():
             old = survey
             result = activate_survey(new, req.ilbyte, req.xlbyte, req.geometry_mode)
             if old and old.path != path and Path(workspace.name) in old.path.parents:
@@ -403,14 +552,16 @@ def upload_segy(
         with path.open("wb") as out:
             shutil.copyfileobj(file.file, out, length=8 * 1024 * 1024)
         new = Survey(path, ilbyte, xlbyte)
-        with lock:
+        with guarded_lock():
             old = survey
             result = activate_survey(new, ilbyte, xlbyte)
             if old and Path(workspace.name) in old.path.parents:
                 shutil.rmtree(old.path.parent)
             return result
-    except (ValueError, OSError, RuntimeError, IndexError) as e:
+    except Exception as e:
         shutil.rmtree(folder, ignore_errors=True)
+        if isinstance(e, HTTPException):
+            raise
         raise error(e)
     finally:
         file.file.close()
@@ -432,10 +583,10 @@ def pick_horizon():
                 raise ValueError(f"{path.name}: Horizon files must use .txt or .dat extension.")
         preview = horizon_preview(paths[0])
         token = uuid4().hex
-        with lock:
+        with guarded_lock():
             if len(horizon_selections) >= 32:
                 horizon_selections.pop(next(iter(horizon_selections)))
-            horizon_selections[token] = paths
+            horizon_selections[token] = (project.read()["id"] if project.read() else None, project.epoch, paths)
         return {**preview, "token": token, "filename": paths[0].name, "filenames": [path.name for path in paths]}
     except (ValueError, OSError) as e:
         raise error(e)
@@ -444,12 +595,13 @@ def pick_horizon():
 @app.post("/api/horizons/local")
 def local_horizon(req: LocalHorizonRequest):
     try:
-        with lock:
-            paths = horizon_selections.get(req.token)
+        with guarded_lock():
+            selection = horizon_selections.get(req.token)
+            paths = selection[2] if selection and selection[:2] == (project.read()["id"] if project.read() else None, project.epoch) else None
         if paths is None:
             raise ValueError("请重新选择层位文件。")
         pending = [Horizon(path, columns=(req.inline_column, req.xline_column, req.time_column)) for path in paths]
-        with lock:
+        with guarded_lock():
             result = add_horizons(pending)
             horizon_selections.pop(req.token, None)
         return result
@@ -494,13 +646,15 @@ def upload_horizons(
             with path.open("wb") as output:
                 shutil.copyfileobj(file.file, output)
             pending.append(Horizon(path, Path(file.filename).stem, columns=columns))
-        with lock:
+        with guarded_lock():
             require_survey()
             result = add_horizons(pending)
             return result
-    except (ValueError, OSError, UnicodeError) as e:
+    except Exception as e:
         for folder in folders:
             shutil.rmtree(folder, ignore_errors=True)
+        if isinstance(e, HTTPException):
+            raise
         raise error(e)
     finally:
         for file in files:
@@ -512,7 +666,7 @@ def rename_horizon(key: str, req: HorizonRenameRequest):
     name = req.name.strip()
     if not name:
         raise HTTPException(400, "层位名不能为空。")
-    with lock:
+    with guarded_lock():
         if key not in horizons:
             raise HTTPException(404, "Horizon not found.")
         try:
@@ -525,7 +679,7 @@ def rename_horizon(key: str, req: HorizonRenameRequest):
 
 @app.delete("/api/horizons/{key}")
 def delete_horizon(key: str):
-    with lock:
+    with guarded_lock():
         try:
             persist_horizons(removed=(key,))
         except OSError as e:
@@ -541,7 +695,7 @@ def nearest_index(coordinates, value):
 @app.post("/api/section")
 def section(req: SectionRequest):
     try:
-        with lock:
+        with guarded_lock():
             return interactive_section(require_survey(), horizons, req)
     except ValueError as e:
         raise error(e)
@@ -551,7 +705,7 @@ def section(req: SectionRequest):
 def sample(req: SampleRequest):
     """Return the original amplitude nearest to a cursor position."""
     try:
-        with lock:
+        with guarded_lock():
             s = require_survey()
             if req.kind == "time":
                 if req.inline is None or req.crossline is None:
@@ -591,148 +745,10 @@ def sample(req: SampleRequest):
         raise error(e)
 
 
-@app.post("/api/export")
-def export(req: ExportRequest):
-    try:
-        with lock:
-            data = render(require_survey(), horizons, req.state, req.settings)
-        fmt = req.settings.format
-        mime = export_queue.MIME[fmt]
-        return Response(
-            data,
-            media_type=mime,
-            headers={
-                "Content-Disposition": f'attachment; filename="SeisCanvas_{req.state.view_type}_{req.state.section_number}.{fmt}"'
-            },
-        )
-    except (ValueError, OSError) as e:
-        raise error(e)
-
-
-@app.post("/api/export/3d")
-def export_scene(req: SceneExportRequest):
-    try:
-        with lock:
-            output = package_scene(req)
-        return Response(
-            output,
-            media_type=export_queue.MIME[req.format],
-            headers={
-                "Content-Disposition": f'attachment; filename="SeisCanvas_3D.{req.format}"'
-            },
-        )
-    except ValueError as e:
-        raise error(e)
-
-
-@app.get("/api/fonts/{family}")
-def export_font(family: str):
-    fonts = {"sans": "DejaVu Sans", "serif": "DejaVu Serif"}
-    if family not in fonts:
-        raise HTTPException(404, "Font not found.")
-    return FileResponse(font_manager.findfont(fonts[family]), media_type="font/ttf")
-
-
-# ---------------------------------------------------------------------------
-# Export queue: render once on Add to Export, then only reorganise files.
-# ---------------------------------------------------------------------------
-
-
-@app.post("/api/export/queue")
-def queue_add(req: QueueAddRequest):
-    try:
-        with lock:
-            if req.kind == "2d":
-                return add_2d(require_survey(), horizons, req)
-            if req.kind == "map":
-                return add_map(require_survey(), horizons, req)
-            if req.kind == "profile":
-                return add_profile(require_survey(), horizons, req)
-            return add_3d(require_survey(), req)
-    except KeyError:
-        raise HTTPException(404, "Export item not found.")
-    except (ValueError, OSError) as e:
-        raise error(e)
-
-
-@app.get("/api/export/queue")
-def queue_list():
-    try:
-        with lock:
-            return export_queue.session().snapshot()
-    except (ValueError, OSError) as e:
-        raise error(e)
-
-
-@app.patch("/api/export/queue/{item_id}")
-def queue_rename(item_id: str, req: RenameRequest):
-    try:
-        with lock:
-            return export_queue.session().rename(item_id, req.filename)
-    except KeyError:
-        raise HTTPException(404, "Export item not found.")
-    except (ValueError, OSError) as e:
-        raise error(e)
-
-
-@app.get("/api/export/queue/{item_id}/file")
-def queue_file(item_id: str):
-    try:
-        path, media_type = export_queue.session().file(item_id)
-    except KeyError:
-        raise HTTPException(404, "Export file not found.")
-    # Inline so Preview shows exactly the bytes that go into the ZIP.
-    return FileResponse(path, media_type=media_type)
-
-
-@app.delete("/api/export/queue/{item_id}")
-def queue_delete(item_id: str):
-    try:
-        with lock:
-            export_queue.session().delete(item_id)
-    except KeyError:
-        raise HTTPException(404, "Export item not found.")
-    except (ValueError, OSError) as e:
-        raise error(e)
-    return {"ok": True}
-
-
-@app.delete("/api/export/queue")
-def queue_clear():
-    try:
-        with lock:
-            export_queue.session().clear()
-    except (ValueError, OSError) as e:
-        raise error(e)
-    return {"ok": True}
-
-
-@app.post("/api/export/archive")
-def export_archive(request: QueueArchiveRequest | None = None):
-    try:
-        with lock:
-            path, filename, manifest = export_queue.session().archive(request.item_ids if request else None)
-    except KeyError:
-        raise HTTPException(404, "An export item no longer exists. Refresh the queue and select again.")
-    except ValueError as e:
-        raise error(e)
-    return FileResponse(
-        path,
-        media_type="application/zip",
-        filename=filename,
-        headers={
-            # Percent-encoded so a non-ASCII dataset name is still header-safe.
-            "X-Export-Filename": quote(filename),
-            "X-Export-Figures": str(manifest["figure_count"]),
-        },
-    )
-
-
-
 @app.post("/api/scene")
 def scene(state: ViewState3D):
     try:
-        with lock:
+        with guarded_lock():
             return scene_data(require_survey(), horizons, state)
     except (ValueError, OSError) as e:
         raise error(e)
@@ -743,7 +759,7 @@ def seismic_slice(kind: str, position: float, maximum: int = Query(256, ge=2, le
     if kind not in ["inline", "crossline", "timeslice"]:
         raise HTTPException(404, "Unknown slice type.")
     try:
-        with lock:
+        with guarded_lock():
             data, _ = slice_data(
                 require_survey(),
                 "time" if kind == "timeslice" else kind,
@@ -758,7 +774,7 @@ def seismic_slice(kind: str, position: float, maximum: int = Query(256, ge=2, le
 @app.get("/api/horizons/{key}/surface")
 def full_surface(key: str, maximum: int = Query(256, ge=2, le=512)):
     try:
-        with lock:
+        with guarded_lock():
             if key not in horizons:
                 raise HTTPException(404, "Horizon not found.")
             return horizon_mesh(horizons[key], maximum)
@@ -773,12 +789,18 @@ def intersection(
     if kind not in ["inline", "crossline", "time"]:
         raise HTTPException(404, "Unknown intersection type.")
     try:
-        with lock:
+        with guarded_lock():
             if key not in horizons:
                 raise HTTPException(404, "Horizon not found.")
             return horizon_intersection(horizons[key], kind, position, tolerance)
     except ValueError as e:
         raise error(e)
+
+
+app.include_router(create_export_router(ExportContext(
+    require_survey=require_survey, get_horizons=lambda: horizons,
+    get_project=lambda: project, project_lock=lock,
+)))
 
 
 DIST = ROOT / "frontend/dist"

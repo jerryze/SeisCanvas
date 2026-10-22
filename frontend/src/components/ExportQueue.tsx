@@ -13,11 +13,13 @@ import {
   X,
 } from "lucide-react";
 import type { ExportItem } from "../types";
+import { projectFileUrl } from "../api/client";
 
 type Props = {
   open: boolean;
   items: ExportItem[];
   session: string;
+  projectId?: string | null;
   busy: boolean;
   onClose: () => void;
   onRename: (item: ExportItem, filename: string) => Promise<void>;
@@ -36,14 +38,13 @@ const folderLabel = (folder: string) =>
   })[folder] ||
   folder ||
   "其他";
-const fileUrl = (item: ExportItem) =>
-  `/api/export/queue/${item.id}/file?v=${encodeURIComponent(item.filename)}`;
 
 /** Browse and export the figures already rendered and saved in the session. */
 export default function ExportQueue({
   open,
   items,
   session,
+  projectId = null,
   busy,
   onClose,
   onRename,
@@ -51,6 +52,7 @@ export default function ExportQueue({
   onClear,
   onExport,
 }: Props) {
+  const fileUrl = (item: ExportItem) => projectFileUrl(item.id, item.filename, projectId);
   const [preview, setPreview] = useState<ExportItem | null>(null);
   const [editing, setEditing] = useState("");
   const [draft, setDraft] = useState("");

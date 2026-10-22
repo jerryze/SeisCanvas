@@ -1,5 +1,7 @@
 """Publication 2D rendering: matplotlib figures assembled from survey sections."""
 
+from dataclasses import dataclass
+
 import numpy as np
 from matplotlib.figure import Figure
 from matplotlib.collections import LineCollection, PolyCollection
@@ -135,7 +137,19 @@ def draw_horizon(ax, points, style, zorder=3, label=None, display_points=None):
     return line or marker
 
 
-def render(survey, horizons, state, settings):
+@dataclass(frozen=True)
+class SectionRenderResult:
+    data: bytes
+    colorbar_range: tuple[float, float]
+
+
+def render(survey, horizons, state, settings) -> bytes:
+    """Compatibility entry point for callers that only need the figure bytes."""
+    return render_with_metadata(survey, horizons, state, settings).data
+
+
+def render_with_metadata(survey, horizons, state, settings) -> SectionRenderResult:
+    """Render once and report the exact native amplitude range used to draw it."""
     x, t, z = survey.section(state.view_type, state.section_number)
     # Amplitude clipping always comes from the original section: the colour
     # range must not change with the interpolation mode or the zoom window.
@@ -227,4 +241,4 @@ def render(survey, horizons, state, settings):
     ]:
         txt.set_fontfamily(font_family(settings.font))
         txt.set_fontsize(settings.font_size)
-    return save_figure(fig, settings, rasters)
+    return SectionRenderResult(save_figure(fig, settings, rasters), (lo, hi))

@@ -21,11 +21,21 @@ const react = moduleURL(`
 const plotly = moduleURL(`
   export default {
     async react(el, traces) {
+      const h = globalThis.sectionPlotTest;
+      h.calls?.push('render:start');
+      if (h.renderGate) await h.renderGate;
       el.data = traces;
-      el._fullLayout = globalThis.sectionPlotTest.initialLayout;
+      el._fullLayout = h.initialLayout;
+      h.calls?.push('render:end');
     },
-    Plots: { async resize(el) { el._fullLayout = globalThis.sectionPlotTest.resizedLayout; } },
-    purge(el) { globalThis.sectionPlotTest.purged = el; },
+    Plots: { async resize(el) {
+      const h = globalThis.sectionPlotTest;
+      h.calls?.push('resize:start');
+      if (h.resizeGate) await h.resizeGate;
+      el._fullLayout = h.resizedLayout;
+      h.calls?.push('resize:end');
+    } },
+    purge(el) { globalThis.sectionPlotTest.purged = el; globalThis.sectionPlotTest.calls?.push('purge'); },
   };
 `);
 const geometry = moduleURL(`
@@ -100,7 +110,7 @@ test('2D renderer reports usable CSS width and height after rendering and resizi
       section: { x: [10, 20], time: [100, 200] }, colors: [], drag: 'zoom', onPatch() {}, onProbe() {},
       onError: message => errors.push(message), onViewportSize: size => sizes.push(size),
     });
-    dispose.push(h.effects[0]());
+    dispose.push(h.effects[1]());
     await settled();
     assert.deepEqual(h.sampling.at(-1), { width: 901, xRange: [12, 14], pixelRatio: 2 });
     // A committed viewport change must retain the exact data and trace objects.
@@ -111,7 +121,7 @@ test('2D renderer reports usable CSS width and height after rendering and resizi
       SectionPlot({ view: { view_type: 'inline', section_number: 350, x_range: range },
         section: stableSection, colors: stableColors, drag: 'zoom', onPatch() {}, onProbe() {},
         onError: message => errors.push(message), onViewportSize: size => sizes.push(size) });
-      dispose.push(h.effects[0]());
+      dispose.push(h.effects[1]());
       await settled();
     };
     await rerender([12, 14]);
@@ -133,3 +143,88 @@ test('2D renderer reports usable CSS width and height after rendering and resizi
     delete globalThis.sectionPlotTest;
   }
 });
+
+const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+async function withPlotHarness(run) {
+  const previousObserver = globalThis.ResizeObserver, previousWindow = globalThis.window;
+  const h = globalThis.sectionPlotTest = {
+    el: { clientWidth: 1000, listeners: {}, on(event, handler) { this.listeners[event] = handler; },
+      removeAllListeners(event) { delete this.listeners[event]; } }, effects: [], sampling: [], calls: [], sizes: [], errors: [],
+    initialLayout: { xaxis: { _length: 800 }, yaxis: { _length: 500 } },
+    resizedLayout: { xaxis: { _length: 900 }, yaxis: { _length: 600 } },
+    cleanups: [],
+  };
+  globalThis.window = { devicePixelRatio: 2 };
+  globalThis.ResizeObserver = class {
+    constructor(callback) { h.resize = callback; }
+    observe() {}
+    disconnect() { h.disconnected = true; }
+  };
+  const render = () => {
+    h.effects = []; h.refIndex = 0;
+    SectionPlot({ view: { view_type: 'inline', section_number: 350 },
+      section: { x: [10, 20], time: [100, 200] }, colors: [], drag: 'zoom',
+      onPatch() {}, onProbe() {}, onError: message => h.errors.push(message), onViewportSize: size => h.sizes.push(size) });
+  };
+  h.mount = () => { render(); h.cleanups = h.effects.map(effect => effect()); };
+  h.rerender = () => { render(); h.cleanups[1]?.(); h.cleanups[1] = h.effects[1](); };
+  h.unmount = () => { for (const cleanup of h.cleanups) cleanup?.(); h.cleanups = []; };
+  try { await run(h); }
+  finally {
+    h.renderGate = null; h.resizeGate = null;
+    h.unmount(); await settled();
+    globalThis.ResizeObserver = previousObserver; globalThis.window = previousWindow;
+    delete globalThis.sectionPlotTest;
+  }
+}
+
+test('unmount waits for an in-flight render before purge and skips queued resize callbacks', () => withPlotHarness(async h => {
+  const gate = deferred(); h.renderGate = gate.promise;
+  h.mount(); await settled();
+  assert.deepEqual(h.calls, ['render:start']);
+  h.resize(); h.resize();
+  h.unmount();
+  assert.equal(h.purged, undefined);
+  gate.resolve(); await settled();
+  assert.deepEqual(h.calls, ['render:start', 'render:end', 'purge']);
+  assert.deepEqual(h.sizes, []);
+  assert.deepEqual(h.errors, []);
+}));
+
+test('unmount waits for in-flight resizing and cancels a render queued behind it', () => withPlotHarness(async h => {
+  h.mount(); await settled();
+  const reports = h.sizes.length;
+  const gate = deferred(); h.resizeGate = gate.promise;
+  h.resize(); await settled();
+  assert.equal(h.calls.at(-1), 'resize:start');
+  h.rerender(); await settled();
+  assert.equal(h.calls.filter(call => call === 'render:start').length, 1);
+  h.unmount();
+  assert.equal(h.purged, undefined);
+  gate.resolve(); await settled();
+  assert.deepEqual(h.calls, ['render:start', 'render:end', 'resize:start', 'resize:end', 'purge']);
+  assert.equal(h.sizes.length, reports);
+  assert.deepEqual(h.errors, []);
+}));
+
+test('resize is coalesced and serialized after a render without losing usable viewport sizes', () => withPlotHarness(async h => {
+  const gate = deferred(); h.renderGate = gate.promise;
+  h.mount(); await settled();
+  h.resize(); h.resize(); h.resize(); await settled();
+  assert.deepEqual(h.calls, ['render:start']);
+  gate.resolve(); await settled();
+  assert.deepEqual(h.calls, ['render:start', 'render:end', 'resize:start', 'resize:end']);
+  assert.deepEqual(h.sizes, [{ width: 800, height: 500 }, { width: 900, height: 600 }]);
+}));
+
+test('StrictMode effect restart purges the previous lifetime before rendering the new one', () => withPlotHarness(async h => {
+  const gate = deferred(); h.renderGate = gate.promise;
+  h.mount(); await settled();
+  const effects = h.effects;
+  h.unmount();
+  h.cleanups = effects.map(effect => effect());
+  h.renderGate = null; gate.resolve(); await settled();
+  assert.deepEqual(h.calls, ['render:start', 'render:end', 'purge', 'render:start', 'render:end']);
+  assert.deepEqual(h.sizes, [{ width: 800, height: 500 }]);
+  assert.deepEqual(h.errors, []);
+}));

@@ -31,8 +31,14 @@ def read_json(path: Path, validate=lambda value: value):
     return None
 
 
-def atomic_json(path: Path, value, *, backup=True) -> None:
-    """Flush a complete document before replacing the visible file."""
+def atomic_json(path: Path, value, *, backup=True, validate=lambda value: value) -> None:
+    """Commit a complete document, preserving the last schema-valid backup.
+
+    Readers may have recovered from a syntactically valid but damaged primary
+    document. Use the same validator on writes so that primary cannot replace
+    the usable backup during recovery.
+    """
+    validate(value)
     encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, indent=2)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
@@ -45,8 +51,8 @@ def atomic_json(path: Path, value, *, backup=True) -> None:
         if backup and path.is_file():
             # Never replace the last good backup with a corrupt primary file.
             try:
-                previous = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
+                previous = validate(json.loads(path.read_text(encoding="utf-8")))
+            except (OSError, ValueError, KeyError, TypeError):
                 previous = None
             if previous is not None:
                 atomic_json(path.with_suffix(path.suffix + ".bak"), previous, backup=False)

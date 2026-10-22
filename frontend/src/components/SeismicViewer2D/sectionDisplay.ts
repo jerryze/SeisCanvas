@@ -1,6 +1,15 @@
-import { Section, SS } from "../../types";
+import type { Section, SS, VS } from "../../types";
 
 export type SectionViewport = { width: number; height: number };
+
+/** Scientific content excludes local colors, style and viewport geometry. */
+export function sectionContentKey(view: VS, revision: number) {
+  const s = view.seismic;
+  return JSON.stringify([revision, view.view_type, view.section_number,
+    view.horizon_sg, view.horizon_sg_window,
+    s.clip_mode, s.clip_percentile, s.symmetric, s.vmin, s.vmax, s.reverse_polarity,
+    s.wiggle, s.variable_area, s.wiggle_gain, s.background_interpolation, s.wiggle_interpolation]);
+}
 
 /** Measure the usable CSS plot, after Plotly applies margins and aspect lock. */
 export function measureSectionViewport(layout: any): SectionViewport | null {

@@ -100,7 +100,6 @@ export function SliceManager({
         <div className="modal-backdrop" onClick={() => !disabled && setPendingDelete(null)}>
           <div ref={deleteDialog} tabIndex={-1} className="modal delete-horizon-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-slice-title" onClick={(event) => event.stopPropagation()}>
             <h2 id="delete-slice-title">移除切片 {prefixes[pendingDelete.kind]} {pendingDelete.slice.position}{pendingDelete.kind === "time" ? " ms" : ""}？</h2>
-            <p>将从当前场景移除此切片及其样式，地震数据会保留，可通过“添加切片”重新添加。</p>
             <div className="import-actions">
               <button className="secondary" disabled={disabled} onClick={() => setPendingDelete(null)}>取消</button>
               <button className="danger-button" disabled={disabled} onClick={() => {

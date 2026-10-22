@@ -44,7 +44,6 @@ def section_raster(survey, x, t, z, state, target_width=None, target_height=None
             "section-display", cache_id, x0, x1, t0, t1, time_sinc,
             state.x_range, state.time_range,
             width, height, state.seismic.background_interpolation,
-            state.seismic.wiggle_interpolation, state.seismic.reverse_polarity,
             quality,
         )
         raster = survey.render_cache.get(key)

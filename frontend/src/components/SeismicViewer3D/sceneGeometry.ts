@@ -15,6 +15,8 @@ export type SliceData = {
   source_a_range?: number[];
   source_b_range?: number[];
   interpolation?: "sinc8" | "linear" | "native";
+  background_interpolation?: boolean;
+  wiggle_interpolation?: boolean;
 };
 export type Intersection = {
   slice_id: string;
@@ -207,6 +209,24 @@ export function wiggleCoordinates(plane: SliceData) {
   return points;
 }
 
+/** Older responses use Plotly surfaces; native cells only need their edge mesh. */
+function sliceSurface(plane: SliceData, reversePolarity: boolean) {
+  const x: number[][] = [], y: number[][] = [], z: (number | null)[][] = [];
+  plane.b.forEach((b, r) => {
+    x.push(plane.a.map(a => plane.kind === "crossline" ? plane.position : a));
+    y.push(plane.a.map(a =>
+      plane.kind === "inline" ? plane.position : plane.kind === "crossline" ? a : b,
+    ));
+    z.push(plane.a.map((_, c) =>
+      plane.amplitude[r][c] === null ? null : plane.kind === "time" ? plane.position : b,
+    ));
+  });
+  const surfacecolor = plane.amplitude.map(row =>
+    row.map(v => v === null ? null : reversePolarity ? -v : v),
+  );
+  return { type: "surface", x, y, z, surfacecolor };
+}
+
 export function buildTraces(
   data: SceneData,
   view: VS,
@@ -228,38 +248,9 @@ export function buildTraces(
   for (const plane of data.slices) {
     const state = view.slices[plane.kind].find((p) => p.id === plane.id);
     if (!state?.visible) continue;
-    const x: number[][] = [],
-      y: number[][] = [],
-      z: (number | null)[][] = [];
-    plane.b.forEach((b, r) => {
-      x.push(
-        plane.a.map((a) => (plane.kind === "crossline" ? plane.position : a)),
-      );
-      y.push(
-        plane.a.map((a) =>
-          plane.kind === "inline"
-            ? plane.position
-            : plane.kind === "crossline"
-              ? a
-              : b,
-        ),
-      );
-      z.push(
-        plane.a.map((_, c) =>
-          plane.amplitude[r][c] === null
-            ? null
-            : plane.kind === "time"
-              ? plane.position
-              : b,
-        ),
-      );
-    });
-    const surfacecolor = plane.amplitude.map((row) =>
-      row.map((v) => (v === null ? null : s.reverse_polarity ? -v : v)),
-    );
     traces.push({
       ...(plane.a_edges && plane.b_edges ? sliceCells(plane, colorscale, data, view)
-        : { type: "surface", x, y, z, surfacecolor }),
+        : sliceSurface(plane, s.reverse_polarity)),
       uid: actorUid("slice", plane.kind, plane.id, "background"),
       colorscale,
       cmin: data.vmin,

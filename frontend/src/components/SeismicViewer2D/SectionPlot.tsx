@@ -42,6 +42,7 @@ export default function SectionPlot({
   const [viewport, setViewport] = useState<SectionViewport | null>(null);
   const renderedInputs = useRef<unknown[] | null>(null);
   const renderQueue = useRef(Promise.resolve());
+  const lifetime = useRef({ active: true });
   const viewRef = useRef(view);
   viewRef.current = view;
   const latest = useRef({ onPatch, onProbe, onError, onViewportSize });
@@ -71,11 +72,26 @@ export default function SectionPlot({
     }
   }
 
+  // Every Plotly operation, including disposal, shares the same queue.
+  useEffect(() => {
+    const el = plot.current;
+    const current = { active: true };
+    lifetime.current = current;
+    renderedInputs.current = null;
+    return () => {
+      current.active = false;
+      renderQueue.current = renderQueue.current.catch(() => {}).then(() => {
+        if (el) Plotly.purge(el);
+      }).catch(() => {});
+    };
+  }, []);
+
   useEffect(() => {
     const el = plot.current as any;
     if (!el) return;
 
     let disposed = false;
+    const current = lifetime.current;
     const layout = buildLayout(
       section,
       meta
@@ -104,7 +120,7 @@ export default function SectionPlot({
     renderQueue.current = renderQueue.current
       .catch(() => {})
       .then(async () => {
-        if (disposed) return;
+        if (disposed || !current.active) return;
         if (
           renderedInputs.current?.every((value, i) =>
             Object.is(value, inputs[i]),
@@ -133,7 +149,7 @@ export default function SectionPlot({
             scrollZoom: true,
           },
         );
-        if (disposed) return;
+        if (disposed || !current.active) return;
         renderedInputs.current = inputs;
         reportViewportSize(el);
 
@@ -195,7 +211,7 @@ export default function SectionPlot({
         });
       })
       .catch((e) => {
-        latest.current.onError(String(e));
+        if (!disposed && current.active) latest.current.onError(String(e));
       });
 
     return () => {
@@ -207,28 +223,25 @@ export default function SectionPlot({
     const el = plot.current;
     if (!el) return;
     let disposed = false;
+    let queued = false;
+    const current = lifetime.current;
     const ob = new ResizeObserver(() => {
-      if ((el as any).data) {
-        Promise.resolve(Plotly.Plots.resize(el))
-          .then(() => {
-            if (!disposed) reportViewportSize(el);
-          })
-          .catch((e) => {
-            if (!disposed) latest.current.onError(String(e));
-          });
-      }
+      if (disposed || !current.active || queued) return;
+      queued = true;
+      renderQueue.current = renderQueue.current.catch(() => {}).then(async () => {
+        queued = false;
+        if (disposed || !current.active || !(el as any).data) return;
+        await Plotly.Plots.resize(el);
+        if (!disposed && current.active) reportViewportSize(el);
+      }).catch((e) => {
+        queued = false;
+        if (!disposed && current.active) latest.current.onError(String(e));
+      });
     });
     ob.observe(el);
     return () => {
       disposed = true;
       ob.disconnect();
-    };
-  }, []);
-
-  useEffect(() => {
-    const el = plot.current;
-    return () => {
-      if (el) Plotly.purge(el);
     };
   }, []);
 

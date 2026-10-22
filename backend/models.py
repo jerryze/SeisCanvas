@@ -1,3 +1,4 @@
+import json
 import re
 
 from typing import Annotated, Literal, Union
@@ -201,6 +202,15 @@ class SceneState(BaseModel):
     #: Transient projected CSS dimensions, supplied by the 3D viewer.
     slice_viewports: dict[str, tuple[float, float]] = Field(default_factory=dict, max_length=18)
 
+    @field_validator("camera")
+    @classmethod
+    def finite_camera(cls, value):
+        try:
+            json.dumps(value, allow_nan=False)
+        except (ValueError, TypeError) as error:
+            raise ValueError("Camera must contain finite JSON values.") from error
+        return value
+
     @field_validator("slice_viewports")
     @classmethod
     def valid_viewports(cls, values):
@@ -287,6 +297,8 @@ class WorkspaceSave(BaseModel):
     def valid_state(cls, state):
         if state.get("version") != 1:
             raise ValueError("Unsupported workspace state version.")
+        if not isinstance(state.get("view"), dict) or not isinstance(state["view"].get("horizons"), list):
+            raise ValueError("Workspace view and horizon registry are required.")
         WorkspaceView.model_validate(state.get("view", {}))
         return state
 
@@ -557,3 +569,26 @@ class RenameRequest(BaseModel):
         if not self.filename.strip():
             raise ValueError("A file name is required.")
         return self
+
+
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    request_id: str | None = Field(None, pattern=r"^[a-f0-9]{32}$")
+    template_id: str | None = Field(None, pattern=r"^[a-f0-9]{32}$")
+
+
+class ProjectRename(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+class ProjectSwitch(BaseModel):
+    target_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    source_revision: int | None = Field(None, ge=0)
+
+
+class ProjectRelink(BaseModel):
+    horizon_id: str | None = None
+    path: str | None = None
+    confirm: bool = False
+    revision: int | None = Field(None, ge=0)
+    file_identity: dict[str, str] | None = None

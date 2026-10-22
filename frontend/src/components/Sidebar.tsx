@@ -5,19 +5,26 @@ export default function Sidebar({
   scope,
   switcher,
   children,
+  savedPositions,
+  onPosition,
 }: {
   scope: string;
   switcher: ReactNode;
   children: ReactNode;
+  savedPositions?: Record<string, number>;
+  onPosition?: (scope: string, value: number) => void;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const positions = useRef(new Map<string, number>());
+  const positionCallback = useRef(onPosition);
+  positionCallback.current = onPosition;
+  const initialPositions = useRef(savedPositions);
   const [moreBelow, setMoreBelow] = useState(false);
 
   useLayoutEffect(() => {
     const viewport = scroll.current!;
-    const desired = positions.current.get(scope) ?? 0;
+    const desired = positions.current.get(scope) ?? initialPositions.current?.[scope] ?? 0;
     let restoring = true;
     const measure = () => {
       if (restoring) viewport.scrollTop = desired;
@@ -26,7 +33,10 @@ export default function Sidebar({
       );
     };
     const onScroll = () => {
-      if (!restoring) positions.current.set(scope, viewport.scrollTop);
+      if (!restoring) {
+        positions.current.set(scope, viewport.scrollTop);
+        positionCallback.current?.(scope, viewport.scrollTop);
+      }
       measure();
     };
     const observer = new ResizeObserver(measure);

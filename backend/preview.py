@@ -6,17 +6,22 @@ import segyio
 from backend.regular_geometry import SAMPLE_BYTES
 
 
-def read_samples(survey, trace_ids, samples):
+def read_samples(survey, trace_ids, samples, *, per_point=False):
     """Read original amplitudes for selected traces.
 
-    ``samples`` is either a 1-D array of sample indices shared by every trace
-    (result gains a trailing axis) or an array matching ``trace_ids`` shape for
-    per-point reads (result matches ``trace_ids`` shape).
+    By default ``samples`` is a 1-D sample axis shared by every trace, so the
+    result has shape ``trace_ids.shape + (len(samples),)``. Set ``per_point``
+    explicitly to read one sample per trace; its indices must then match the
+    trace-id shape. Equal axis lengths never change the sampling mode.
     """
     ids = np.asarray(trace_ids, dtype=np.int64)
     samples = np.asarray(samples, dtype=np.int64)
-    per_cell = samples.shape == ids.shape
-    shape = ids.shape if per_cell else (*ids.shape, *samples.shape)
+    if per_point:
+        if samples.shape != ids.shape:
+            raise ValueError("Per-point sample indices must match the trace-id shape.")
+    elif samples.ndim != 1:
+        raise ValueError("Shared sample indices must be a one-dimensional axis.")
+    shape = ids.shape if per_point else (*ids.shape, len(samples))
     result = np.full(shape, np.nan, dtype=np.float32)
     valid = ids >= 0
     if not valid.any():
@@ -36,7 +41,7 @@ def read_samples(survey, trace_ids, samples):
             with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
                 raw = np.ndarray((survey.count, ns), dtype=f'V{width}', buffer=mapped,
                                  offset=offset + 240, strides=(stride, width))
-                if per_cell:
+                if per_point:
                     picked = raw[ids[valid], samples[valid]].copy()
                 else:
                     picked = raw[ids[valid, None], samples[None, :]].copy()
@@ -51,7 +56,7 @@ def read_samples(survey, trace_ids, samples):
         else:
             # Nonstandard layouts remain supported through segyio; only selected traces.
             with segyio.open(str(survey.path), ignore_geometry=True) as sg:
-                if per_cell:
+                if per_point:
                     result[valid] = [sg.trace[int(i)][int(s)] for i, s in zip(ids[valid], samples[valid])]
                 else:
                     result[valid] = np.asarray([sg.trace[int(i)][samples] for i in ids[valid]])
@@ -84,15 +89,26 @@ def trace_ids_at(survey, ils, xls):
         i = np.clip(i, 0, len(survey.inlines) - 1)
         j = np.clip(j, 0, len(survey.crosslines) - 1)
         return np.where(inside, survey.trace_lookup[i, j], -1)
-    result = np.full(len(ils), -1, dtype=np.int64)
-    for k, (il, xl) in enumerate(zip(ils.tolist(), xls.tolist())):
+    result = np.full(ils.shape, -1, dtype=np.int64)
+    flat_ils, flat_xls, flat_result = ils.ravel(), xls.ravel(), result.ravel()
+    request_order = np.argsort(flat_ils, kind="stable")
+    requested_ils, starts = np.unique(flat_ils[request_order], return_index=True)
+    stops = np.r_[starts[1:], len(request_order)]
+    for il, start, stop in zip(requested_ils, starts, stops):
         ids = survey.maps["inline"].get(int(il), [])
         if not len(ids):
             continue
-        coords = survey.xls[ids]
-        pos = int(np.searchsorted(coords, xl))
-        if pos < len(coords) and coords[pos] == xl:
-            result[k] = int(ids[pos])
+        # Geometry groups by inline in file order; crosslines within a group
+        # need not be sorted. Stable sorting retains the existing first-trace
+        # selection for duplicate coordinates in this sparse lookup path.
+        ids = np.asarray(ids)
+        order = np.argsort(survey.xls[ids], kind="stable")
+        coords = survey.xls[ids[order]]
+        requested = request_order[start:stop]
+        positions = np.searchsorted(coords, flat_xls[requested])
+        found = positions < len(coords)
+        found &= coords[np.minimum(positions, len(coords) - 1)] == flat_xls[requested]
+        flat_result[requested[found]] = ids[order[positions[found]]]
     return result
 
 
@@ -115,8 +131,8 @@ def sample_horizon_amplitude(survey, ils, xls, times):
     position = np.clip((times[valid] - survey.times[0]) / survey.interval, 0, len(survey.times) - 1)
     lower = np.floor(position).astype(np.int64)
     fraction = position - lower
-    low = read_samples(survey, ids, lower)
-    high = read_samples(survey, ids, np.minimum(lower + 1, len(survey.times) - 1))
+    low = read_samples(survey, ids, lower, per_point=True)
+    high = read_samples(survey, ids, np.minimum(lower + 1, len(survey.times) - 1), per_point=True)
     sampled = np.where(fraction == 0, low, low * (1 - fraction) + high * fraction)
     result[valid] = np.where(np.isfinite(sampled), sampled, np.nan)
     return result.reshape(shape)

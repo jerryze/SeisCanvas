@@ -1153,7 +1153,6 @@ export default function HorizonMap({
             <details className="subsettings">
               <SubsectionSummary title="地震显示" />
               <div className="subsettings-body">
-                <p className="control-note">与 2D 剖面、3D 切片共用地震显示设置。</p>
                 <SeismicSettings seismic={seismic} maps={maps} onSeismic={onSeismic} />
               </div>
             </details>

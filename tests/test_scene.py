@@ -220,9 +220,9 @@ def test_amplitude_cache_only_reads_two_samples_per_preview_vertex(cube, tmp_pat
     import backend.preview as preview
     original = preview.read_samples
     calls = []
-    def read(survey, ids, samples):
+    def read(survey, ids, samples, **kwargs):
         calls.append((len(ids), np.asarray(samples).shape))
-        return original(survey, ids, samples)
+        return original(survey, ids, samples, **kwargs)
     monkeypatch.setattr(preview, "read_samples", read)
     h = amplitude_surface(tmp_path)
     first = horizon_amplitude_mesh(cube, h, 2)

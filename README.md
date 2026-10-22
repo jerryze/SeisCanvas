@@ -14,7 +14,8 @@ SeisCanvas 是本地运行的地震数据可视化工具，支持 SEG-Y 地震�
 - **三维场景**：组合显示 Inline、Crossline、Time Slice 和层位曲面，调整视角、不透明度、网格与配色；层位曲面支持按时间、沿层地震振幅或单色着色，振幅模式沿用地震显示的色标、极性与裁剪设置。
 - **层位地图**：查看 Time、沿层振幅或双层位差值，支持填色、等值线、差值统计和 A–B 地震剖面。
 - **图件导出**：支持 PNG、PDF、SVG，设置尺寸、字体和背景，通过导出队列预览、重命名并批量打包为 ZIP。
-- **自动保存**：恢复上次工作状态和导出队列。
+- **项目管理**：新建、打开、重命名、另存为项目；各项目独立保存视图、层位配置和导出队列。
+- **自动保存**：自动保存工作状态，支持手动保存及 Ctrl / ⌘ + S，切换前完成保存，重启后恢复最近项目。
 
 ## 安装与启动
 
@@ -49,6 +50,10 @@ cd ..
 
 ## 使用方法
 
+顶栏项目名称旁的下拉菜单提供“新建项目”“打开项目”“另存为新项目”和“重命名”。“新建项目”从空白开始，“另存为”复制当前设置并引用相同源数据，导出队列从空白开始。项目列表支持搜索，并显示原始数据路径及文件缺失状态。
+
+**保存项目不会复制本地原始 SEG-Y 或层位文件**，只保存路径、文件校验信息、解析参数和工作状态。通过浏览器上传的文件仅在导入时保存一份，另存为继续引用该文件。导出图件单独占用磁盘空间。原始文件移动或变化后，使用“重新关联”选择文件并确认，原项目记录会保留。
+
 1. 在侧栏“数据”中导入 SEG-Y 文件。默认 Inline / Crossline 道头字节位置为 189 / 21，可按文件实际格式修改。
 2. 导入层位文件并指定 Inline、Crossline、Time 列。文件可带表头，以空格或 Tab 分隔，Time 单位为毫秒。
 3. 在侧栏顶部切换 **2D / 3D / 层位地图**，调整剖面位置、层位样式、色标和显示范围。
@@ -68,6 +73,8 @@ PNG、PDF、SVG 均可选择白色或透明背景。PDF/SVG 的二维坐标、�
 
 工作状态默认保存在系统应用数据目录，可通过环境变量 `SEISCANVAS_STATE_DIR` 指定其他目录。Linux 本地文件选择器需要桌面环境和 `python3-tk`。
 
+各项目保存在该目录的 `projects/<项目 ID>/`，浏览器上传文件保存在 `assets/`。已有的单项目工作区会自动迁移，旧配置和原始数据文件保留。切换项目会先保存当前状态，目标加载失败时留在原项目。同一后端实例只有一个活动项目；另一个浏览器页面切换项目后，旧页面会暂停编辑并提示重新加载。
+
 ## 开发运行
 
 先启动后端 `python run.py`，再另开终端运行：
@@ -83,4 +90,23 @@ npm run dev
 cd frontend
 npm test
 npm run build
+```
+
+后端与前端的完整开发检查（从项目根目录运行）：
+
+```bash
+python -m pip install -r requirements-dev.txt
+npm --prefix frontend test
+npm --prefix frontend run build
+python -m pytest -q
+```
+
+先构建再运行后端测试，可同时验证生产静态文件服务。`.github/workflows/checks.yml` 提供相同的持续集成检查；测试使用隔离的项目目录，不修改本地已保存项目。
+
+架构、模块依赖与本轮渐进重构方案见 [ARCHITECTURE_REFACTOR_PLAN.md](ARCHITECTURE_REFACTOR_PLAN.md)，实施、验证结果及后续事项见 [REFACTOR_REPORT.md](REFACTOR_REPORT.md)。可复现性能检查位于 `benchmarks/`：
+
+```bash
+python benchmarks/raster_cache.py
+python benchmarks/export_section.py
+node --expose-gc benchmarks/scene_geometry.mjs
 ```

@@ -18,7 +18,7 @@ from backend.figure_export import figure_size, save_figure
 from matplotlib.cm import ScalarMappable
 from backend.models import HorizonMapExport, HorizonMapState, Seismic, ViewState
 from backend import resample
-from backend.preview import preview_ids, read_samples, trace_ids_at
+from backend.preview import read_samples, sample_horizon_amplitude, trace_ids_at
 from backend.scene import horizon_grid, serial
 from backend.style import font_family
 from backend.section_service import section_raster
@@ -78,31 +78,13 @@ def sample_amplitude(survey, horizon, x, y, twt):
     cached = getattr(horizon, "_amplitude3d", None)
     if cached is not None and cached[0] is x:
         return cached[2]
-    # Horizon footprints may extend beyond the seismic cube, and preview_ids
-    # snaps coordinates to survey axes, so look traces up only for cells that
-    # sit exactly on the survey grid; everything else has no amplitude.
-    on_grid = np.isin(y, survey.inlines)[:, None] & np.isin(x, survey.crosslines)[None, :]
-    ids = np.full(twt.shape, -1, dtype=np.int64)
-    if on_grid.any():
-        rows = np.flatnonzero(on_grid.any(axis=1))
-        cols = np.flatnonzero(on_grid.any(axis=0))
-        ids[np.ix_(rows, cols)] = preview_ids(survey, y[rows], x[cols])
-        ids[~on_grid] = -1
-    position = (twt - survey.times[0]) / survey.interval
-    finite = np.isfinite(position)
-    lower = np.zeros(position.shape, dtype=np.int64)
-    lower[finite] = np.floor(position[finite]).astype(np.int64)
-    frac = np.zeros(position.shape, dtype=float)
-    frac[finite] = position[finite] - lower[finite]
-    last = len(survey.times) - 1
-    inside = finite & (lower >= 0) & (lower + 1 <= last)
-    clipped = np.clip(lower, 0, last)
-    low = read_samples(survey, ids, clipped)
-    high = read_samples(survey, ids, np.clip(clipped + 1, 0, last))
-    amplitude = low * (1.0 - frac) + high * frac
-    amplitude = np.asarray(amplitude, dtype=float)
-    amplitude[~inside] = np.nan
-    amplitude[~np.isfinite(amplitude)] = np.nan
+    # Maps and 3D surfaces share exact-node and time-boundary semantics. Work
+    # only on picked cells rather than materialising two full coordinate grids.
+    rows, cols = np.nonzero(np.isfinite(twt))
+    amplitude = np.full(twt.shape, np.nan)
+    amplitude[rows, cols] = sample_horizon_amplitude(
+        survey, y[rows], x[cols], twt[rows, cols],
+    )
     horizon._amplitude3d = (x, y, amplitude)
     return amplitude
 
@@ -150,7 +132,7 @@ def resample_to_grid(src_x, src_y, grid, dst_x, dst_y):
     ]
     resampled = sum(np.where(known[idx], safe[idx], 0.0) * weight for idx, weight in corner)
     weight = sum(np.where(known[idx], weight, 0.0) for idx, weight in corner)
-    resampled = np.where(weight > 0, resampled / weight, np.nan)
+    resampled = np.divide(resampled, weight, out=np.full_like(resampled, np.nan), where=weight > 0)
     outside = np.isnan(px)[None, :] | np.isnan(py)[:, None]
     resampled[outside] = np.nan
     return resampled

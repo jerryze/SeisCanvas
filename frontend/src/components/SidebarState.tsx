@@ -12,18 +12,22 @@ const SidebarContext = createContext<SidebarState | null>(null);
 export function SidebarStateProvider({
   scope,
   children,
+  values: controlled,
+  onChange,
 }: {
   scope: string;
   children: ReactNode;
+  values?: Record<string, SidebarValue>;
+  onChange?: (update: (previous: Record<string, SidebarValue>) => Record<string, SidebarValue>) => void;
 }) {
   const [values, setValues] = useState<Record<string, SidebarValue>>({});
   return (
     <SidebarContext.Provider
       value={{
         scope,
-        values,
+        values: controlled ?? values,
         setValue: (key, value) =>
-          setValues((previous) =>
+          (onChange ?? setValues)((previous) =>
             previous[key] === value ? previous : { ...previous, [key]: value },
           ),
       }}

@@ -116,7 +116,7 @@ export default function DataPanel({
           onClick={onOpenSegy}
         >
           <Upload size={14} />
-          {meta ? "更换 SEG-Y 数据" : "导入 SEG-Y"}
+          {meta ? "新建项目并导入 SEG-Y" : "导入 SEG-Y"}
         </button>
 
         {!meta && (

@@ -5,6 +5,7 @@ import io
 import json
 import re
 import zipfile
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -690,3 +691,222 @@ def test_session_prunes_old_folders(tmp_path, monkeypatch):
         export_queue.session()
     folders = [p for p in (tmp_path / "root").iterdir() if p.is_dir()]
     assert len(folders) <= export_queue.KEEP_SESSIONS
+
+
+def stored_figure(queue, **changes):
+    """A frozen file is sufficient for queue lifecycle and persistence tests."""
+    return queue.add(**{
+        "data": b"saved figure", "filename": "Figure.png", "view_type": "2d_inline",
+        "dataset": "Test", "view_state": {}, "summary": {}, **changes,
+    })
+
+
+def test_clear_never_reuses_figure_ids_or_paths_even_after_restart(tmp_path):
+    queue = export_queue.ExportSession(tmp_path / "queue")
+    first = stored_figure(queue)
+    queue.clear()
+    queue = export_queue.ExportSession.load(queue.folder)
+    second = stored_figure(queue)
+    assert second["id"] == "exp_0002"
+    assert second["temporary_path"] != first["temporary_path"]
+    assert not Path(first["temporary_path"]).exists()
+    with pytest.raises(KeyError):
+        queue.file(first["id"])
+
+
+def test_archives_coexist_and_response_cleanup_preserves_other_downloads(client):
+    queue = export_queue.session()
+    stored_figure(queue)
+    first, _, _ = queue.archive()
+    second, _, _ = queue.archive()
+    assert first != second
+    for path in (first, second):
+        with zipfile.ZipFile(path) as archive:
+            assert archive.read("2D/Inline/Figure.png") == b"saved figure"
+    response = client.post("/api/export/archive")
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert archive.read("2D/Inline/Figure.png") == b"saved figure"
+    # TestClient consumes the response and completes its background cleanup.
+    assert set(queue.folder.glob("_archive_*.zip")) == {first, second}
+
+
+def test_failed_archive_removes_its_partial_zip(client, monkeypatch):
+    queue = export_queue.session()
+    stored_figure(queue)
+    def fail(*args, **kwargs):
+        raise OSError("disk full")
+    monkeypatch.setattr(zipfile.ZipFile, "write", fail)
+    assert client.post("/api/export/archive").status_code == 400
+    assert list(queue.folder.glob("_archive_*.zip")) == []
+    assert queue.file("exp_0001")[0].read_bytes() == b"saved figure"
+
+
+@pytest.mark.parametrize("operation", ["add", "rename", "delete", "clear"])
+def test_queue_rolls_back_metadata_serialization_errors(tmp_path, monkeypatch, operation):
+    queue = export_queue.ExportSession(tmp_path / "queue")
+    item = stored_figure(queue)
+    before = deepcopy(queue.snapshot())
+    original_files = {path.name: path.read_bytes() for path in (queue.folder / export_queue.FIGURES).iterdir()}
+    def fail():
+        raise ValueError("Invalid JSON metadata")
+    monkeypatch.setattr(queue, "_write_manifest", fail)
+    with pytest.raises(ValueError, match="Invalid JSON"):
+        if operation == "add":
+            stored_figure(queue)
+        elif operation == "rename":
+            queue.rename(item["id"], "Renamed")
+        elif operation == "delete":
+            queue.delete(item["id"])
+        else:
+            queue.clear()
+    assert queue.snapshot() == before
+    assert queue._counter == 1
+    assert queue._bytes == len(b"saved figure")
+    assert {path.name: path.read_bytes() for path in (queue.folder / export_queue.FIGURES).iterdir()} == original_files
+
+
+@pytest.mark.parametrize("mirror", ["queue.json.bak", "manifest.json"])
+def test_failed_optional_mirror_does_not_undo_a_committed_queue(tmp_path, monkeypatch, mirror):
+    queue = export_queue.ExportSession(tmp_path / "queue")
+    original = export_queue.atomic_json
+    def save(path, value, **options):
+        if path.name == mirror:
+            raise ValueError("Damaged optional metadata")
+        return original(path, value, **options)
+    monkeypatch.setattr(export_queue, "atomic_json", save)
+    item = stored_figure(queue)
+    restored = export_queue.ExportSession.load(queue.folder)
+    assert restored.snapshot() == queue.snapshot()
+    assert restored.file(item["id"])[0].read_bytes() == b"saved figure"
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf"), object()])
+def test_queue_rejects_unserializable_state_before_writing_a_figure(tmp_path, invalid):
+    queue = export_queue.ExportSession(tmp_path / "queue")
+    with pytest.raises((ValueError, TypeError)):
+        stored_figure(queue, view_state={"scene": {"camera": {"eye": {"x": invalid}}}})
+    assert queue.snapshot()["count"] == 0
+    assert list((queue.folder / export_queue.FIGURES).iterdir()) == []
+    assert stored_figure(queue)["id"] == "exp_0001"
+
+
+@pytest.mark.parametrize("operation", ["add", "rename"])
+def test_partial_figure_write_preserves_queue_and_original_bytes(tmp_path, monkeypatch, operation):
+    queue = export_queue.ExportSession(tmp_path / "queue")
+    item = stored_figure(queue)
+    before = deepcopy(queue.snapshot())
+    write_bytes = Path.write_bytes
+    def partial_write(path, data):
+        write_bytes(path, b"partial")
+        raise OSError("disk full")
+    def partial_copy(source, target):
+        partial_write(target, b"partial")
+    with monkeypatch.context() as patch:
+        if operation == "add":
+            patch.setattr(Path, "write_bytes", partial_write)
+        else:
+            patch.setattr(export_queue.shutil, "copyfile", partial_copy)
+        with pytest.raises(OSError, match="disk full"):
+            if operation == "add":
+                stored_figure(queue)
+            else:
+                queue.rename(item["id"], "Renamed")
+    assert queue.snapshot() == before
+    figures = list((queue.folder / export_queue.FIGURES).iterdir())
+    assert figures == [Path(item["temporary_path"])]
+    assert figures[0].read_bytes() == b"saved figure"
+    assert stored_figure(queue)["id"] == "exp_0002"
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf"), object()])
+def test_scene_camera_rejects_nonfinite_or_nonjson_values(invalid):
+    from backend.models import SceneState
+    with pytest.raises(ValueError, match="finite JSON"):
+        SceneState(camera={"eye": {"x": invalid}})
+
+
+@pytest.mark.parametrize(("keys", "invalid"), [
+    (("counter",), "1"), (("counter",), True),
+    (("items", 0, "serial"), "1"), (("items", 0, "size_bytes"), -1),
+    (("items", 0, "summary"), []), (("items", 0, "render"), None),
+    (("items", 0, "width_mm"), "180"), (("items", 0, "pixel_size"), [0, 200]),
+    (("items", 0, "stored"), ".."), (("items", 0, "filename"), "../figure.png"),
+    (("items", 0, "format"), "unknown"), (("items", 0), None),
+])
+def test_damaged_queue_field_types_recover_from_backup(tmp_path, keys, invalid):
+    queue = export_queue.ExportSession(tmp_path / "queue")
+    stored_figure(queue)
+    path = queue.folder / "queue.json"
+    damaged = json.loads(path.read_text())
+    field = damaged
+    for key in keys[:-1]:
+        field = field[key]
+    field[keys[-1]] = invalid
+    path.write_text(json.dumps(damaged))
+    assert export_queue.ExportSession.load(queue.folder).snapshot() == queue.snapshot()
+    path.with_suffix(".json.bak").unlink()
+    with pytest.raises(ValueError, match="保存文件损坏"):
+        export_queue.ExportSession.load(queue.folder)
+
+
+def test_missing_queue_has_an_expected_error_and_inactive_figure_returns_404(client):
+    document = server.project.create("Never exported")
+    folder = server.project.export_folder(document)
+    with pytest.raises(ValueError, match="not found"):
+        export_queue.ExportSession.load(folder)
+    response = client.get(f"/api/export/queue/exp_0001/file?project_id={document['id']}")
+    assert response.status_code == 404
+    assert not folder.exists()
+
+
+@pytest.mark.parametrize("reverse_polarity", [False, True])
+@pytest.mark.parametrize("clipping", [
+    {"clip_mode": "percentile", "clip_percentile": 95, "symmetric": True},
+    {"clip_mode": "percentile", "clip_percentile": 85, "symmetric": False},
+    {"clip_mode": "manual", "vmin": -1250, "vmax": 1250},
+])
+def test_2d_queue_reuses_rendered_amplitudes_and_preserves_pixels_and_manifest(
+    cube, horizon, monkeypatch, reverse_polarity, clipping,
+):
+    import numpy as np
+    import backend.rendering as rendering
+    from backend.export_service import add_2d
+    from backend.models import Queue2DRequest
+
+    request = Queue2DRequest.model_validate({
+        "state": {"section_number": 12, "x_range": [31, 36], "time_range": [202, 210],
+                  "seismic": {**clipping, "reverse_polarity": reverse_polarity},
+                  "horizons": [{"id": "h", "name": "Horizon"}]},
+        "settings": {"canvas": "fit", "long_edge": 600},
+    })
+    horizons = {"h": horizon}
+    # The bytes-only public renderer remains the reference for queued pixels.
+    expected = rendering.render(cube, horizons, request.state, request.settings)
+    native = cube.section("inline", 12)[2]
+    _, lo, hi = rendering.amplitude(native, request.state.seismic)
+    section_calls, amplitude_calls, percentile_calls = [], [], []
+    original_section, original_amplitude, original_percentile = cube.section, rendering.amplitude, np.percentile
+    def section(*args):
+        section_calls.append(args)
+        return original_section(*args)
+    def amplitude(*args):
+        amplitude_calls.append(args[0].shape)
+        return original_amplitude(*args)
+    def percentile(*args, **options):
+        percentile_calls.append(args[0].shape)
+        return original_percentile(*args, **options)
+    monkeypatch.setattr(cube, "section", section)
+    monkeypatch.setattr(rendering, "amplitude", amplitude)
+    monkeypatch.setattr(np, "percentile", percentile)
+    item = add_2d(cube, horizons, request)
+    assert section_calls == [("inline", 12)]
+    assert amplitude_calls == [native.shape]
+    assert len(percentile_calls) == (0 if clipping["clip_mode"] == "manual" else 1)
+    with Image.open(io.BytesIO(expected)) as before, Image.open(item["temporary_path"]) as after:
+        np.testing.assert_array_equal(np.asarray(after), np.asarray(before))
+    figure = export_queue.session().manifest()["figures"][0]
+    assert figure["colorbar_range"] == [lo, hi]
+    assert figure["view_state"] == request.state.model_dump()
+    for key in ("clip_mode", "clip_percentile", "symmetric", "vmin", "vmax", "reverse_polarity"):
+        assert figure[key] == getattr(request.state.seismic, key)

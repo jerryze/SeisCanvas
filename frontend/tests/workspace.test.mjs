@@ -5,7 +5,7 @@ import ts from 'typescript';
 
 const source = await readFile(new URL('../src/workspace.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
-const { initialMapWorkspace, initialExport3D, reconcileMapWorkspace, restoreState, readDraft } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'));
+const { initialMapWorkspace, initialExport3D, reconcileMapWorkspace, restoreState, readDraft, draftKey, projectDrafts } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'));
 
 function defaults() {
   return {
@@ -178,4 +178,35 @@ test('removing an output grid keeps an intact comparison and handles an empty wo
   assert.equal(empty.state.horizon, '');
   assert.equal(empty.state.difference_reference, null);
   assert.equal(empty.state.difference_comparison, null);
+});
+
+
+test('project/tab draft keys isolate simultaneous work and enumerate restart candidates', () => {
+  const state = defaults();
+  const values = new Map([
+    [draftKey('a', 'tab-1'), JSON.stringify({ version: 1, project_id: 'a', revision: 3, state })],
+    [draftKey('a', 'tab-2'), JSON.stringify({ version: 1, project_id: 'a', revision: 2, state: { ...state, dataset: 'older' } })],
+    [draftKey('b', 'tab-1'), JSON.stringify({ version: 1, project_id: 'b', revision: 3, state: { ...state, dataset: 'other project' } })],
+  ]);
+  const storage = { getItem: key => values.get(key) || null, key: i => [...values.keys()][i], length: values.size };
+  assert.deepEqual(readDraft(storage, 'a', 3, null, 'tab-1'), state);
+  assert.equal(readDraft(storage, 'a', 3, null, 'tab-2'), null);
+  const candidates = projectDrafts(storage, 'a', 3, null);
+  assert.equal(candidates.length, 2);
+  assert.deepEqual(candidates.map(c => c.compatible), [true, false]);
+  assert.ok(candidates.every(c => c.project_id === 'a'));
+});
+
+test('draft enumeration omits committed bodies and recognises interrupted acknowledgements', () => {
+  const state = defaults();
+  const later = { ...state, dataset: 'later edits' };
+  const values = new Map([
+    [draftKey('a', 'saved'), JSON.stringify({ version: 1, project_id: 'a', revision: 5, state })],
+    [draftKey('a', 'interrupted'), JSON.stringify({ version: 1, project_id: 'a', revision: 4, state: later, inflight: state })],
+  ]);
+  const storage = { getItem: key => values.get(key) || null, key: i => [...values.keys()][i], length: values.size };
+  const candidates = projectDrafts(storage, 'a', 5, state);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].compatible, true);
+  assert.deepEqual(candidates[0].state, later);
 });

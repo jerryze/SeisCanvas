@@ -10,6 +10,7 @@ from __future__ import annotations
 import atexit
 import json
 import io
+import math
 import re
 import xml.etree.ElementTree as ET
 from PIL import Image
@@ -38,10 +39,71 @@ MIME = {"png": "image/png", "pdf": "application/pdf", "svg": "image/svg+xml"}
 
 _lock = RLock()
 _session: "ExportSession | None" = None
+_bound_folder: Path | None = None
+
+
+def bind(folder):
+    """Select a project's queue without deleting the previous project's figures."""
+    global _session, _bound_folder
+    folder = Path(folder) if folder is not None else None
+    with _lock:
+        if folder != _bound_folder:
+            _session = None
+            _bound_folder = folder
 
 
 def now():
     return datetime.now().replace(microsecond=0).isoformat()
+
+
+def validate_queue(value, expected_id):
+    """Reject damaged metadata before restoring it or replacing its backup."""
+    if (not isinstance(value, dict) or type(value["version"]) is not int
+            or value["version"] != 1 or value["id"] != expected_id):
+        raise ValueError("Unsupported export queue version.")
+    if (not isinstance(value["created_at"], str)
+            or value["dataset"] is not None and not isinstance(value["dataset"], str)):
+        raise ValueError("Invalid export queue metadata.")
+    datetime.fromisoformat(value["created_at"])
+    if type(value["counter"]) is not int or value["counter"] < 0 or not isinstance(value["items"], list):
+        raise ValueError("Invalid export queue counter or items.")
+    ids, stored_names, filenames = set(), set(), set()
+    for item in value["items"]:
+        if not isinstance(item, dict):
+            raise ValueError("Invalid export queue item.")
+        for key in ("id", "filename", "stored", "dataset", "format", "view_type", "folder", "created_at", "detail"):
+            if not isinstance(item[key], str):
+                raise ValueError(f"Invalid figure {key}.")
+        for key in ("stored", "filename"):
+            name = item[key]
+            if not name or name in {".", ".."} or "/" in name or "\\" in name:
+                raise ValueError("Invalid figure path.")
+        if not re.fullmatch(r"exp_[0-9]+", item["id"]) or item["format"] not in MIME:
+            raise ValueError("Invalid figure identity or format.")
+        if item["id"] in ids or item["stored"] in stored_names or item["filename"].lower() in filenames:
+            raise ValueError("Duplicate figure identity or filename.")
+        ids.add(item["id"])
+        stored_names.add(item["stored"])
+        filenames.add(item["filename"].lower())
+        datetime.fromisoformat(item["created_at"])
+        for key, minimum in (("serial", 1), ("index", 1), ("size_bytes", 0)):
+            if type(item[key]) is not int or item[key] < minimum:
+                raise ValueError(f"Invalid figure {key}.")
+        for key in ("summary", "render", "view_state"):
+            if not isinstance(item[key], dict):
+                raise ValueError(f"Invalid figure {key}.")
+        for key in ("width_mm", "height_mm", "dpi", "scale"):
+            number = item[key]
+            if number is not None and (type(number) not in (int, float)
+                    or isinstance(number, float) and not math.isfinite(number) or number <= 0):
+                raise ValueError(f"Invalid figure {key}.")
+        pixels = item["pixel_size"]
+        if pixels is not None and (not isinstance(pixels, (list, tuple)) or len(pixels) != 2
+                or any(type(size) is not int or size <= 0 for size in pixels)):
+            raise ValueError("Invalid figure pixel dimensions.")
+    # Arbitrary view state and summary dictionaries must also be persistable.
+    json.dumps(value, allow_nan=False)
+    return value
 
 
 def _prune(keep=KEEP_SESSIONS - 1):
@@ -61,6 +123,10 @@ def session() -> "ExportSession":
     global _session
     with _lock:
         if _session is None:
+            if _bound_folder is not None:
+                saved = _bound_folder / "queue.json"
+                _session = ExportSession.load(_bound_folder) if saved.exists() or saved.with_suffix(".json.bak").exists() else ExportSession(_bound_folder)
+                return _session
             EXPORT_ROOT.mkdir(parents=True, exist_ok=True)
             saved = sorted(
                 (p for p in EXPORT_ROOT.glob("session_*") if (p / "queue.json").exists() or (p / "queue.json.bak").exists()),
@@ -84,18 +150,19 @@ def reset():
 
 
 def shutdown():
-    global _session
+    global _session, _bound_folder
     with _lock:
         _session = None
+        _bound_folder = None
 
 
 atexit.register(shutdown)
 
 
 class ExportSession:
-    def __init__(self):
-        self.id = "session_" + uuid4().hex[:6]
-        self.folder = EXPORT_ROOT / self.id
+    def __init__(self, folder=None):
+        self.id = Path(folder).name if folder else "session_" + uuid4().hex[:6]
+        self.folder = Path(folder) if folder else EXPORT_ROOT / self.id
         (self.folder / FIGURES).mkdir(parents=True, exist_ok=True)
         self.created_at = now()
         self.dataset: str | None = None
@@ -108,20 +175,10 @@ class ExportSession:
 
     @classmethod
     def load(cls, folder):
-        def validate(value):
-            if value["version"] != 1 or value["id"] != folder.name:
-                raise ValueError("Unsupported export queue version.")
-            if not isinstance(value["items"], list):
-                raise ValueError("Invalid export queue.")
-            value["created_at"], value["dataset"]
-            int(value["counter"])
-            for item in value["items"]:
-                if Path(item["stored"]).name != item["stored"]:
-                    raise ValueError("Invalid figure path.")
-                for key in ("id", "filename", "serial", "size_bytes", "summary", "render", "view_state", "format", "view_type", "folder", "index", "width_mm", "height_mm", "dpi", "pixel_size", "scale", "created_at", "detail"):
-                    item[key]
-            return value
-        saved = read_json(folder / "queue.json", validate)
+        folder = Path(folder)
+        saved = read_json(folder / "queue.json", lambda value: validate_queue(value, folder.name))
+        if saved is None:
+            raise ValueError("Export queue not found.")
         result = cls.__new__(cls)
         result.id, result.folder = saved["id"], folder
         result.created_at, result.dataset = saved["created_at"], saved["dataset"]
@@ -156,13 +213,17 @@ class ExportSession:
             "version": 1, "id": self.id, "created_at": self.created_at,
             "dataset": self.dataset, "counter": self._counter, "items": self.items,
         }
-        atomic_json(self.folder / "queue.json", saved)
+        manifest = self.manifest()
+        # Validate all derived metadata before committing the authoritative file.
+        json.dumps(manifest, allow_nan=False)
+        atomic_json(self.folder / "queue.json", saved,
+                    validate=lambda value: validate_queue(value, self.id))
         try:
             # Mirror the committed queue: deleted files must not reappear from
             # an old backup. The primary document is the transaction commit.
             atomic_json(self.folder / "queue.json.bak", saved, backup=False)
-            atomic_json(self.folder / "manifest.json", self.manifest())
-        except OSError:
+            atomic_json(self.folder / "manifest.json", manifest)
+        except (OSError, ValueError, TypeError):
             pass  # ZIP builds its manifest from the authoritative queue.
 
     def _detail(self, item: dict) -> str:
@@ -238,15 +299,11 @@ class ExportSession:
             render = {**render, "pixel_size": list(pixel_size), "width": width_mm,
                       "height": height_mm, "dpi": dpi}
         filename = self._unique(filename)
-        self._counter += 1
-        serial = self._counter
+        serial = self._counter + 1
         item_id = f"exp_{serial:04d}"
         index = len(self.items) + 1
         stored = f"{serial:03d}_{filename}"
         path = self.folder / FIGURES / stored
-        path.write_bytes(data)
-        self._bytes += len(data)
-        self._names.add(filename.lower())
         item = {
             "id": item_id,
             "index": index,
@@ -270,12 +327,22 @@ class ExportSession:
             "render": render or {},
         }
         item["detail"] = self._detail(item)
+        # A rejected state must not leave a file or consume a figure identity.
+        json.dumps(item, allow_nan=False)
+        try:
+            path.write_bytes(data)
+        except OSError:
+            path.unlink(missing_ok=True)
+            raise
+        self._counter = serial
+        self._bytes += len(data)
+        self._names.add(filename.lower())
         self.items.append(item)
         previous_dataset = self.dataset
         self.dataset = dataset
         try:
             self._write_manifest()
-        except OSError:
+        except (OSError, ValueError, TypeError):
             self.items.remove(item)
             self._names.discard(filename.lower())
             self._bytes -= len(data)
@@ -308,7 +375,11 @@ class ExportSession:
         candidate = self._unique(candidate, ignore=item["filename"])
         old = self._stored(item)
         new = self.folder / FIGURES / f"{item['serial']:03d}_{candidate}"
-        shutil.copyfile(old, new)
+        try:
+            shutil.copyfile(old, new)
+        except OSError:
+            new.unlink(missing_ok=True)
+            raise
         previous = dict(item)
         self._names.discard(item["filename"].lower())
         self._names.add(candidate.lower())
@@ -319,7 +390,7 @@ class ExportSession:
         item["detail"] = self._detail(item)
         try:
             self._write_manifest()
-        except OSError:
+        except (OSError, ValueError, TypeError):
             self._names.discard(candidate.lower())
             self._names.add(previous["filename"].lower())
             item.clear()
@@ -341,7 +412,7 @@ class ExportSession:
             remaining["index"] = position
         try:
             self._write_manifest()
-        except OSError:
+        except (OSError, ValueError, TypeError):
             self.items = previous_items
             self._names.add(item["filename"].lower())
             self._bytes += item["size_bytes"]
@@ -355,11 +426,10 @@ class ExportSession:
         self.items = []
         self._names = set()
         self._bytes = 0
-        self._counter = 0
         self.dataset = None
         try:
             self._write_manifest()
-        except OSError:
+        except (OSError, ValueError, TypeError):
             self.items, self._names, self._bytes, self._counter, self.dataset = previous
             raise
         shutil.rmtree(self.folder / FIGURES, ignore_errors=True)
@@ -432,14 +502,16 @@ class ExportSession:
         prefix = f"SeisCanvas_{dataset}_Export" if dataset else "SeisCanvas_BatchExport"
         filename = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M')}.zip"
 
-        for old in self.folder.glob("_archive_*.zip"):
-            old.unlink(missing_ok=True)
         path = self.folder / f"_archive_{uuid4().hex[:8]}.zip"
-        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-            for item, figure in zip(items, manifest["figures"]):
-                archive.write(self._stored(item), figure["file"])
-            archive.writestr(
-                "export_manifest.json",
-                json.dumps(manifest, ensure_ascii=False, indent=2),
-            )
+        try:
+            with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+                for item, figure in zip(items, manifest["figures"]):
+                    archive.write(self._stored(item), figure["file"])
+                archive.writestr(
+                    "export_manifest.json",
+                    json.dumps(manifest, ensure_ascii=False, allow_nan=False, indent=2),
+                )
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
         return path, filename, manifest

@@ -58,7 +58,9 @@ def drawing_state(horizons):
     }
 
 
-def save(client, result, state, revision=0):
+def save(client, result, state, revision=None):
+    if revision is None:
+        revision = server.project.read()["revision"]
     return client.put("/api/workspace", json={"project_id": result["project_id"], "revision": revision, "state": state})
 
 
@@ -83,7 +85,7 @@ def test_refresh_and_restart_restore_all_settings_and_stable_sources(cube, tmp_p
     restored = client.get("/api/workspace").json()
     assert restored["issues"] == []
     assert restored["state"] == state
-    assert restored["revision"] == 1
+    assert restored["revision"] == 2
     assert restored["metadata"]["filename"] == "tiny.segy"
     assert [h["id"] for h in restored["horizons"]] == [h["id"] for h in styles]
     assert all(h["opacity"] == 0.6 and not h["lighting"] for h in restored["horizons"])
@@ -104,6 +106,7 @@ from fastapi.testclient import TestClient
 from backend.main import app
 client = TestClient(app)
 workspace = client.get('/api/workspace').json()
+client.headers.update({'X-SeisCanvas-Project': workspace['project_id'], 'X-SeisCanvas-Epoch': workspace['activation_epoch']})
 queue = client.get('/api/export/queue').json()
 image = client.get('/api/export/queue/' + queue['items'][0]['id'] + '/file').content
 print(json.dumps({'workspace': workspace, 'queue': queue, 'hash': hashlib.sha256(image).hexdigest()}))
@@ -158,7 +161,8 @@ def test_rename_delete_and_delayed_save_do_not_resurrect_old_horizons(cube, tmp_
     assert save(client, result, state).status_code == 200
     assert client.patch(f"/api/horizons/{styles[0]['id']}", json={"name": "新名称"}).status_code == 200
     assert client.delete(f"/api/horizons/{styles[1]['id']}").status_code == 200
-    assert save(client, result, state, revision=1).status_code == 200
+    assert save(client, result, state, revision=2).status_code == 409
+    assert save(client, result, state).status_code == 200
     restart()
     restored = client.get("/api/workspace").json()
     assert [(h["id"], h["name"]) for h in restored["horizons"]] == [(styles[0]["id"], "新名称")]
@@ -233,7 +237,7 @@ def test_stale_project_and_revision_cannot_replace_newer_work(cube):
     client, first = open_project(cube)
     state = drawing_state([])
     assert save(client, first, state).status_code == 200
-    assert save(client, first, state).status_code == 409
+    assert save(client, first, state, revision=0).status_code == 409
     second = client.post("/api/segy/local", json={"path": str(cube.path)}).json()
     assert second["project_id"] != first["project_id"]
     assert save(client, first, state, revision=1).status_code == 409
@@ -262,6 +266,7 @@ def test_atomic_backup_recovers_corrupt_primary_and_preserves_failed_write(tmp_p
 def test_damaged_project_is_reported_without_writing_defaults(cube):
     client, _ = open_project(cube)
     server.project.path.write_text("broken")
+    server.project.path.with_suffix(".json.bak").unlink(missing_ok=True)
     restart()
     response = client.get("/api/workspace")
     assert response.status_code == 400

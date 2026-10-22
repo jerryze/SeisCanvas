@@ -1,76 +1,111 @@
-import { useEffect, useRef, useState } from "react";
-import { api, json } from "../api/client";
-import { WorkspaceState, DRAFT_KEY } from "../workspace";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { api, ApiError, getApiProject, json } from "../api/client";
+import { WorkspaceState, draftKey, draftTabId } from "../workspace";
 
-type Status = "idle" | "saving" | "saved" | "error";
+type Status = "idle" | "dirty" | "saving" | "saved" | "error";
 
-/** Serial saves keep revisions ordered; a local draft covers a quick refresh. */
+/** One serial writer, an awaitable flush, and a draft owned by this project/tab. */
 export function useWorkspacePersistence(
   state: WorkspaceState,
-  project: { project_id: string | null; revision: number; issues: unknown[] } | null,
+  project: { project_id: string | null; revision: number; state?: WorkspaceState | null; issues: unknown[] } | null,
   ready: boolean,
   onError: (message: string) => void,
 ) {
   const [status, setStatus] = useState<Status>("idle");
-  const current = useRef({ id: "", revision: 0, saved: "", latest: "", inflight: "", running: false, blocked: false });
+  const [draftWarning, setDraftWarning] = useState("");
+  const session = useRef({ id: "", saved: "", latest: "", inflight: "", paused: false, blocked: false,
+    alive: true, revision: 0, tab: draftTabId(), running: null as Promise<void> | null });
   const failure = useRef(onError);
   failure.current = onError;
+  const writeDraft = useCallback(() => {
+    const s = session.current;
+    if (!s.id || !s.latest || !s.alive) return;
+    if (!s.inflight && getApiProject().project_id === s.id) s.revision = getApiProject().revision;
+    try {
+      if (!s.inflight && s.latest === s.saved) {
+        localStorage.removeItem(draftKey(s.id, s.tab));
+        return;
+      }
+      localStorage.setItem(draftKey(s.id, s.tab), JSON.stringify({ version: 1, project_id: s.id,
+        revision: s.revision, updated_at: new Date().toISOString(), state: JSON.parse(s.latest), inflight: s.inflight ? JSON.parse(s.inflight) : null }));
+    } catch { setDraftWarning("草稿保存失败。"); }
+  }, []);
+
+  // Capture the latest committed render before a Save/Switch click can flush.
+  useLayoutEffect(() => {
+    if (!ready || !project?.project_id || project.issues.length) return;
+    const s = session.current;
+    if (s.id !== project.project_id) {
+      s.id = project.project_id;
+      s.revision = project.revision;
+      s.saved = project.state ? JSON.stringify(project.state) : "";
+    }
+    s.latest = JSON.stringify(state);
+    writeDraft();
+    if (!s.running) setStatus(s.latest === s.saved ? "saved" : "dirty");
+  }, [state, project, ready, writeDraft]);
+
+  const flush = useCallback(async () => {
+    const s = session.current;
+    if (!s.id) return getApiProject().revision;
+    if (s.blocked) throw new Error("项目已更新，请重新加载。");
+    if (!s.running) {
+      s.running = (async () => {
+        try {
+          while (s.alive && s.latest !== s.saved) {
+            const body = s.latest;
+            s.inflight = body;
+            s.revision = getApiProject().revision;
+            writeDraft();
+            setStatus("saving");
+            const r = await api("/workspace", { ...json({ project_id: s.id, revision: s.revision, state: JSON.parse(body) }), method: "PUT",
+              onRevision: revision => { s.revision = revision; writeDraft(); },
+            });
+            const result = await r.json();
+            s.revision = result.revision;
+            s.saved = body;
+            s.inflight = "";
+            writeDraft();
+          }
+          if (s.alive) setStatus("saved");
+        } catch (error) {
+          if (s.alive) {
+            setStatus("error");
+            s.blocked = error instanceof ApiError && ["PROJECT_CHANGED", "REVISION_CONFLICT"].includes(error.code);
+            failure.current("保存失败：" + (error as Error).message);
+          }
+          throw error;
+        }
+      })().finally(() => { s.running = null; });
+    }
+    await s.running;
+    return s.revision;
+  }, [writeDraft]);
 
   useEffect(() => {
-    if (!ready || !project?.project_id || project.issues.length) return;
-    if (current.current.id !== project.project_id) {
-      current.current = { id: project.project_id, revision: project.revision, saved: "", latest: "", inflight: "", running: false, blocked: false };
-    }
-    const session = current.current;
-    const encoded = JSON.stringify(state);
-    session.latest = encoded;
-    const writeDraft = () => {
-      try {
-        localStorage.setItem(DRAFT_KEY, JSON.stringify({ version: 1, project_id: session.id, revision: session.revision, state: JSON.parse(session.latest), inflight: session.inflight ? JSON.parse(session.inflight) : null }));
-      } catch { /* Server persistence still works if browser storage is disabled. */ }
+    if (!ready || session.current.paused || !session.current.id || session.current.blocked || session.current.saved === session.current.latest) return;
+    const timer = setTimeout(() => { if (!session.current.paused) void flush().catch(() => undefined); }, 500);
+    return () => clearTimeout(timer);
+  }, [state, project, ready, flush]);
+
+  useEffect(() => {
+    const s = session.current;
+    s.alive = true;
+    const hidden = () => {
+      writeDraft();
+      if (!s.paused) void flush().catch(() => undefined);
     };
-    writeDraft();
-    if (encoded === session.saved || session.blocked) return;
-    setStatus("saving");
-    const save = async () => {
-      if (session.running || session.blocked || current.current !== session) return;
-      session.running = true;
-      try {
-        while (session.saved !== session.latest && current.current === session) {
-          const body = session.latest;
-          session.inflight = body;
-          writeDraft();
-          const r = await api("/workspace", {
-            ...json({ project_id: session.id, revision: session.revision, state: JSON.parse(body) }), method: "PUT",
-          });
-          const result = await r.json();
-          session.revision = result.revision;
-          session.saved = body;
-          session.inflight = "";
-          if (current.current === session) writeDraft();
-        }
-        if (current.current === session) setStatus("saved");
-      } catch (e) {
-        if (current.current === session) {
-          setStatus("error");
-          failure.current("自动保存失败：" + (e as Error).message);
-          // A conflict requires explicit restoration, not an automatic retry.
-          session.blocked = (e as Error).message.includes("刷新页面") || (e as Error).message.includes("完整恢复");
-        }
-      } finally {
-        session.running = false;
-      }
-    };
-    const timer = setTimeout(save, 500);
-    const flush = () => { writeDraft(); void save(); };
-    const hidden = () => { if (document.visibilityState === "hidden") flush(); };
-    window.addEventListener("pagehide", flush);
-    document.addEventListener("visibilitychange", hidden);
+    const visibility = () => { if (document.visibilityState === "hidden") hidden(); };
+    window.addEventListener("pagehide", hidden);
+    document.addEventListener("visibilitychange", visibility);
     return () => {
-      clearTimeout(timer);
-      window.removeEventListener("pagehide", flush);
-      document.removeEventListener("visibilitychange", hidden);
+      s.alive = false;
+      window.removeEventListener("pagehide", hidden);
+      document.removeEventListener("visibilitychange", visibility);
     };
-  }, [state, project, ready]);
-  return status;
+  }, [flush, writeDraft]);
+  return { status, draftWarning, flush,
+    pause: () => { session.current.paused = true; },
+    resume: () => { session.current.paused = false; },
+  };
 }

@@ -2,6 +2,7 @@ import ExportDialog from "./components/ExportDialog";
 import brandSymbol from "./assets/seiscanvas-symbol.svg?url";
 import brandWordmark from "./assets/seiscanvas-wordmark.svg?url";
 import ExportQueue from "./components/ExportQueue";
+import ProjectMenu, { type ProjectAction } from "./components/ProjectMenu";
 import HorizonMap from "./components/HorizonMap";
 import { mapSelectionError } from "./components/horizonMapLogic";
 import HorizonImportModal, {
@@ -14,8 +15,6 @@ import SectionPanel, { SectionNavigation } from "./components/panels/SectionPane
 import SeismicPanel from "./components/panels/SeismicPanel";
 import HorizonPanel from "./components/panels/HorizonPanel";
 import SectionPlot from "./components/SeismicViewer2D/SectionPlot";
-import { coversViewport } from "./components/loadedRaster";
-import { samplingViewport, sectionResponseError, SectionViewport } from "./components/SeismicViewer2D/sectionDisplay";
 import { useState, useEffect, useRef, useMemo } from "react";
 import {
   Activity,
@@ -29,6 +28,7 @@ import {
   X,
   LoaderCircle,
   Package,
+  Save,
 } from "lucide-react";
 
 import {
@@ -36,13 +36,12 @@ import {
   SS,
   VS,
   Meta,
-  Section,
   ExportDialogSettings,
   MapProfileOverlay,
   defaultScene,
   makeSlice,
 } from "./types";
-import { api, json } from "./api/client";
+import { api, json, getApiProject, setApiProject, waitForMutations } from "./api/client";
 import { formatAmplitude } from "./format";
 import { useOriginalProbe, ProbeReadout } from "./components/Probe";
 import Scene3D, { Scene3DHandle } from "./components/SeismicViewer3D/Scene3D";
@@ -54,7 +53,8 @@ import {
 import { useExportQueue } from "./hooks/useExportQueue";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence";
 import { useModalFocus } from "./hooks/useModalFocus";
-import { initialMapWorkspace, initialExport3D, reconcileMapWorkspace, restoreState, readDraft, type WorkspaceResponse, type WorkspaceState } from "./workspace";
+import { useSectionData } from "./hooks/useSectionData";
+import { initialMapWorkspace, initialExport3D, reconcileMapWorkspace, restoreState, readDraft, draftTabId, projectDrafts, type DraftCandidate, type WorkspaceResponse, type WorkspaceState } from "./workspace";
 
 /* -------------------------------------------------------------------------- */
 /* Initial state                                                              */
@@ -144,18 +144,13 @@ function loadedView(meta: Meta, horizons: HS[]): VS {
 /* App                                                                        */
 /* -------------------------------------------------------------------------- */
 
-export default function App() {
+function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: { initialProject: WorkspaceResponse; onActivate: (result: WorkspaceResponse) => void; bootstrapError?: string }) {
   /* ------------------------------------------------------------------------ */
   /* Refs                                                                     */
   /* ------------------------------------------------------------------------ */
 
   const sceneRef = useRef<Scene3DHandle>(null);
-  const plotWrap = useRef<HTMLDivElement>(null);
-  const sectionViewportRef = useRef<SectionViewport | null>(null);
   const deleteDialog = useRef<HTMLDivElement>(null);
-
-  const requestId = useRef(0);
-  const loadedSection = useRef<{ meta: Meta; key: string; data: Section } | null>(null);
 
   /* ------------------------------------------------------------------------ */
   /* State                                                                    */
@@ -169,8 +164,6 @@ export default function App() {
 
   const [meta, setMeta] = useState<Meta | null>(null);
   const [view, setView] = useState<VS>(initial);
-  const [section, setSection] = useState<Section | null>(null);
-  const [sectionViewport, setSectionViewport] = useState<SectionViewport | null>(null);
 
   const viewRef = useRef(view);
 
@@ -178,9 +171,12 @@ export default function App() {
   const [mapColors, setMapColors] = useState<Record<string, any[]>>({});
 
   const [busy, setBusy] = useState("正在恢复上次工作…");
-  const [loading, setLoading] = useState(false);
 
-  const [error, setError] = useState("");
+  const [error, setError] = useState(bootstrapError);
+  const [conflict, setConflict] = useState("");
+  const [sidebarValues, setSidebarValues] = useState<Record<string, string | boolean>>(initialProject.state?.sidebarValues || {});
+  const [sidebarScroll, setSidebarScroll] = useState<Record<string, number>>(initialProject.state?.sidebarScroll || {});
+  const operation = useRef(false);
   const [notice, setNotice] = useState("");
 
   const [geometryMode, setGeometryMode] = useState("auto");
@@ -200,6 +196,9 @@ export default function App() {
   const [mapWorkspace, setMapWorkspace] = useState(initialMapWorkspace);
   const [project, setProject] = useState<WorkspaceResponse | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [draftChoices, setDraftChoices] = useState<DraftCandidate[]>([]);
+  const pendingRecovery = useRef<WorkspaceResponse | null>(null);
+  const draftsDialog = useRef<HTMLDivElement>(null);
 
   const [queueOpen, setQueueOpen] = useState(false);
   const [dataset, setDataset] = useState("");
@@ -213,19 +212,34 @@ export default function App() {
   } = useOriginalProbe();
 
   const [revision, setRevision] = useState(0);
+  const { section, loading, plotWrap, sectionViewportRef, measuredSectionViewport, resetSection } =
+    useSectionData(meta, view, revision, setError);
   useModalFocus(deleteDialog, !!horizonToDelete, () => setHorizonToDelete(null), !busy);
 
   viewRef.current = view;
 
   const workspaceState = useMemo<WorkspaceState>(() => ({
     version: 1, view, map: mapWorkspace, settings, settings3D, dataset, selected,
-    bytes, geometryMode, sidebar: true, drag,
-  }), [view, mapWorkspace, settings, settings3D, dataset, selected, bytes, geometryMode, drag]);
-  const saveStatus = useWorkspacePersistence(workspaceState, project, hydrated, setError);
+    bytes, geometryMode, sidebar: true, drag, sidebarValues, sidebarScroll,
+  }), [view, mapWorkspace, settings, settings3D, dataset, selected, bytes, geometryMode, drag, sidebarValues, sidebarScroll]);
+  const persistence = useWorkspacePersistence(workspaceState, project, hydrated && !conflict, setError);
+  const saveStatus = persistence.status;
 
-  function applyRecovered(result: WorkspaceResponse) {
+  function applyRecovered(result: WorkspaceResponse, chosenDraft?: WorkspaceState | null) {
     setProject(result);
     if (!result.project_id) return;
+    if (chosenDraft === undefined && !result.issues.length) {
+      try {
+        const candidates = projectDrafts(localStorage, result.project_id, result.revision, result.state);
+        const unique = [...new Map(candidates.filter(d => d.compatible).map(d => [JSON.stringify(d.state), d])).values()];
+        if (unique.length > 1 || candidates.some(d => !d.compatible)) {
+          pendingRecovery.current = result;
+          setDraftChoices(candidates);
+          return;
+        }
+        if (unique.length === 1) chosenDraft = unique[0].state;
+      } catch { /* Server state is available without browser storage. */ }
+    }
     const defaults: WorkspaceState = {
       version: 1, view: result.metadata ? loadedView(result.metadata, result.horizons) : initial,
       map: initialMapWorkspace(), settings: initialExport, settings3D: initialExport3D,
@@ -234,11 +248,9 @@ export default function App() {
       geometryMode: result.source?.geometry_mode || "auto",
     };
     let draft: WorkspaceState | null = null;
-    try { draft = readDraft(localStorage, result.project_id, result.revision, result.state); } catch { /* Storage may be disabled. */ }
+    try { draft = chosenDraft === undefined ? readDraft(localStorage, result.project_id, result.revision, result.state, draftTabId()) : chosenDraft; } catch { /* Storage may be disabled. */ }
     const state = restoreState(defaults, result.issues.length ? result.state : draft || result.state, result.horizons);
-    requestId.current++;
-    loadedSection.current = null;
-    setSection(null);
+    resetSection();
     setMeta(result.metadata);
     setView(result.metadata ? state.view : { ...state.view, view_mode: "2d" });
     setMapWorkspace(state.map);
@@ -249,26 +261,126 @@ export default function App() {
     setBytes(state.bytes);
     setGeometryMode(state.geometryMode);
     setDrag(state.drag);
+    setSidebarValues(state.sidebarValues || {});
+    setSidebarScroll(state.sidebarScroll || {});
     setRevision(v => v + 1);
-    if (!result.issues.length) setNotice("已恢复上次工作");
+    if (!result.issues.length && result.metadata) setNotice(result.notice || "已恢复项目");
   }
 
   useEffect(() => {
-    let active = true;
-    api("/workspace")
-      .then(r => r.json())
-      .then(result => { if (active) { applyRecovered(result); setHydrated(true); } })
-      .catch(e => { if (active) setError("恢复失败：" + e.message); })
-      .finally(() => { if (active) setBusy(""); });
-    return () => { active = false; };
+    applyRecovered(initialProject);
+    if (!pendingRecovery.current) setHydrated(true);
+    setBusy("");
   }, []);
 
-  function relink(horizon_id: string | null) {
-    task("重新定位数据文件…", async () => {
-      const result = await (await api("/workspace/relink", json({ project_id: project?.project_id, horizon_id }))).json();
-      if (!result.cancelled) { applyRecovered(result); setHydrated(true); }
-    });
+  async function projectAction(action: ProjectAction) {
+    if (operation.current) throw new Error("请等待当前操作完成。");
+    operation.current = true;
+    persistence.pause();
+    setError("");
+    setBusy("正在保存当前项目…");
+    let committing = false;
+    let intendedTarget = action.id;
+    const origin = { ...getApiProject() };
+    let preparedToken = "";
+    const cancelling = () => setBusy("正在取消，等待数据读取结束…");
+    action.signal?.addEventListener("abort", cancelling);
+    try {
+      if (!project?.issues.length && !conflict) await persistence.flush();
+      await waitForMutations();
+      action.signal?.throwIfAborted();
+      if (action.type === "relink") {
+        setBusy("正在重新关联文件…");
+        const result = await (await api(`/projects/${action.id}/relink`, json(action.relink))).json();
+        if (result.project_id && action.relink?.confirm) onActivate(result);
+        return result;
+      }
+      if (action.type === "rename") {
+        const result = await (await api(`/projects/${project?.project_id}`, { ...json({ name: action.name }), method: "PATCH" })).json();
+        setProject(p => p ? { ...p, name: result.name } : p);
+        setNotice("项目已重命名");
+        return;
+      }
+      let target = action.id;
+      if (action.type === "create" || action.type === "clone") {
+        setBusy("正在创建项目…");
+        const result = await (await api("/projects", json({ name: action.name, request_id: action.requestId, template_id: action.type === "clone" ? project?.project_id : null }))).json();
+        target = result.project_id;
+      }
+      intendedTarget = target;
+      action.signal?.throwIfAborted();
+      setBusy("正在读取项目数据…");
+      const prepared = await (await api("/project-switches", json({ target_id: target, source_revision: getApiProject().project_id ? getApiProject().revision : null }))).json();
+      preparedToken = prepared.token;
+      if (action.signal?.aborted) {
+        await api(`/project-switches/${prepared.token}`, { method: "DELETE" });
+        action.signal.throwIfAborted();
+      }
+      setBusy("正在恢复项目视图…");
+      action.onCommit?.();
+      committing = true;
+      const result = await (await api(`/project-switches/${prepared.token}/commit`, { method: "POST" })).json();
+      onActivate(result);
+    } catch (e) {
+      // A lost commit response must be reconciled with the server's identity.
+      if (committing) {
+        const result = await api("/workspace").then(r => r.json()).catch(() => null);
+        if (result?.project_id === intendedTarget) { onActivate(result); return; }
+        if (result && (result.project_id !== origin.project_id || result.activation_epoch !== origin.activation_epoch)) {
+          onActivate({ ...result, notice: "活动项目已在其他页面切换，已恢复服务端项目。" });
+          return;
+        }
+        if (!result) setConflict("无法确认切换结果，请重新加载。");
+        else if (preparedToken) await api(`/project-switches/${preparedToken}`, { method: "DELETE" }).catch(() => undefined);
+      }
+      throw e;
+    } finally {
+      action.signal?.removeEventListener("abort", cancelling);
+      operation.current = false;
+      persistence.resume();
+      setBusy("");
+    }
   }
+
+  function relink(horizon_id: string | null) {
+    void projectAction({ type: "relink", id: project?.project_id || "", relink: { horizon_id } }).then(async candidate => {
+      if (!candidate || candidate.cancelled) return;
+      // The project browser presents the candidate details and confirmation.
+      setRecoveryCandidate({ horizon_id, ...candidate });
+    }).catch(e => setError(e.message));
+  }
+  const [recoveryCandidate, setRecoveryCandidate] = useState<any>(null);
+  function resolveDraft(draft: WorkspaceState | null) {
+    const recovered = pendingRecovery.current;
+    if (!recovered) return;
+    try { for (const choice of draftChoices) localStorage.removeItem(choice.key); } catch { /* Still restore the selected state. */ }
+    pendingRecovery.current = null;
+    setDraftChoices([]);
+    applyRecovered(recovered, draft);
+    setHydrated(true);
+  }
+  useModalFocus(draftsDialog, !!draftChoices.length, () => resolveDraft(null));
+  const recoveryDialog = useRef<HTMLDivElement>(null);
+  useModalFocus(recoveryDialog, !!recoveryCandidate, () => setRecoveryCandidate(null), !busy);
+
+  async function saveProject() {
+    if (operation.current || !project?.project_id || conflict) return;
+    await task("正在保存项目…", async () => { await persistence.flush(); setNotice("项目已保存"); });
+  }
+  const saveProjectRef = useRef(saveProject);
+  saveProjectRef.current = saveProject;
+  useEffect(() => {
+    const saveKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        if (!document.querySelector('[aria-modal="true"]')) void saveProjectRef.current();
+      }
+    };
+    const changed = (event: Event) => { persistence.pause(); setConflict((event as CustomEvent).detail.message); };
+    window.addEventListener("keydown", saveKey);
+    window.addEventListener("seiscanvas-project-conflict", changed);
+    return () => { window.removeEventListener("keydown", saveKey); window.removeEventListener("seiscanvas-project-conflict", changed); };
+  }, []);
 
   /* ------------------------------------------------------------------------ */
   /* Load colormaps                                                           */
@@ -300,6 +412,8 @@ export default function App() {
   /* ------------------------------------------------------------------------ */
 
   async function task(label: string, fn: () => Promise<void>) {
+    if (operation.current) return;
+    operation.current = true;
     setBusy(label);
     setError("");
 
@@ -308,6 +422,8 @@ export default function App() {
     } catch (e) {
       setError((e as Error).message);
     } finally {
+      operation.current = false;
+      persistence.resume();
       setBusy("");
     }
   }
@@ -331,22 +447,7 @@ export default function App() {
   /* ------------------------------------------------------------------------ */
 
   function loaded(result: WorkspaceResponse) {
-    if (!result.metadata) return;
-    requestId.current++;
-
-    loadedSection.current = null;
-    setSection(null);
-    setMeta(result.metadata);
-    setDataset("");
-    setSelected(result.horizons[0]?.id || "");
-    setProject({ ...result, issues: [] });
-    setHydrated(true);
-    setView(loadedView(result.metadata, result.horizons));
-    const map = initialMapWorkspace();
-    map.state.horizon = result.horizons[0]?.id || "";
-    setMapWorkspace(map);
-
-    setNotice("数据已加载");
+    onActivate(result);
   }
 
   /* ------------------------------------------------------------------------ */
@@ -363,6 +464,8 @@ export default function App() {
 
   function loadExample() {
     task("加载 F3 示例数据…", async () => {
+      await persistence.flush();
+      persistence.pause();
       const r = await api(`/example?ilbyte=${bytes.il}&xlbyte=${bytes.xl}`, {
         method: "POST",
       });
@@ -377,6 +480,8 @@ export default function App() {
 
   function openSegy() {
     task("正在导入 SEG-Y…", async () => {
+      await persistence.flush();
+      persistence.pause();
       const job_id = crypto.randomUUID();
       setImportProgress({
         percent: 0,
@@ -515,128 +620,6 @@ export default function App() {
       setNotice(`已移除层位 ${h.name}`);
     });
   }
-
-  /* ------------------------------------------------------------------------ */
-  /* Request 2D section                                                       */
-  /* ------------------------------------------------------------------------ */
-
-  // CSS plot dimensions control trace density/time sampling and stay transient.
-  // Raster target pixels additionally include the display device pixel ratio.
-  const samplingSize = samplingViewport(view.seismic, sectionViewport);
-  const sectionContentKey = JSON.stringify([revision, view.view_type, view.section_number,
-    view.horizon_sg, view.horizon_sg_window,
-    view.seismic.clip_mode, view.seismic.clip_percentile, view.seismic.symmetric,
-    view.seismic.vmin, view.seismic.vmax, view.seismic.reverse_polarity,
-    view.seismic.wiggle, view.seismic.variable_area, view.seismic.wiggle_gain,
-    view.seismic.variable_area_color, view.seismic.background_interpolation, view.seismic.wiggle_interpolation]);
-
-  function measuredSectionViewport(viewport: SectionViewport) {
-    sectionViewportRef.current = viewport;
-    setSectionViewport(current => current?.width === viewport.width && current.height === viewport.height
-      ? current : viewport);
-  }
-
-  useEffect(() => {
-    if (!meta || view.view_mode !== "2d") {
-      setLoading(false);
-      return;
-    }
-
-    const id = ++requestId.current;
-    const abort = new AbortController();
-
-    // Adaptive resolution: ask for the pixels the plot area really shows, so a
-    // zoom can pull finer data out of the SEG-Y instead of magnifying a raster.
-    const box = plotWrap.current;
-    const ratio = Math.min(window.devicePixelRatio || 1, 2);
-    const width = sectionViewportRef.current?.width ?? box?.clientWidth ?? 1;
-    const height = sectionViewportRef.current?.height ?? box?.clientHeight ?? 1;
-    const positions = view.view_type === "inline" ? meta.crosslines : meta.inlines;
-    const fullX = [positions[0] - (positions.length > 1 ? (positions[1] - positions[0]) / 2 : .5),
-      positions.at(-1)! + (positions.length > 1 ? (positions.at(-1)! - positions.at(-2)!) / 2 : .5)];
-    const loaded = loadedSection.current;
-    if (loaded?.meta === meta && loaded.key === sectionContentKey &&
-      coversViewport(loaded.data, view.x_range ?? fullX, view.time_range ?? meta.time_range,
-        Math.round(width * ratio), Math.round(height * ratio), view.seismic.background_interpolation,
-        view.seismic.wiggle || view.seismic.variable_area)) {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-
-    // Two-stage refresh: the current raster stays visible until the debounce
-    // expires and the viewport-matched window arrives.
-    const timer = setTimeout(async () => {
-      try {
-        const requestView = viewRef.current;
-        const viewport = sectionViewportRef.current;
-        const r = await api("/section", {
-          ...json({
-            ...requestView,
-            quality: "interactive",
-            target_width: viewport ? Math.round(viewport.width * ratio)
-              : box ? Math.round(box.clientWidth * ratio) : null,
-            target_height: viewport ? Math.round(viewport.height * ratio)
-              : box ? Math.round(box.clientHeight * ratio) : null,
-            trace_viewport_width: viewport?.width ?? null,
-            trace_viewport_height: viewport?.height ?? null,
-          }),
-          signal: abort.signal,
-        });
-
-        const s = await r.json();
-
-        if (id === requestId.current) {
-          const compatibilityError = sectionResponseError(s, requestView.seismic);
-          if (compatibilityError) throw new Error(compatibilityError);
-          if (requestView.horizon_sg && (!s.horizon_display || s.horizon_display.algorithm !== "sg")) {
-            throw new Error("二维层位平滑后端版本不匹配，请重启 SeisCanvas 后端以启用 SG 平滑。");
-          }
-          setSection(s);
-          loadedSection.current = { meta, key: sectionContentKey, data: s };
-          setError("");
-        }
-      } catch (e) {
-        if ((e as Error).name !== "AbortError" && id === requestId.current) {
-          setError((e as Error).message);
-        }
-      } finally {
-        if (id === requestId.current) {
-          setLoading(false);
-        }
-      }
-    }, 200);
-
-    return () => {
-      clearTimeout(timer);
-      abort.abort();
-    };
-  }, [
-    meta,
-    view.view_mode,
-    view.view_type,
-    view.section_number,
-    view.horizon_sg,
-    view.horizon_sg_window,
-    view.seismic.clip_mode,
-    view.seismic.clip_percentile,
-    view.seismic.symmetric,
-    view.seismic.vmin,
-    view.seismic.vmax,
-    view.seismic.reverse_polarity,
-    view.seismic.wiggle,
-    view.seismic.variable_area,
-    view.seismic.wiggle_gain,
-    view.seismic.variable_area_color,
-    view.seismic.background_interpolation,
-    view.seismic.wiggle_interpolation,
-    view.x_range,
-    view.time_range,
-    samplingSize.width,
-    samplingSize.height,
-    revision,
-    sectionContentKey,
-  ]);
 
   /* ------------------------------------------------------------------------ */
   /* Sections                                                                 */
@@ -826,7 +809,7 @@ export default function App() {
   /* ------------------------------------------------------------------------ */
 
   return (
-    <SidebarStateProvider scope={`${project?.project_id ?? "empty"}:${view.view_mode}`}>
+    <SidebarStateProvider scope={view.view_mode} values={sidebarValues} onChange={setSidebarValues}>
     <div className="app">
       {/* ------------------------------------------------------------------ */}
       {/* Top bar                                                            */}
@@ -853,13 +836,17 @@ export default function App() {
           <span className="version">V0.3</span>
         </div>
 
+        <ProjectMenu project={project} disabled={!!busy || !!conflict} onAction={projectAction}/>
+
         <div className="top-status">
           <span className="status-dot" />
           本地
           <span className="autosave-status" role="status">
-            {busy === "正在恢复上次工作…" ? "恢复中…" : project?.issues.length ? "恢复待处理" : saveStatus === "saving" ? "保存中…" : saveStatus === "saved" ? "已保存" : saveStatus === "error" ? "保存失败" : ""}
+            {busy === "正在恢复上次工作…" ? "恢复中…" : project?.issues.length ? "恢复待处理" : saveStatus === "saving" ? "保存中…" : saveStatus === "saved" ? "已保存" : saveStatus === "error" ? "保存失败" : saveStatus === "dirty" ? "有未保存更改" : ""}
           </span>
         </div>
+
+        <button className="secondary project-save-button" disabled={!project?.project_id || !!busy || !!conflict || !!project.issues.length} onClick={() => void saveProject()} title="保存项目（Ctrl / ⌘ + S）"><Save size={15}/>{saveStatus === "error" ? "重试保存" : "保存项目"}</button>
 
         <button
           className="primary"
@@ -892,12 +879,14 @@ export default function App() {
       {/* Workspace                                                          */}
       {/* ------------------------------------------------------------------ */}
 
-      <div className={`workspace${view.view_mode === "map" ? " map-workspace" : ""}`}>
+      {!!project?.issues.length && <div className="project-recovery-banner" role="alert">{project.issues.map((issue, index) => <div key={index}><span>{issue.message}</span><button className="secondary" disabled={!!busy} onClick={() => relink(issue.horizon_id)}>重新关联…</button></div>)}</div>}
+
+      <div className={`workspace${view.view_mode === "map" ? " map-workspace" : ""}`} inert={!!busy || !!conflict || !!project?.issues.length}>
         {/* ---------------------------------------------------------------- */}
         {/* Sidebar                                                          */}
         {/* ---------------------------------------------------------------- */}
 
-          <Sidebar scope={`${project?.project_id ?? "empty"}:${view.view_mode}`} switcher={
+          <Sidebar key={revision} scope={view.view_mode} savedPositions={sidebarScroll} onPosition={(scope, position) => setSidebarScroll(s => s[scope] === position ? s : { ...s, [scope]: position })} switcher={
               <div className="view-mode-switch segmented" role="group" aria-label="视图模式">
                 {(["2d", "3d", "map"] as const).map(mode => (
                   <button
@@ -993,12 +982,7 @@ export default function App() {
         {/* ---------------------------------------------------------------- */}
 
         <main>
-          {project?.issues.map((issue, index) => (
-            <div className="error recovery-issue" role="alert" key={index}>
-              <span>{issue.message}。原来的工作记录已保留。</span>
-              <button className="secondary" disabled={!!busy} onClick={() => relink(issue.horizon_id)}>重新定位</button>
-            </div>
-          ))}
+
           {error && (
             <div role="alert" className="error">
               <span>{error}</span>
@@ -1116,7 +1100,7 @@ export default function App() {
                         <Activity size={32} strokeWidth={1.5} />
                       </div>
 
-                      <h2>暂无地震数据</h2>
+                      <h2>{project?.name || "暂无地震数据"}</h2>
 
                       <div className="empty-actions">
                         <button
@@ -1194,6 +1178,21 @@ export default function App() {
         </main>
       </div>
 
+      {persistence.draftWarning && <div className="project-switch-progress" role="status">{persistence.draftWarning}</div>}
+      {conflict && <div className="project-conflict" role="alert"><span>{conflict}</span><button className="secondary" onClick={() => window.location.reload()}>重新加载</button></div>}
+      {busy && busy !== "正在恢复上次工作…" && <div className="project-switch-progress" role="status"><LoaderCircle className="spin" size={16}/>{busy}</div>}
+      {!!draftChoices.length && <div className="modal-backdrop project-backdrop"><div className="modal project-dialog" ref={draftsDialog} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="drafts-title">
+        <h2 id="drafts-title">恢复草稿</h2>
+        <div className="project-draft-choices">{draftChoices.map((draft, index) => <div key={draft.key}><span>草稿 {index + 1} · {draft.updated_at ? new Date(draft.updated_at).toLocaleString() : `版本 ${draft.revision}`}<small>{draft.compatible ? "可恢复" : "与当前版本冲突"}</small></span><button className="secondary" onClick={() => {
+          const url = URL.createObjectURL(new Blob([JSON.stringify(draft, null, 2)], { type: "application/json" })); const a = document.createElement("a"); a.href = url; a.download = `SeisCanvas-draft-${index + 1}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }}>下载</button>{draft.compatible && <button className="primary" onClick={() => resolveDraft(draft.state)}>恢复</button>}</div>)}</div>
+        <div className="project-actions"><button className="secondary" onClick={() => resolveDraft(null)}>使用已保存版本</button></div>
+      </div></div>}
+      {recoveryCandidate && <div className="modal-backdrop project-backdrop"><div className="modal project-dialog" ref={recoveryDialog} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="recovery-title">
+        <h2 id="recovery-title">确认重新关联文件</h2><dl className="project-detail"><dt>原文件</dt><dd>{recoveryCandidate.previous_path}</dd><dt>新文件</dt><dd>{recoveryCandidate.path}</dd></dl>{recoveryCandidate.horizon_id === null && <p>剖面范围和切片位置将重置。</p>}
+        <div className="project-actions"><button className="secondary" disabled={!!busy} onClick={() => setRecoveryCandidate(null)}>取消</button><button className="primary" disabled={!!busy} onClick={() => { void projectAction({ type: "relink", id: project?.project_id || "", relink: { horizon_id: recoveryCandidate.horizon_id, path: recoveryCandidate.path, revision: recoveryCandidate.revision, file_identity: recoveryCandidate.file_identity, confirm: true } }).then(() => setRecoveryCandidate(null)).catch(e => setError(e.message)); }}>确认关联</button></div>
+      </div></div>}
+
       {/* ------------------------------------------------------------------ */}
       {/* Toast                                                              */}
       {/* ------------------------------------------------------------------ */}
@@ -1248,6 +1247,7 @@ export default function App() {
       {/* ------------------------------------------------------------------ */}
 
       <ExportQueue
+        projectId={project?.project_id}
         open={queueOpen}
         items={queue}
         session={queueSession}
@@ -1277,9 +1277,8 @@ export default function App() {
         <div className="modal-backdrop" onClick={() => !busy && setHorizonToDelete(null)}>
           <div ref={deleteDialog} tabIndex={-1} className="modal delete-horizon-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-horizon-title" onClick={e => e.stopPropagation()}>
             <h2 id="delete-horizon-title">移除层位 {horizonToDelete.name}？</h2>
-            <p>将从当前工作区移除该层位及其样式，原始数据文件会保留。</p>
             {mapWorkspace.state.color_by === "difference" && (mapWorkspace.state.difference_reference === horizonToDelete.id || mapWorkspace.state.difference_comparison === horizonToDelete.id) && (
-              <p className="delete-horizon-impact">此层位用于差值计算，移除后需要重新选择参考或对比层位。</p>
+              <p className="delete-horizon-impact">差值计算需重新选择层位。</p>
             )}
             {error && <p className="error" role="alert">{error}</p>}
             <div className="import-actions">
@@ -1292,4 +1291,27 @@ export default function App() {
     </div>
     </SidebarStateProvider>
   );
+}
+
+
+const emptyProject: WorkspaceResponse = { project_id: null, revision: 0, metadata: null, horizons: [], state: null, issues: [] };
+
+/** The shell owns activation; each project gets a fresh component tree. */
+export default function App() {
+  const [active, setActive] = useState<WorkspaceResponse | null>(null);
+  const [generation, setGeneration] = useState(0);
+  const [startupError, setStartupError] = useState("");
+  function activate(result: WorkspaceResponse) {
+    setApiProject(result);
+    setActive(result);
+    setGeneration(n => n + 1);
+  }
+  useEffect(() => {
+    let alive = true;
+    api("/workspace").then(r => r.json()).then(result => { if (alive) activate(result); })
+      .catch(e => { if (alive) { setStartupError("恢复失败：" + e.message); activate(emptyProject); } });
+    return () => { alive = false; };
+  }, []);
+  if (!active) return <div className="project-switch-progress" role="status"><LoaderCircle size={18} className="spin"/>正在恢复上次项目…</div>;
+  return <ProjectWorkspace key={`${active.project_id}:${active.activation_epoch}:${generation}`} initialProject={active} onActivate={activate} bootstrapError={startupError}/>;
 }

@@ -116,7 +116,7 @@ def test_fit_queue_metadata_and_archive_do_not_render(client, monkeypatch, fmt):
     saved = Path(item['temporary_path']).read_bytes()
     def fail(*a, **kw):
         raise AssertionError('Archive must not re-render')
-    monkeypatch.setattr(service, 'render', fail)
+    monkeypatch.setattr(service, 'render_with_metadata', fail)
     archive = client.post('/api/export/archive')
     assert archive.status_code == 200
     with zipfile.ZipFile(io.BytesIO(archive.content)) as z:
