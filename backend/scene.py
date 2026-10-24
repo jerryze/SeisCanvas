@@ -3,15 +3,15 @@
 from collections import OrderedDict
 import numpy as np
 import segyio
-from backend.rendering import amplitude
+from backend.slice_source import SliceSource, NATIVE_CACHE_ELEMENTS, polarity, section_input, source_limits
 from backend.models import ViewState
 from backend.section_service import section_raster
 from backend.trace_overlay import build_trace_overlay, overlays_enabled
 from backend.preview import sample_horizon_amplitude
 
 
-#: Above this many samples a slice is never read at native resolution; the
-#: renderer reads a bounded supersample instead (4 million float32, ~16 MB).
+#: Budget for the legacy preview endpoint without seismic display settings.
+#: Scientific display paths below use exact native samples via SliceSource.
 SLICE_NATIVE_BUDGET = 4_000_000
 #: Upper bound for the supersampled preview read used when downsampling.
 SLICE_SUPERSAMPLE_BUDGET = 1_000_000
@@ -39,19 +39,18 @@ def timeslice(survey, time):
     # Unstructured depth_slice returns one sample per trace, in file order.
     with segyio.open(str(survey.path), ignore_geometry=True) as f:
         values = np.asarray(f.depth_slice[index]).reshape(-1)
-    grid = np.full(
-        (len(survey.inlines), len(survey.crosslines)), np.nan, dtype=np.float32
-    )
     if survey.regular is not None:
         grid = survey.regular.timeslice_grid(values).copy()
-    elif survey.trace_lookup is not None:
-        valid = survey.trace_lookup >= 0
-        grid[valid] = values[survey.trace_lookup[valid]]
     else:
-        grid[
-            np.searchsorted(survey.inlines, survey.ils),
-            np.searchsorted(survey.crosslines, survey.xls),
-        ] = values
+        grid = np.full((len(survey.inlines), len(survey.crosslines)), np.nan, dtype=np.float32)
+        if survey.trace_lookup is not None:
+            valid = survey.trace_lookup >= 0
+            grid[valid] = values[survey.trace_lookup[valid]]
+        else:
+            grid[
+                np.searchsorted(survey.inlines, survey.ils),
+                np.searchsorted(survey.crosslines, survey.xls),
+            ] = values
     survey.cache[key] = grid
     while len(survey.cache) > 12:
         survey.cache.popitem(last=False)
@@ -80,9 +79,12 @@ def slice_data(survey, kind, position, maximum=256, interpolation="bilinear", *,
         # The native vertical section is shared with the 2D viewer. Time planes
         # keep one original TWT sample and interpolate only spatial amplitudes.
         if kind == "time":
-            actual, native = timeslice(survey, position)
+            if len(a) * len(b) > NATIVE_CACHE_ELEMENTS:
+                native = SliceSource(survey, kind, position)
+            else:
+                actual, native = timeslice(survey, position)
         else:
-            a, b, native = survey.section(kind, actual)
+            a, b, native = section_input(survey, kind, actual)
         width, height = viewport or (maximum, maximum)
         display_state = ViewState(section_number=0, seismic=seismic,
                                   trace_viewport_width=width, trace_viewport_height=height)
@@ -298,6 +300,7 @@ def scene_data(survey, horizons, state):
         },
     }
     stats = []
+    native_slices = []
     maximum = state.scene.quality
     if state.scene.export_long_edge:
         count = sum(sl.visible for kind in ("inline", "crossline", "time") for sl in getattr(state.slices, kind))
@@ -319,9 +322,8 @@ def scene_data(survey, horizons, state):
             )
             data["id"] = sl.id
             result["slices"].append(data)
-            finite = values[np.isfinite(values)]
-            if len(finite):
-                stats.append(finite)
+            native_slices.append(values)
+            stats.append(values)
     # Amplitude-colored horizons share the slice color scale, including when no
     # slices are shown. Cache raw values so polarity/style changes never reread.
     amplitude_meshes = {}
@@ -330,19 +332,27 @@ def scene_data(survey, horizons, state):
             mesh = horizon_amplitude_mesh(survey, horizons[h.id], state.scene.quality)
             amplitude_meshes[h.id] = mesh
             values = np.asarray(mesh["amplitude"], dtype=float)
-            finite = values[np.isfinite(values)]
-            if len(finite):
-                stats.append(finite)
+            # An empty float64 horizon must not promote valid float32 slices:
+            # the original concatenation included only nonempty finite arrays.
+            if np.isfinite(values).any():
+                stats.append(values)
     # All visible seismic surfaces share one amplitude window.
-    samples = np.concatenate(stats) if stats else np.array([0.0])
-    _, lo, hi = amplitude(samples, state.seismic)
+    # A mixed scene may contain both cached small arrays and large lazy slices.
+    # Its native selection is unchanged by viewport/colour-only edits. Horizon
+    # amplitude sets depend on their mesh, so compute those combinations fresh.
+    cache_id = (tuple((sl["kind"], sl["position"]) for sl in result["slices"])
+                if not amplitude_meshes and any(isinstance(source, SliceSource) for source in stats) else None)
+    lo, hi = source_limits(stats, state.seismic, survey=survey, cache_id=cache_id, omit_empty_sources=True)
     result.update(vmin=lo, vmax=hi)
     if overlays_enabled(state.seismic):
-        for sl in result["slices"]:
+        for sl, native in zip(result["slices"], native_slices):
             if sl["kind"] == "time":
                 continue  # A fixed-TWT plane has no time-directed seismic traces.
-            x, time, native = survey.section(sl["kind"], sl["position"])
-            values, _, _ = amplitude(native, state.seismic)
+            if isinstance(native, SliceSource):
+                x, time = native.x, native.time
+            else:
+                x, time, _ = section_input(survey, sl["kind"], sl["position"])
+            values = polarity(native, state.seismic.reverse_polarity)
             width, height = state.scene.slice_viewports.get(sl["id"], (1000, 600))
             display_state = ViewState(section_number=0, seismic=state.seismic,
                                       trace_viewport_width=width, trace_viewport_height=height)

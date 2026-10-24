@@ -2,7 +2,7 @@
 
 The paths use the original section samples and world coordinates. Both the
 viewer and publication renderer call this module with the same display state;
-the section is never read again and display rasters never become trace data.
+large sources read selected original traces and never use display rasters.
 """
 
 import math
@@ -10,6 +10,7 @@ import math
 import numpy as np
 
 from backend import resample
+from backend.slice_source import read_window
 
 
 TRACE_PIXELS = 12.0
@@ -132,7 +133,6 @@ def build_trace_overlay(x, time, amplitudes, state, lo, hi):
     if not overlays_enabled(state.seismic):
         return None
     x, time = np.asarray(x, dtype=float), np.asarray(time, dtype=float)
-    amplitudes = np.asarray(amplitudes)
     viewport = float(state.trace_viewport_width or DEFAULT_VIEWPORT_WIDTH)
     viewport_height = float(state.trace_viewport_height or DEFAULT_VIEWPORT_HEIGHT)
     differences = np.diff(x)
@@ -177,8 +177,10 @@ def build_trace_overlay(x, time, amplitudes, state, lo, hi):
         index = global_indices[displayed]
         baseline = float(x[index])
         scale = float(excursion[displayed]) / normalizer
-        values = (_interpolated_trace(amplitudes[:, index], time, sample_times)
-                  if state.seismic.wiggle_interpolation else amplitudes[t0:t1, index])
+        rows = slice(None) if state.seismic.wiggle_interpolation else slice(t0, t1)
+        original = read_window(amplitudes, rows, slice(index, index + 1))[:, 0]
+        values = (_interpolated_trace(original, time, sample_times)
+                  if state.seismic.wiggle_interpolation else original)
         for nodes in _runs(values, sample_times, low, high):
             if state.seismic.wiggle:
                 _append_path(wiggle, ((baseline + value * scale, at) for at, value in nodes))

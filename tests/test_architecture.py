@@ -42,7 +42,7 @@ def test_backend_dependencies_remain_acyclic():
 
 
 def test_scientific_data_and_numeric_modules_do_not_import_http_or_app_state():
-    modules = ('geometry', 'regular_geometry', 'segy', 'preview', 'resample',
+    modules = ('geometry', 'regular_geometry', 'segy', 'preview', 'resample', 'slice_source', 'amplitude_stats',
                'horizon', 'horizon_cache', 'horizon_display', 'trace_overlay',
                'section_service', 'scene', 'rendering', 'horizon_map')
     for name in modules:

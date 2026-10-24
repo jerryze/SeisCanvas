@@ -1025,6 +1025,32 @@ main {
   width: 720px;
 }
 
+/* Model organisation and explicit geological correspondence. */
+.horizon-model-group { border-top: 1px solid var(--border-light); padding-top: 6px; margin-top: 6px; }
+.horizon-model-heading { display: flex; align-items: center; gap: 7px; min-height: 38px; padding: 0 var(--panel-padding, 16px); }
+.horizon-model-heading > input { width: 14px; height: 14px; accent-color: var(--accent); flex: none; }
+.horizon-model-toggle { display: flex; justify-content: flex-start; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: 5px 0; border: 0; background: transparent; text-align: left; font-weight: 600; color: var(--text); }
+.horizon-model-toggle > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.horizon-model-toggle small { color: var(--text-muted); font-weight: 400; }
+.horizon-model-toggle svg { flex: none; }
+.horizon-model-solo { padding: 4px 5px; border: 0; background: transparent; color: var(--accent); font-size: var(--fs-xs); white-space: nowrap; }
+.horizon-group-style { margin: 0 7px 5px 26px; font-size: var(--fs-xs); color: var(--text-muted); }
+.horizon-group-style > summary { cursor: pointer; padding: 4px 0; }
+.horizon-group-style .field-row { padding: 6px 0; align-items: end; }
+.horizon-layer-badge { flex: none; max-width: 65px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); color: var(--text-secondary); background: var(--surface-subtle); border: 1px solid var(--border-light); border-radius: 4px; padding: 1px 4px; }
+.organization-help { margin: 0; font-size: var(--fs-sm); line-height: 1.6; color: var(--text-secondary); }
+.organization-message { margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--surface-subtle); color: var(--text); font-size: var(--fs-sm); line-height: 1.6; }
+.organization-table-wrap { overflow: auto; max-height: 340px; min-height: 65px; flex-shrink: 0; border: 1px solid var(--border-light); border-radius: 8px; }
+.organization-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); text-align: left; }
+.organization-table th, .organization-table td { padding: 8px 10px; border-bottom: 1px solid var(--border-light); vertical-align: middle; }
+.organization-table th { font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
+.organization-table thead { position: sticky; top: 0; background: var(--surface-subtle); z-index: 1; }
+.organization-table tr:last-child td { border-bottom: 0; }
+.organization-table input:not([type="color"]):not([type="checkbox"]) { min-width: 120px; }
+.organization-table td:first-child { white-space: nowrap; }
+.organization-table input[type="color"] { padding: 0; width: 30px; height: 26px; cursor: pointer; background: transparent; border: 0; }
+.layer-color-dot { display: inline-block; width: 12px; height: 12px; border-radius: 3px; flex: none; margin-right: 5px; }
+
 .import-file-name {
   overflow: hidden;
 
@@ -1554,6 +1580,7 @@ main {
 }
 
 .queue-count { min-width: 25px; padding: 3px 7px; border-radius: 7px; background: var(--primary-soft); color: var(--primary); text-align: center; font-size: var(--fs-sm); }
+.queue-button .queue-active-count { flex-shrink: 0; padding: 2px 6px; border-radius: 5px; background: var(--primary-soft); color: var(--primary); font-size: var(--fs-xs); font-weight: 500; line-height: 1.4; white-space: nowrap; }
 .queue-filter { display: flex; align-items: center; gap: 8px; padding: 14px 18px 10px; }
 .queue-filter > select { width: 145px; height: 36px; font-size: var(--fs-sm); }
 .queue-search { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; height: 36px; padding: 0 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-subtle); color: var(--text-muted); }
@@ -1577,6 +1604,21 @@ main {
   padding: 2px 14px 14px;
   background: var(--surface-subtle);
 }
+
+.queue-jobs { margin: 12px 0 16px; border: 1px solid var(--border); border-radius: 9px; background: #fff; overflow: hidden; }
+.queue-jobs-heading { display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--border-light); }
+.queue-jobs-heading b { font-size: var(--fs-sm); font-weight: 600; }
+.queue-jobs-heading > span { font-size: var(--fs-xs); color: var(--text-muted); }
+.queue-jobs-list { max-height: 290px; overflow-y: auto; }
+.queue-job { display: flex; align-items: center; gap: 10px; padding: 11px 12px; }
+.queue-job + .queue-job { border-top: 1px solid var(--border-light); }
+.queue-job-body { min-width: 0; flex: 1; }
+.queue-job-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0 0 4px; font-size: var(--fs-sm); font-weight: 500; }
+.queue-job-stage { display: flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--text-muted); }
+.queue-job-running .queue-job-stage { color: var(--primary); }
+.queue-job > button { flex-shrink: 0; font-size: var(--fs-xs); padding: 6px 8px; }
+.queue-job-error { margin: 6px 0 0; color: var(--danger); font-size: var(--fs-xs); line-height: 1.5; overflow-wrap: anywhere; }
+.queue-job-cancelled { opacity: .65; }
 
 .queue-empty {
   display: flex;
@@ -1855,4 +1897,73 @@ main {
 .amplitude-key { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) {
   :is(button, input, select, .colormap-trigger) { transition: none; }
+}
+
+/* Persistent recovery action stays available after the short saved toast. */
+.restore-notice { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 80; display: flex; align-items: center; gap: 12px; max-width: min(900px, calc(100vw - 32px)); padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 20px #0002; }
+.restore-notice > span { min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
+.restore-notice small { display: block; margin-top: 4px; }
+.restore-notice button { flex-shrink: 0; }
+.queue-restore-error { margin: 8px 16px; }
+
+/* One task per page; the heading and save action never scroll out of view. */
+.modal.organization-shell { width: 1040px; height: min(760px, 92vh); max-height: 92vh; padding: 0; gap: 0; overflow: hidden; }
+.organization-shell.horizon-import-modal { width: 780px; }
+.organization-shell > .modal-heading { margin: 0; padding: 20px 24px 16px; flex-shrink: 0; align-items: flex-start; }
+.organization-shell .modal-heading h2 { margin-bottom: 6px; }
+.organization-tabs, .import-steps { display: flex; gap: 8px; padding: 0 24px; border-bottom: 1px solid var(--border-light); flex-shrink: 0; }
+.organization-tabs > button, .import-steps > span { flex: 1; min-width: 0; padding: 14px 6px; border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: transparent; color: var(--text-muted); font-size: var(--fs-sm); text-align: center; }
+.organization-tabs > button[aria-selected="true"], .import-steps > span[aria-current="step"] { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+.organization-layout { display: grid; grid-template-columns: 170px minmax(0, 1fr); flex: 1; min-height: 0; }
+.organization-models { padding: 18px 10px; border-right: 1px solid var(--border-light); overflow: auto; background: var(--surface-subtle); }
+.organization-nav-label { display: block; padding: 0 10px 10px; font-size: var(--fs-xs); color: var(--text-muted); }
+.organization-models > button { display: flex; justify-content: space-between; gap: 8px; width: 100%; border: 0; padding: 11px 10px; margin-bottom: 4px; text-align: left; background: transparent; color: var(--text-secondary); }
+.organization-models > button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.organization-models > button[aria-pressed="true"] { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+.organization-models small { flex: none; font-weight: 400; }
+.organization-editor { display: flex; flex-direction: column; align-items: stretch; gap: 12px; min-width: 0; min-height: 0; padding: 18px 24px; overflow: auto; flex: 1; }
+.organization-editor > *, .layer-mapping-editor > * { flex-shrink: 0; }
+.organization-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.organization-section-heading h3 { margin: 0; font-size: 16px; }
+.organization-section-heading > span, .organization-muted { color: var(--text-muted); font-size: var(--fs-sm); }
+.organization-shell .organization-table-wrap { max-height: none; min-height: 0; border-radius: 6px; }
+.organization-shell .organization-table td { overflow-wrap: anywhere; }
+.organization-shell .organization-table td:first-child { white-space: normal; }
+.organization-shell .organization-table th, .organization-shell .organization-table td { padding: 6px 12px; }
+.organization-shell .organization-table td:has(> input[type="checkbox"]), .organization-shell .organization-table th:has(> input[type="checkbox"]) { width: 20px; }
+.organization-shell input:not([type]), .organization-shell input[type="text"] { width: 100%; min-width: 0; height: 36px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font-size: var(--fs-sm); box-sizing: border-box; }
+.organization-search { max-width: 320px; }
+.organization-move { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px; padding: 14px; background: var(--surface-subtle); border-radius: 8px; }
+.organization-move > strong { padding-bottom: 10px; white-space: nowrap; font-weight: 500; font-size: var(--fs-sm); }
+.organization-move > label { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 180px; font-size: var(--fs-sm); color: var(--text-secondary); }
+.organization-move > button { min-height: 36px; }
+.organization-shell .text-action { padding: 6px 8px; background: transparent; border: 0; color: var(--primary); font-size: var(--fs-sm); }
+.organization-footer { display: flex; align-items: center; gap: 10px; padding: 16px 24px; border-top: 1px solid var(--border-light); flex-shrink: 0; background: var(--surface); }
+.organization-footer > span { flex: 1; font-size: var(--fs-xs); color: var(--text-muted); }
+.organization-footer > button { flex-shrink: 0; min-width: 88px; }
+.organization-empty { padding: 24px 12px; color: var(--text-muted); font-size: var(--fs-sm); }
+.layer-mapping-editor { display: flex; flex-direction: column; gap: 12px; }
+.mapping-tools { display: flex; align-items: flex-end; gap: 10px; }
+.mapping-tools label { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 6px; font-size: var(--fs-sm); color: var(--text-secondary); }
+.mapping-tools select { height: 36px; }
+.mapping-tools button { min-height: 36px; white-space: nowrap; }
+.mapping-value { display: flex; align-items: center; gap: 4px; min-width: 170px; }
+.mapping-preview { display: flex; flex-direction: column; gap: 12px; border: 1px solid var(--primary-border); border-radius: 8px; padding: 14px; background: var(--primary-soft); }
+.mapping-preview strong { display: block; font-size: var(--fs-sm); margin-bottom: 6px; }
+.mapping-preview .organization-table-wrap { background: var(--surface); }
+.mapping-preview-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.mapping-warning { padding: 10px 12px; background: #fff8e8; color: #805a15; border-radius: 6px; font-size: var(--fs-sm); line-height: 1.6; }
+.organization-color-table th > label { display: flex; align-items: center; gap: 10px; }
+.organization-color-table td { min-width: 120px; }
+.organization-color-table tbody th { position: sticky; left: 0; background: var(--surface); }
+.import-model-field { display: flex; flex-direction: column; gap: 8px; font-size: var(--fs-sm); font-weight: 500; }
+.import-files { font-size: var(--fs-sm); color: var(--text-secondary); }
+.import-files summary { cursor: pointer; }
+.import-files div { padding: 4px 12px; }
+@media (max-width: 640px) {
+  .organization-layout { grid-template-columns: 116px minmax(0, 1fr); }
+  .organization-shell > .modal-heading, .organization-editor { padding: 14px; }
+  .organization-tabs, .import-steps { padding: 0 10px; }
+  .organization-footer { padding: 12px; flex-wrap: wrap; }
+  .organization-footer > span { flex-basis: 100%; }
 }

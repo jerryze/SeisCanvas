@@ -9,10 +9,11 @@ import {
   Package,
   Pencil,
   Search,
+  RotateCcw,
   Trash2,
   X,
 } from "lucide-react";
-import type { ExportItem } from "../types";
+import type { ExportItem, ExportJob } from "../types";
 import { projectFileUrl } from "../api/client";
 
 type Props = {
@@ -26,6 +27,12 @@ type Props = {
   onDelete: (item: ExportItem) => void;
   onClear: () => void;
   onExport: (itemIds?: string[]) => void;
+  onRestore: (item: ExportItem) => void;
+  jobs?: ExportJob[];
+  pendingJobIds?: Set<string>;
+  onCancelJob?: (job: ExportJob) => Promise<void>;
+  onRetryJob?: (job: ExportJob) => Promise<void>;
+  error?: string;
 };
 
 const folderLabel = (folder: string) =>
@@ -39,6 +46,13 @@ const folderLabel = (folder: string) =>
   folder ||
   "其他";
 
+const jobKind = { "2d": "2D 剖面", "3d": "3D 场景", map: "层位地图", profile: "A–B 剖面" };
+const jobStatus = { queued: "排队中", running: "生成中", completed: "已完成", failed: "生成失败", cancelled: "已取消" };
+const jobStage: Record<string, string> = {
+  queued: "排队中", reading: "读取数据", rendering: "生成图件", writing: "保存图件",
+  completed: "已完成", failed: "生成失败", cancelled: "已取消",
+};
+
 /** Browse and export the figures already rendered and saved in the session. */
 export default function ExportQueue({
   open,
@@ -51,6 +65,12 @@ export default function ExportQueue({
   onDelete,
   onClear,
   onExport,
+  onRestore,
+  jobs = [],
+  pendingJobIds,
+  onCancelJob,
+  onRetryJob,
+  error,
 }: Props) {
   const fileUrl = (item: ExportItem) => projectFileUrl(item.id, item.filename, projectId);
   const [preview, setPreview] = useState<ExportItem | null>(null);
@@ -129,6 +149,8 @@ export default function ExportQueue({
   const selectedIds = items
     .filter((item) => selected.has(item.id))
     .map((item) => item.id);
+  const pendingJobs = jobs.filter(job => job.status !== "completed");
+  const activeJobs = jobs.filter(job => job.status === "queued" || job.status === "running").length;
   const toggleItem = (id: string) =>
     setSelected((current) => {
       const next = new Set(current);
@@ -202,6 +224,7 @@ export default function ExportQueue({
           </button>
         </header>
 
+        {error && <p className="error queue-restore-error" role="alert">{error}</p>}
         <div className="queue-filter">
           <div className="queue-search">
             <Search size={16} />
@@ -265,6 +288,41 @@ export default function ExportQueue({
         </div>
 
         <div className="queue-list">
+          {!!pendingJobs.length && (
+            <section className="queue-jobs" aria-label="图件生成任务">
+              <div className="queue-jobs-heading">
+                <b>生成任务{activeJobs > 0 ? ` · ${activeJobs} 项进行中` : ""}</b>
+                <span>可关闭队列继续浏览</span>
+              </div>
+              <div className="queue-jobs-list">
+                {pendingJobs.map(job => (
+                  <article className={`queue-job queue-job-${job.status}`} key={job.id}>
+                    <div className="queue-job-body">
+                      <p className="queue-job-title" title={job.label}>{job.label || jobKind[job.kind]}</p>
+                      <span className="queue-job-stage">
+                        {job.status === "running" && <LoaderCircle size={12} className="spin" />}
+                        {jobKind[job.kind]} · {jobStage[job.stage] || jobStatus[job.status]}
+                        {(job.attempts || 1) > 1 && ` · 第 ${job.attempts} 次尝试`}
+                      </span>
+                      {job.status === "failed" && job.error && <p className="queue-job-error">{job.error}</p>}
+                    </div>
+                    {job.status === "queued" && onCancelJob && (
+                      <button className="secondary" disabled={pendingJobIds?.has(job.id)}
+                        aria-label={`取消排队 ${job.label}`} onClick={() => void onCancelJob(job)}>
+                        <X size={13} /> 取消排队
+                      </button>
+                    )}
+                    {job.status === "failed" && onRetryJob && (
+                      <button className="secondary" disabled={pendingJobIds?.has(job.id)}
+                        aria-label={`重试 ${job.label}`} onClick={() => void onRetryJob(job)}>
+                        <RotateCcw size={13} /> 重试
+                      </button>
+                    )}
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
           {!visible.length && (
             <div className="queue-empty">
               {items.length ? (
@@ -272,7 +330,7 @@ export default function ExportQueue({
               ) : (
                 <Package size={28} strokeWidth={1.5} />
               )}
-              <p>{items.length ? "没有匹配的图片" : "队列为空"}</p>
+              <p>{items.length ? "没有匹配的图片" : activeJobs ? "图件完成后会显示在这里" : "队列为空"}</p>
               {!!items.length && (
                 <button className="secondary" onClick={resetFilter}>
                   清除筛选
@@ -521,7 +579,13 @@ export default function ExportQueue({
                 alt={preview.filename}
               />
             )}
+            {error && <p className="error" role="alert">{error}</p>}
             <div className="export-actions">
+              <button className="secondary" disabled={busy || !preview.restorable}
+                title={preview.restorable ? "恢复这张图件的视图与导出设置" : "旧图件未保存恢复快照"}
+                onClick={() => onRestore(preview)}>
+                {busy ? <LoaderCircle className="spin" size={15} /> : <RotateCcw size={15} />} 恢复设置
+              </button>
               <a
                 className="primary"
                 href={fileUrl(preview)}

@@ -10,6 +10,7 @@ from copy import deepcopy
 from threading import RLock
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from matplotlib.colors import LinearSegmentedColormap, to_hex
 from backend.segy import Survey
 from backend.horizon import Horizon, horizon_preview
@@ -49,8 +50,13 @@ HORIZON_SUFFIXES = {".txt", ".dat"}
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """Release process state while keeping the saved project and figures."""
-    yield
-    export_queue.shutdown()
+    try:
+        yield
+    finally:
+        try:
+            await run_in_threadpool(export_router.export_jobs.shutdown)
+        finally:
+            export_queue.shutdown()
 
 
 app = FastAPI(title="SeisCanvas", version="0.3.0", lifespan=lifespan)
@@ -79,10 +85,25 @@ def horizon_style(key, h, index):
     ).model_dump()
 
 
-def add_horizons(pending):
+def add_horizons(pending, model_group="", horizon_keys=None):
+    if horizon_keys is not None and len(horizon_keys) != len(pending):
+        raise ValueError("层位对应关系数量与导入文件数量不一致。")
     added = {uuid4().hex: h for h in pending}
     styles = [horizon_style(key, h, len(horizons) + index) for index, (key, h) in enumerate(added.items())]
-    persist_horizons(added=added)
+    document = project.read()
+    saved = {h["id"]: h for h in (document or {}).get("state", {}).get("view", {}).get("horizons", [])} if document and document.get("state") else {}
+    palette = {}
+    for entry in (document or {}).get("horizons", []):
+        style = saved.get(entry["id"], entry["style"])
+        if style.get("horizon_key"):
+            palette.setdefault(style["horizon_key"], style["color"])
+    for index, style in enumerate(styles):
+        key = horizon_keys[index].strip() if horizon_keys is not None else ""
+        style.update(model_group=model_group.strip(), horizon_key=key)
+        if key:
+            palette.setdefault(key, COLORS[len(palette) % len(COLORS)])
+            style["color"] = palette[key]
+    persist_horizons(added=added, added_styles={s["id"]: s for s in styles})
     horizons.update(added)
     return styles
 
@@ -95,7 +116,7 @@ def horizon_entry(key, h, style):
     return {**source(h.path, columns=list(h.columns)), "id": key, "name": h.name, "style": style}
 
 
-def persist_horizons(removed=(), added=None, renamed=None):
+def persist_horizons(removed=(), added=None, renamed=None, added_styles=None):
     document = project.read()
     if document is None:
         return
@@ -105,7 +126,7 @@ def persist_horizons(removed=(), added=None, renamed=None):
         for item in document["horizons"] if item["id"] not in removed
     ]
     entries.extend(
-        horizon_entry(key, h, horizon_style(key, h, len(horizons) + index))
+        horizon_entry(key, h, (added_styles or {}).get(key) or horizon_style(key, h, len(horizons) + index))
         for index, (key, h) in enumerate((added or {}).items()) if key not in old
     )
     project.update_horizons(entries)
@@ -602,7 +623,7 @@ def local_horizon(req: LocalHorizonRequest):
             raise ValueError("请重新选择层位文件。")
         pending = [Horizon(path, columns=(req.inline_column, req.xline_column, req.time_column)) for path in paths]
         with guarded_lock():
-            result = add_horizons(pending)
+            result = add_horizons(pending, req.model_group, req.horizon_keys)
             horizon_selections.pop(req.token, None)
         return result
     except (ValueError, OSError) as e:
@@ -725,10 +746,13 @@ def sample(req: SampleRequest):
                 horizontal = req.crossline if req.kind == "inline" else req.inline
                 if horizontal is None or req.time is None:
                     raise ValueError("A section needs a trace and a time value.")
-                x, t, z = s.section(req.kind, int(position))
+                x, trace_ids = s.section_indices(req.kind, int(position))
+                t = s.times
                 column = nearest_index(x, horizontal)
                 row = nearest_index(t, req.time)
-                value = z[row, column]
+                # Probe one original sample without materializing a full section.
+                # Vertical sections historically replace NaN/Inf in float32.
+                value = np.nan_to_num(read_samples(s, trace_ids[column:column + 1], [row]), copy=False)[0, 0]
                 snapped_time = float(t[row])
                 snapped_inline = float(position) if req.kind == "inline" else float(x[column])
                 snapped_crossline = float(x[column]) if req.kind == "inline" else float(position)
@@ -797,10 +821,11 @@ def intersection(
         raise error(e)
 
 
-app.include_router(create_export_router(ExportContext(
+export_router = create_export_router(ExportContext(
     require_survey=require_survey, get_horizons=lambda: horizons,
     get_project=lambda: project, project_lock=lock,
-)))
+))
+app.include_router(export_router)
 
 
 DIST = ROOT / "frontend/dist"

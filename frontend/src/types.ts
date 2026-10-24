@@ -9,6 +9,9 @@ export type HS = {
   time_slice_tolerance: number;
   id: string;
   name: string;
+  /** Empty/absent identities keep existing files in the ungrouped list. */
+  model_group?: string;
+  horizon_key?: string;
   visible: boolean;
   color: string;
   line: { visible: boolean; width: number; style: string };
@@ -197,6 +200,7 @@ export type MapProfileOverlay = {
 
 /** An immutable figure already rendered and stored in the export session. */
 export type ExportItem = {
+  restorable: boolean;
   id: string;
   index: number;
   dataset: string;
@@ -218,6 +222,22 @@ export type ExportQueueState = {
   dataset: string | null;
   count: number;
   items: ExportItem[];
+};
+
+/** Background generation is separate from the immutable saved figures. */
+export type ExportJob = {
+  id: string;
+  project_id: string | null;
+  kind: "2d" | "3d" | "map" | "profile";
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  stage: string;
+  label: string;
+  error: string | null;
+  item: ExportItem | null;
+  created_at: string;
+  updated_at: string;
+  timings: Record<string, number>;
+  attempts?: number;
 };
 export const perspective: Camera = {
   eye: { x: 1.25, y: 1.25, z: 0.9 },

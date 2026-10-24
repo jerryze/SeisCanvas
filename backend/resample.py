@@ -34,6 +34,9 @@ MAX_UPSCALE = 3.0
 #: The colour ramp has 256 entries; a 12 bit display grid is already lossless
 #: on screen and keeps the browser payload small.
 DISPLAY_STEPS = 4095
+#: Bound each lazy source read and each interpolation work array independently
+#: of the native section size. The final, guarded raster is the only full grid.
+WINDOW_READ_ELEMENTS = 262_144
 
 QUALITY_BUDGETS = {
     "preview": PREVIEW_BUDGET,
@@ -145,11 +148,77 @@ def coordinate_edges(coordinates):
     )
 
 
+def _windowed_raster(source, ti, base, neighbour, fraction, width, height, *, time_sinc):
+    """Reconstruct output blocks from only their original sample stencils.
+
+    Operations intentionally mirror ``sinc8`` and the ndarray raster path:
+    table phase rounding, dtype, tap accumulation order, cardinal replacement,
+    and masked zero-weight products must remain identical.
+    """
+    dtype = np.result_type(source.dtype, np.float32)
+    raster = np.empty((height, width), dtype=dtype)
+    count = source.shape[0]
+    taps = 8 if time_sinc else 2
+    # A modest column group permits useful row batches even on wide surveys.
+    columns = min(width, 256, max(1, WINDOW_READ_ELEMENTS // (2 * taps)))
+    table = _sinc8_table().astype(dtype, copy=False) if time_sinc else None
+    for left in range(0, width, columns):
+        right = min(width, left + columns)
+        used = np.unique(np.concatenate((base[left:right], neighbour[left:right])))
+        low_columns = np.searchsorted(used, base[left:right])
+        high_columns = np.searchsorted(used, neighbour[left:right])
+        row_count = max(1, min(WINDOW_READ_ELEMENTS // (taps * len(used)),
+                               WINDOW_READ_ELEMENTS // (right - left)))
+        for top in range(0, height, row_count):
+            bottom = min(height, top + row_count)
+            indices = ti[top:bottom]
+            if time_sinc:
+                valid = np.isfinite(indices)
+                positions = np.clip(np.where(valid, indices, 0.0), 0.0, count - 1)
+                rows = np.floor(positions).astype(np.intp)
+                phases = np.floor((positions - rows) * 512.0 + 0.5).astype(np.intp)
+                exact = positions == rows
+                locations = [np.clip(rows + tap - 3, 0, count - 1) for tap in range(8)]
+                read_rows = np.unique(np.concatenate(locations))
+                native = np.asarray(source.read(read_rows, used), dtype=dtype)
+                temporal = np.zeros((bottom - top, len(used)), dtype=dtype)
+                weights = table[phases]
+                for tap in range(8):
+                    weight = weights[:, tap, None]
+                    contribution = np.zeros_like(temporal)
+                    samples = native[np.searchsorted(read_rows, locations[tap])]
+                    np.multiply(samples, weight, out=contribution, where=weight != 0)
+                    temporal += contribution
+                temporal[exact] = native[np.searchsorted(read_rows, rows[exact])]
+                temporal[~valid] = np.nan
+            else:
+                rows = np.floor(indices).astype(np.intp)
+                neighbours = np.minimum(rows + 1, count - 1)
+                read_rows = np.unique(np.concatenate((rows, neighbours)))
+                native = np.asarray(source.read(read_rows, used), dtype=dtype)
+                lower = native[np.searchsorted(read_rows, rows)]
+                upper = native[np.searchsorted(read_rows, neighbours)]
+                weights = (indices - rows)[:, None]
+                temporal = np.zeros(lower.shape, dtype=dtype)
+                contribution = np.zeros_like(temporal)
+                np.multiply(lower, 1 - weights, out=temporal, where=weights != 1)
+                np.multiply(upper, weights, out=contribution, where=weights != 0)
+                temporal += contribution
+            lo, hi = temporal[:, low_columns], temporal[:, high_columns]
+            weight = fraction[None, left:right]
+            a, b = np.zeros_like(lo), np.zeros_like(hi)
+            np.multiply(lo, 1 - weight, out=a, where=weight != 1)
+            np.multiply(hi, weight, out=b, where=weight != 0)
+            raster[top:bottom, left:right] = a + b
+    return raster
+
+
 def seismic_raster(x, time, values, width, height, extent=None, *, time_sinc=True):
     """World-aligned display amplitudes: time Sinc8, horizontal linear.
 
     Returns ``(raster, x_centres, time_centres, extent)``. Supply the complete
-    original section plus the visible cell bounds to keep the sinc halo at
+    original section (an array or a source with ``read``, ``shape``, ``dtype``)
+    plus the visible cell bounds to keep the sinc halo at
     viewport edges. Coordinates denote sample centres; output coordinates are
     uniform pixel centres in the requested world bounds. Trace coordinates may
     be irregular, but the original time samples must be uniform. No RGB image
@@ -157,7 +226,8 @@ def seismic_raster(x, time, values, width, height, extent=None, *, time_sinc=Tru
     """
     x, time = np.asarray(x, dtype=float), np.asarray(time, dtype=float)
     x_bounds, time_bounds = coordinate_edges(x), coordinate_edges(time)
-    source = np.asarray(values)
+    windowed = callable(getattr(values, "read", None))
+    source = values if windowed else np.asarray(values)
     if source.shape != (len(time), len(x)):
         raise ValueError("Seismic amplitudes must match the time and trace coordinates.")
     if time_sinc and len(time) > 2 and not np.allclose(np.diff(time), time[1] - time[0], rtol=1e-5, atol=1e-9):
@@ -182,6 +252,9 @@ def seismic_raster(x, time, values, width, height, extent=None, *, time_sinc=Tru
     base = np.floor(xi).astype(np.intp)
     neighbour = np.minimum(base + 1, len(x) - 1)
     fraction = xi - base
+    if windowed:
+        raster = _windowed_raster(source, ti, base, neighbour, fraction, width, height, time_sinc=time_sinc)
+        return raster, gx, gt, extent
     dtype = np.result_type(source.dtype, np.float32)
     raster = np.empty((height, width), dtype=dtype)
     # Interpolate only traces actually contributing to requested pixels. Bound

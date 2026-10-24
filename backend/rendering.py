@@ -9,6 +9,7 @@ from backend import resample
 from backend.figure_export import figure_size, save_figure
 from backend.horizon_display import sg_section, pchip_display
 from backend.style import get_cmap, font_family
+from backend.slice_source import polarity, read_window, section_input, source_limits
 from backend.trace_overlay import (
     DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH, WIGGLE_WIDTH,
     build_trace_overlay, coordinate_cell_edges, coordinate_edges, overlays_enabled, reconstruction_extent,
@@ -41,11 +42,11 @@ def display_raster(x, time, z, state, settings):
     """
     x0, x1 = window_indices(x, state.x_range)
     t0, t1 = window_indices(time, state.time_range)
-    window = z[t0 : t1 + 1, x0 : x1 + 1]
-    native_height, native_width = window.shape
+    native_height, native_width = t1 - t0 + 1, x1 - x0 + 1
     x_edges, t_edges = coordinate_cell_edges(x), coordinate_cell_edges(time)
     extent = (float(x_edges[x0]), float(x_edges[x1 + 1]), float(t_edges[t0]), float(t_edges[t1 + 1]))
     if not state.seismic.background_interpolation:
+        window = read_window(z, slice(t0, t1 + 1), slice(x0, x1 + 1))
         return window, extent, (native_width, native_height)
     extent = reconstruction_extent(x, time, state.x_range, state.time_range)
     if settings.resolution == "view":
@@ -64,6 +65,9 @@ def display_raster(x, time, z, state, settings):
 
 
 def amplitude(z, s):
+    if hasattr(z, "iter_blocks"):
+        lo, hi = source_limits([z], s)
+        return polarity(z, s.reverse_polarity), lo, hi
     z = -z if s.reverse_polarity else z
     if s.clip_mode == "manual":
         if s.vmin is None or s.vmax is None or s.vmin >= s.vmax:
@@ -150,21 +154,25 @@ def render(survey, horizons, state, settings) -> bytes:
 
 def render_with_metadata(survey, horizons, state, settings) -> SectionRenderResult:
     """Render once and report the exact native amplitude range used to draw it."""
-    x, t, z = survey.section(state.view_type, state.section_number)
+    x, t, z = section_input(survey, state.view_type, state.section_number)
     # Amplitude clipping always comes from the original section: the colour
     # range must not change with the interpolation mode or the zoom window.
     z, lo, hi = amplitude(z, state.seismic)
     trace_display = overlays_enabled(state.seismic)
     x0, x1 = window_indices(x, state.x_range)
     t0, t1 = window_indices(t, state.time_range)
-    native = z[t0:t1 + 1, x0:x1 + 1]
+    native_shape = (t1 - t0 + 1, x1 - x0 + 1)
+    # The first draw only establishes layout. Explicit world extent and colour
+    # limits make a tiny placeholder sufficient until final pixel sampling.
+    native = (np.zeros((1, 1), dtype=z.dtype) if state.seismic.background_interpolation
+              else read_window(z, slice(t0, t1 + 1), slice(x0, x1 + 1)))
     x_edges = coordinate_cell_edges(x)[x0:x1 + 2]
     t_edges = coordinate_cell_edges(t)[t0:t1 + 2]
     extent = (float(x_edges[0]), float(x_edges[-1]), float(t_edges[0]), float(t_edges[-1]))
     if state.seismic.background_interpolation:
         extent = reconstruction_extent(x, t, state.x_range, state.time_range)
     ratio = (state.aspect_ratio_2d[0] / state.aspect_ratio_2d[1]
-             if state.aspect_ratio_2d else native.shape[1] / native.shape[0])
+             if state.aspect_ratio_2d else native_shape[1] / native_shape[0])
     fig = Figure(
         figsize=figure_size(settings, ratio),
         dpi=settings.dpi,

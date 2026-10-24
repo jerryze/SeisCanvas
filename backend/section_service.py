@@ -5,6 +5,7 @@ import numpy as np
 from backend import resample
 from backend.horizon_display import sg_section, json_points
 from backend.rendering import amplitude, window_indices
+from backend.slice_source import read_window, section_input
 from backend.trace_overlay import build_trace_overlay, coordinate_cell_edges, overlays_enabled, reconstruction_extent
 
 
@@ -26,8 +27,7 @@ def section_raster(survey, x, t, z, state, target_width=None, target_height=None
     """
     x0, x1 = window_indices(x, state.x_range)
     t0, t1 = window_indices(t, state.time_range)
-    window = z[t0:t1 + 1, x0:x1 + 1]
-    native_height, native_width = window.shape
+    native_height, native_width = t1 - t0 + 1, x1 - x0 + 1
     x_edges = coordinate_cell_edges(x)[x0:x1 + 2]
     time_edges = coordinate_cell_edges(t)[t0:t1 + 2]
     extent = (float(x_edges[0]), float(x_edges[-1]), float(time_edges[0]), float(time_edges[-1]))
@@ -63,7 +63,8 @@ def section_raster(survey, x, t, z, state, target_width=None, target_height=None
     else:
         # Disabled means exact native cells: viewport requests and export
         # interpolation selectors cannot silently interpolate or decimate.
-        raster, width, height = window, native_width, native_height
+        raster = read_window(z, slice(t0, t1 + 1), slice(x0, x1 + 1))
+        width, height = native_width, native_height
         display_x, display_time = x[x0:x1 + 1], t[t0:t1 + 1]
     return {
         "values": raster, "x": display_x, "time": display_time,
@@ -78,7 +79,7 @@ def section_raster(survey, x, t, z, state, target_width=None, target_height=None
 
 def interactive_section(survey, horizons, req) -> dict:
     """Serialize native blocks or a Sinc8-time/linear-trace amplitude raster."""
-    x, t, z = survey.section(req.view_type, req.section_number)
+    x, t, z = section_input(survey, req.view_type, req.section_number)
     trace_amplitudes, lo, hi = amplitude(z, req.seismic)
     display = section_raster(survey, x, t, z, req, req.target_width, req.target_height,
                              req.quality, (req.view_type, req.section_number))

@@ -45,7 +45,7 @@ _bound_folder: Path | None = None
 def bind(folder):
     """Select a project's queue without deleting the previous project's figures."""
     global _session, _bound_folder
-    folder = Path(folder) if folder is not None else None
+    folder = Path(folder).resolve() if folder is not None else None
     with _lock:
         if folder != _bound_folder:
             _session = None
@@ -138,6 +138,21 @@ def session() -> "ExportSession":
                 _prune()
                 _session = ExportSession()
         return _session
+
+
+def queue_for_folder(folder: Path) -> "ExportSession":
+    """Resolve an origin queue without changing the active project's binding.
+
+    The caller holds the application project lock through the following update.
+    Reuse the bound instance so background publication cannot leave it stale.
+    """
+    folder = Path(folder).resolve()
+    with _lock:
+        if folder == _bound_folder:
+            return session()
+        if (folder / "queue.json").exists() or (folder / "queue.json.bak").exists():
+            return ExportSession.load(folder)
+        return ExportSession(folder)
 
 
 def reset():
@@ -236,12 +251,17 @@ class ExportSession:
             f"{naming.number(item['height_mm'])} mm · {naming.number(item['dpi'])} dpi"
         )
 
+    def restore_item(self, item_id: str) -> dict:
+        """Resolve a settings record within the already bound project queue."""
+        return self._find(item_id)
+
     def public(self, item: dict) -> dict:
-        """Queue item as specified: rendered file, target name and full ViewState."""
+        """Queue summary without the potentially large restoration snapshot."""
         return {
-            key: value
+            "restorable": item.get("restore") is not None,
+            **{key: value
             for key, value in item.items()
-            if key not in {"stored", "serial", "summary", "render"}
+            if key not in {"stored", "serial", "summary", "render", "restore"}},
         }
 
     # --------------------------------------------------------------------- add
@@ -261,6 +281,7 @@ class ExportSession:
         dpi: int | None = None,
         pixel_size: tuple[int, int] | None = None,
         scale: int | None = None,
+        restore: dict | None = None,
     ) -> dict:
         if len(self.items) >= MAX_ITEMS:
             raise ValueError(f"Export queue is full ({MAX_ITEMS} figures). Export or clear it first.")
@@ -325,6 +346,7 @@ class ExportSession:
             "view_state": view_state,
             "summary": summary,
             "render": render or {},
+            "restore": restore,
         }
         item["detail"] = self._detail(item)
         # A rejected state must not leave a file or consume a figure identity.
@@ -471,6 +493,7 @@ class ExportSession:
                     "created_at": item["created_at"],
                     "render": item["render"],
                     "view_state": item["view_state"],
+                    "restore": item.get("restore"),
                 }
             )
         return {

@@ -42,7 +42,7 @@ def _visible_horizons(state, horizons):
     return [h for h in state.horizons if h.visible and h.id in horizons]
 
 
-def add_2d(survey, horizons, req: Queue2DRequest) -> dict:
+def add_2d(survey, horizons, req: Queue2DRequest, restore=None, sink=None) -> dict:
     state, settings = req.state, req.settings
     dataset = dataset_label(survey, req.dataset)
     inline = state.view_type == "inline"
@@ -92,13 +92,14 @@ def add_2d(survey, horizons, req: Queue2DRequest) -> dict:
         "time_range": list(state.time_range) if state.time_range else None,
         "aspect_ratio_2d": list(state.aspect_ratio_2d) if state.aspect_ratio_2d else None,
     }
-    return session().add(
+    return (sink if sink is not None else session()).add(
         data=rendered.data,
         filename=filename,
         view_type=view_type,
         dataset=dataset,
         view_state=state.model_dump(),
         summary=summary,
+        restore=restore,
         render=settings.model_dump(),
         width_mm=settings.width,
         height_mm=settings.height,
@@ -106,7 +107,7 @@ def add_2d(survey, horizons, req: Queue2DRequest) -> dict:
     )
 
 
-def add_map(survey, horizons, req: QueueMapRequest) -> dict:
+def add_map(survey, horizons, req: QueueMapRequest, restore=None, sink=None) -> dict:
     state, settings = req.state, req.settings
     if state.horizon not in horizons:
         raise ValueError("Horizon not found.")
@@ -165,13 +166,14 @@ def add_map(survey, horizons, req: QueueMapRequest) -> dict:
         "x_range": list(state.x_range) if state.x_range else None,
         "y_range": list(state.y_range) if state.y_range else None,
     }
-    return session().add(
+    return (sink if sink is not None else session()).add(
         data=data,
         filename=filename,
         view_type="horizon_map",
         dataset=dataset,
         view_state={**state.model_dump(), "profile": profile},
         summary=summary,
+        restore=restore,
         render=settings.model_dump(),
         width_mm=settings.width,
         height_mm=settings.height,
@@ -179,7 +181,7 @@ def add_map(survey, horizons, req: QueueMapRequest) -> dict:
     )
 
 
-def add_profile(survey, horizons, req: QueueProfileRequest) -> dict:
+def add_profile(survey, horizons, req: QueueProfileRequest, restore=None, sink=None) -> dict:
     """Render the standalone A–B profile figure and queue it."""
     state = req.state
     if state.horizon not in horizons:
@@ -233,13 +235,14 @@ def add_profile(survey, horizons, req: QueueProfileRequest) -> dict:
         "horizons": [h.model_dump() for h in req.horizons] if req.horizons is not None else None,
         "x_range": req.x_range, "time_range": req.time_range,
     }
-    return session().add(
+    return (sink if sink is not None else session()).add(
         data=data,
         filename=filename,
         view_type="horizon_map",
         dataset=dataset,
         view_state=state.model_dump(),
         summary=summary,
+        restore=restore,
         render=req.settings.model_dump(),
         width_mm=req.settings.width,
         height_mm=req.settings.height,
@@ -247,7 +250,7 @@ def add_profile(survey, horizons, req: QueueProfileRequest) -> dict:
     )
 
 
-def add_3d(survey, req: Queue3DRequest) -> dict:
+def add_3d(survey, req: Queue3DRequest, restore=None, sink=None) -> dict:
     started = perf_counter()
     state, settings = req.state, req.settings
     dataset = dataset_label(survey, req.dataset)
@@ -329,13 +332,14 @@ def add_3d(survey, req: Queue3DRequest) -> dict:
         "scene_background": state.scene.background,
         "seismic": state.seismic.model_dump(),
     }
-    return session().add(
+    return (sink if sink is not None else session()).add(
         data=data,
         filename=filename,
         view_type=view_type,
         dataset=dataset,
         view_state=state.model_dump(),
         summary=summary,
+        restore=restore,
         render=settings.model_dump(),
         width_mm=settings.width,
         height_mm=settings.height,

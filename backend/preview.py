@@ -6,13 +6,16 @@ import segyio
 from backend.regular_geometry import SAMPLE_BYTES
 
 
-def read_samples(survey, trace_ids, samples, *, per_point=False):
+def read_samples(survey, trace_ids, samples, *, per_point=False, dtype=np.float32):
     """Read original amplitudes for selected traces.
 
     By default ``samples`` is a 1-D sample axis shared by every trace, so the
     result has shape ``trace_ids.shape + (len(samples),)``. Set ``per_point``
     explicitly to read one sample per trace; its indices must then match the
     trace-id shape. Equal axis lengths never change the sampling mode.
+    ``dtype`` defaults to the established float32 preview format. Native time
+    planes may request the file dtype; decoding never rounds through float32
+    first. Integer outputs require valid trace IDs because holes are NaN.
     """
     ids = np.asarray(trace_ids, dtype=np.int64)
     samples = np.asarray(samples, dtype=np.int64)
@@ -22,8 +25,14 @@ def read_samples(survey, trace_ids, samples, *, per_point=False):
     elif samples.ndim != 1:
         raise ValueError("Shared sample indices must be a one-dimensional axis.")
     shape = ids.shape if per_point else (*ids.shape, len(samples))
-    result = np.full(shape, np.nan, dtype=np.float32)
+    dtype = np.dtype(dtype)
     valid = ids >= 0
+    if np.issubdtype(dtype, np.inexact):
+        result = np.full(shape, np.nan, dtype=dtype)
+    else:
+        if not valid.all():
+            raise ValueError("Integer sample output cannot represent missing traces.")
+        result = np.empty(shape, dtype=dtype)
     if not valid.any():
         return result
     with open(survey.path, 'rb') as f:
@@ -49,9 +58,9 @@ def read_samples(survey, trace_ids, samples, *, per_point=False):
             if fmt == 1:
                 values = segyio.tools.native(picked.view(np.float32))
             else:
-                dtype = {2:'>i4', 3:'>i2', 5:'>f4', 6:'>f8', 8:'i1',
+                storage_dtype = {2:'>i4', 3:'>i2', 5:'>f4', 6:'>f8', 8:'i1',
                          9:'>i8', 10:'>u4', 11:'>u2', 12:'>u8', 16:'u1'}[fmt]
-                values = picked.view(dtype).astype(np.float32)
+                values = picked.view(storage_dtype).astype(dtype)
             result[valid] = values
         else:
             # Nonstandard layouts remain supported through segyio; only selected traces.

@@ -4,7 +4,9 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+import json
 from pathlib import Path
+from time import perf_counter
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
@@ -14,6 +16,8 @@ from starlette.types import Receive, Scope, Send
 
 from backend import export_queue
 from backend.export3d import package_scene
+from backend.export_jobs import ExportJobManager, validate_sources
+from backend.export_restore import make_snapshot, restore_payload
 from backend.export_service import add_2d, add_3d, add_map, add_profile
 from backend.horizon import Horizon
 from backend.horizon_map import render_map
@@ -21,7 +25,7 @@ from backend.models import (
     ExportRequest, HorizonMapExport, QueueAddRequest, QueueArchiveRequest,
     RenameRequest, SceneExportRequest,
 )
-from backend.project_scope import ProjectRoute, guarded_lock
+from backend.project_scope import ProjectRoute, guarded_lock, scope as request_scope
 from backend.rendering import render
 from backend.segy import Survey
 from backend.workspace import WorkspaceStore
@@ -49,8 +53,104 @@ def _error(error):
     return HTTPException(400, str(error))
 
 
-def create_export_router(context: ExportContext) -> APIRouter:
+def publish_export(context: ExportContext, job: dict, prepared: dict) -> dict:
+    """Commit one staged result to its origin, without rebinding the active queue."""
+    # Large reads belong outside the application lock. Queue insertion and its
+    # authoritative manifest commit remain one short, rollback-safe transaction.
+    data = Path(prepared["data_path"]).read_bytes()
+    metadata = json.loads(Path(prepared["metadata_path"]).read_text(encoding="utf-8"))
+    with context.project_lock:
+        project = context.get_project()
+        document = project.get(job["project_id"])
+        folder = project.export_folder(document)
+        if folder.resolve() != Path(job["folder"]).resolve():
+            raise ValueError("原项目的导出目录已变化，请重新提交图件。")
+        queue = export_queue.queue_for_folder(folder)
+        # A crash after queue commit but before job status persistence must not
+        # duplicate the figure on retry.
+        existing = next((item for item in queue.items
+                         if item["summary"].get("export_job_id") == job["id"]), None)
+        if existing is not None:
+            return queue.public(existing)
+        restore = metadata["restore"]
+        validate_sources(prepared["source_document"], restore["request"], restore)
+        metadata["summary"]["export_job_id"] = job["id"]
+        return queue.add(data=data, **metadata)
+
+
+def create_export_router(context: ExportContext, *, manager_factory=ExportJobManager) -> APIRouter:
     router = APIRouter(route_class=ProjectRoute)
+    jobs = manager_factory(lambda job, prepared: publish_export(context, job, prepared))
+    router.export_jobs = jobs
+
+    def origin():
+        with guarded_lock():
+            project = context.get_project()
+            document = project.read()
+            if not document:
+                raise HTTPException(400, "请先打开项目再导出图件。")
+            return document, project.export_folder(document)
+
+    @router.post("/api/export/jobs", status_code=202)
+    def submit_export(req: QueueAddRequest):
+        started = perf_counter()
+        try:
+            with guarded_lock():
+                context.require_survey()
+                project = context.get_project()
+                document = project.read()
+                if not document:
+                    raise ValueError("请先打开项目再导出图件。")
+                folder = project.export_folder(document)
+                snapshot = make_snapshot(req, document)
+            snapshot_ms = (perf_counter() - started) * 1000
+            job = jobs.submit(project_id=document["id"], folder=folder,
+                document=document, request=req.model_dump(mode="json"), restore=snapshot,
+                timings={"snapshot_ms": snapshot_ms})
+            identity = request_scope.get()
+            if identity:
+                identity.timings["submit_ms"] = (perf_counter() - started) * 1000
+            return job
+        except (ValueError, OSError) as error:
+            raise _error(error)
+
+    @router.get("/api/export/jobs")
+    def list_exports():
+        try:
+            # Empty workspaces also mount the queue panel.
+            with guarded_lock():
+                project = context.get_project()
+                document = project.read()
+                if not document:
+                    return {"jobs": []}
+                folder = project.export_folder(document)
+            return {"jobs": jobs.list(document["id"], folder)}
+        except (ValueError, OSError) as error:
+            raise _error(error)
+
+    @router.get("/api/export/jobs/{job_id}")
+    def get_export(job_id: str):
+        try:
+            document, folder = origin()
+            return jobs.get(document["id"], folder, job_id)
+        except (ValueError, OSError) as error:
+            raise _error(error)
+
+    @router.post("/api/export/jobs/{job_id}/cancel")
+    def cancel_export(job_id: str):
+        try:
+            document, folder = origin()
+            return jobs.cancel(document["id"], folder, job_id)
+        except (ValueError, OSError) as error:
+            raise _error(error)
+
+    @router.post("/api/export/jobs/{job_id}/retry")
+    def retry_export(job_id: str):
+        try:
+            document, folder = origin()
+            return jobs.retry(document["id"], folder, job_id)
+        except (ValueError, OSError) as error:
+            raise _error(error)
 
     @router.post("/api/horizon-map/export")
     def horizon_map_export(req: HorizonMapExport):
@@ -105,13 +205,30 @@ def create_export_router(context: ExportContext) -> APIRouter:
     def queue_add(req: QueueAddRequest):
         try:
             with guarded_lock():
+                phase = perf_counter()
+                snapshot = make_snapshot(req, context.get_project().read())
+                identity = request_scope.get()
+                if identity:
+                    identity.timings["snapshot_ms"] = (perf_counter() - phase) * 1000
+                phase = perf_counter()
+                class TimedSink:
+                    def add(self, **kwargs):
+                        writing = perf_counter()
+                        if identity:
+                            identity.timings["render_ms"] = (writing - phase) * 1000
+                        try:
+                            return export_queue.session().add(**kwargs)
+                        finally:
+                            if identity:
+                                identity.timings["publish_ms"] = (perf_counter() - writing) * 1000
+                sink = TimedSink()
                 if req.kind == "2d":
-                    return add_2d(context.require_survey(), context.get_horizons(), req)
+                    return add_2d(context.require_survey(), context.get_horizons(), req, restore=snapshot, sink=sink)
                 if req.kind == "map":
-                    return add_map(context.require_survey(), context.get_horizons(), req)
+                    return add_map(context.require_survey(), context.get_horizons(), req, restore=snapshot, sink=sink)
                 if req.kind == "profile":
-                    return add_profile(context.require_survey(), context.get_horizons(), req)
-                return add_3d(context.require_survey(), req)
+                    return add_profile(context.require_survey(), context.get_horizons(), req, restore=snapshot, sink=sink)
+                return add_3d(context.require_survey(), req, restore=snapshot, sink=sink)
         except KeyError:
             raise HTTPException(404, "Export item not found.")
         except (ValueError, OSError) as error:
@@ -122,6 +239,17 @@ def create_export_router(context: ExportContext) -> APIRouter:
         try:
             with guarded_lock():
                 return export_queue.session().snapshot()
+        except (ValueError, OSError) as error:
+            raise _error(error)
+
+    @router.get("/api/export/queue/{item_id}/settings")
+    def queue_settings(item_id: str):
+        try:
+            with guarded_lock():
+                item = export_queue.session().restore_item(item_id)
+                return restore_payload(item, context.get_project().read(), context.get_horizons())
+        except KeyError:
+            raise HTTPException(404, "找不到该图件的恢复设置。")
         except (ValueError, OSError) as error:
             raise _error(error)
 

@@ -1,3 +1,4 @@
+import { restoreFigure } from "./exportRestore";
 import ExportDialog from "./components/ExportDialog";
 import brandSymbol from "./assets/seiscanvas-symbol.svg?url";
 import brandWordmark from "./assets/seiscanvas-wordmark.svg?url";
@@ -14,6 +15,8 @@ import DataPanel, { ImportProgress } from "./components/panels/DataPanel";
 import SectionPanel, { SectionNavigation } from "./components/panels/SectionPanel";
 import SeismicPanel from "./components/panels/SeismicPanel";
 import HorizonPanel from "./components/panels/HorizonPanel";
+import HorizonOrganizationModal from "./components/HorizonOrganizationModal";
+import { inheritLayerColors, layerColors, layerFromName, patchHorizon, suggestModel } from "./horizonOrganization";
 import SectionPlot from "./components/SeismicViewer2D/SectionPlot";
 import { useState, useEffect, useRef, useMemo } from "react";
 import {
@@ -37,6 +40,7 @@ import {
   VS,
   Meta,
   ExportDialogSettings,
+  ExportItem,
   MapProfileOverlay,
   defaultScene,
   makeSlice,
@@ -178,12 +182,16 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
   const [sidebarScroll, setSidebarScroll] = useState<Record<string, number>>(initialProject.state?.sidebarScroll || {});
   const operation = useRef(false);
   const [notice, setNotice] = useState("");
+  const [restoreUndo, setRestoreUndo] = useState<{ state: WorkspaceState; revision: number; filename: string; warnings: string[] } | null>(null);
+  const restoreRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => restoreRequest.current?.abort(), []);
 
   const [geometryMode, setGeometryMode] = useState("auto");
   const [bytes, setBytes] = useState({ il: 189, xl: 21 });
 
   const [selected, setSelected] = useState("");
   const [horizonToDelete, setHorizonToDelete] = useState<HS | null>(null);
+  const [organizationOpen, setOrganizationOpen] = useState(false);
   const [mapControlsHost, setMapControlsHost] = useState<HTMLDivElement | null>(null);
 
   const [horizonImport, setHorizonImport] = useState<HorizonImportState | null>(
@@ -251,6 +259,8 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
     try { draft = chosenDraft === undefined ? readDraft(localStorage, result.project_id, result.revision, result.state, draftTabId()) : chosenDraft; } catch { /* Storage may be disabled. */ }
     const state = restoreState(defaults, result.issues.length ? result.state : draft || result.state, result.horizons);
     resetSection();
+    setOrganizationOpen(false);
+    setHorizonImport(null);
     setMeta(result.metadata);
     setView(result.metadata ? state.view : { ...state.view, view_mode: "2d" });
     setMapWorkspace(state.map);
@@ -435,12 +445,52 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
   const {
     items: queue,
     sessionId: queueSession,
-    addItem: queueItem,
+    submitJob,
+    jobs: exportJobs,
+    submitting: submittingExport,
+    activeJobCount,
+    pendingJobIds,
+    cancelJob,
+    retryJob,
     rename: renameQueueItem,
     remove: deleteQueueItem,
     clear: clearQueue,
     exportItems,
+    restoreSettings,
   } = useExportQueue({ task, notify: setNotice, onError: setError });
+
+  function applyFigurePresentation(state: WorkspaceState) {
+    resetSection();
+    setView(state.view);
+    setMapWorkspace(state.map);
+    setSettings(state.settings);
+    setSettings3D(state.settings3D);
+    setExportOpen(false);
+    setRevision(v => v + 1);
+  }
+
+  async function restoreQueueItem(item: ExportItem) {
+    if (!meta || conflict || project?.issues.length) return;
+    await task("正在恢复图件设置…", async () => {
+      const owner = getApiProject();
+      const controller = new AbortController();
+      restoreRequest.current?.abort();
+      restoreRequest.current = controller;
+      const snapshot = await restoreSettings(item, controller.signal);
+      if (controller.signal.aborted || getApiProject() !== owner) return;
+      const next = restoreFigure(workspaceState, snapshot, meta);
+      setRestoreUndo({ state: structuredClone(workspaceState), revision: revision + 1, filename: item.filename, warnings: snapshot.warnings });
+      applyFigurePresentation(next);
+      setQueueOpen(false);
+    });
+  }
+
+  function undoFigureRestore() {
+    if (!restoreUndo || restoreUndo.revision !== revision || busy || conflict) return;
+    applyFigurePresentation(restoreUndo.state);
+    setRestoreUndo(null);
+    setNotice("已撤销图件设置恢复");
+  }
 
   /* ------------------------------------------------------------------------ */
   /* Dataset loaded                                                           */
@@ -543,6 +593,8 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
       ).json();
       if (preview.cancelled) return;
 
+      const model = suggestModel(preview.filenames);
+      const known = layerColors(viewRef.current.horizons);
       setHorizonImport({
         token: preview.token,
         filename: preview.filename,
@@ -552,6 +604,11 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
         inline_column: preview.suggestions.inline,
         xline_column: preview.suggestions.xline,
         time_column: preview.suggestions.time,
+        model_group: model,
+        horizon_keys: preview.filenames.map((name: string) => {
+          const key = layerFromName(name, model);
+          return known.has(key) ? key : "";
+        }),
       });
     });
   }
@@ -568,13 +625,15 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
             inline_column: horizonImport.inline_column,
             xline_column: horizonImport.xline_column,
             time_column: horizonImport.time_column,
+            model_group: horizonImport.model_group,
+            horizon_keys: horizonImport.horizon_keys,
           }),
         )
       ).json();
 
       setView((v) => ({
         ...v,
-        horizons: [...v.horizons, ...hs],
+        horizons: [...v.horizons, ...inheritLayerColors(v.horizons, hs)],
       }));
 
       setSelected(hs[0].id);
@@ -706,14 +765,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
   function style(p: Partial<HS>, id: string) {
     setView((v) => ({
       ...v,
-      horizons: v.horizons.map((h) =>
-        h.id === id
-          ? {
-              ...h,
-              ...p,
-            }
-          : h,
-      ),
+      horizons: patchHorizon(v.horizons, id, p),
     }));
   }
 
@@ -735,13 +787,12 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
   }, [colors, view.seismic.reverse_colormap]);
 
   /* ------------------------------------------------------------------------ */
-  /* Add to export (renders happen in the viewer components / backend)        */
+  /* Submit fixed figure settings to the background export queue             */
   /* ------------------------------------------------------------------------ */
 
-  function add2DToQueue() {
-    setExportOpen(false);
-    task("正在保存二维图件…", async () => {
-      await queueItem({
+  async function add2DToQueue() {
+    try {
+      const job = await submitJob({
         kind: "2d", dataset,
         state: {
           ...view,
@@ -750,7 +801,10 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
         },
         settings,
       });
-    });
+      if (job) setExportOpen(false);
+    } catch {
+      // The queue hook displays the error; keep settings open for another try.
+    }
   }
 
   async function add3DToQueue(settings3D: any) {
@@ -759,8 +813,8 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
       const exportStarted = performance.now();
       if (!sceneRef.current) throw new Error("三维场景未就绪");
       const capture = await sceneRef.current.captureFigure(settings3D, setBusy);
-      setBusy(`封装 ${capture.format.toUpperCase()} 并加入队列…`);
-      await queueItem({
+      setBusy("正在提交三维图件…");
+      await submitJob({
         kind: "3d",
         dataset,
         png: capture.png,
@@ -785,23 +839,19 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
   }
 
   async function addMapToQueue(payload: { state: unknown; settings: unknown; profile: MapProfileOverlay | null }) {
-    await task("正在保存层位地图…", async () => {
-      await queueItem({
-        kind: "map",
-        dataset,
-        state: payload.state,
-        settings: payload.settings,
-        profile: payload.profile,
-      });
+    await submitJob({
+      kind: "map",
+      dataset,
+      state: payload.state,
+      settings: payload.settings,
+      profile: payload.profile,
     });
   }
 
   async function addProfileToQueue(
     payload: Record<string, unknown> & { settings: unknown },
   ) {
-    await task("正在保存 A–B 剖面…", async () => {
-      await queueItem({ kind: "profile", dataset, ...payload });
-    });
+    await submitJob({ kind: "profile", dataset, ...payload });
   }
 
   /* ------------------------------------------------------------------------ */
@@ -853,6 +903,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
           disabled={
             !meta ||
             !!busy ||
+            submittingExport ||
             (view.view_mode === "2d"
               ? loading
               : view.view_mode === "map"
@@ -872,6 +923,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
         >
           <Package size={15} />
           导出队列 · {queue.length}
+          {activeJobCount > 0 && <span className="queue-active-count">{activeJobCount} 生成中</span>}
         </button>
       </header>
 
@@ -966,6 +1018,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
                 onRename={renameHorizon}
                 onDelete={h => { setError(""); setHorizonToDelete(h); }}
                 onAdd={uploadHorizons}
+                onOrganize={() => setOrganizationOpen(true)}
               />
             )}
 
@@ -994,7 +1047,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
           )}
 
           {view.view_mode === "map" ? (
-            <HorizonMap
+            <HorizonMap key={revision}
               controlsHost={mapControlsHost}
               workspace={mapWorkspace}
               onWorkspace={setMapWorkspace}
@@ -1197,6 +1250,13 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
       {/* Toast                                                              */}
       {/* ------------------------------------------------------------------ */}
 
+      {restoreUndo && restoreUndo.revision === revision && (
+        <div className="restore-notice" role="status">
+          <span>已恢复 {restoreUndo.filename}{restoreUndo.warnings.length > 0 && <small>{restoreUndo.warnings.join(" ")}</small>}</span>
+          <button className="secondary" disabled={!!busy || !!conflict} onClick={undoFigureRestore}>撤销本次恢复</button>
+          <button className="icon" aria-label="关闭恢复提示" onClick={() => setRestoreUndo(null)}><X size={16} /></button>
+        </div>
+      )}
       {notice && (
         <div className="toast">
           <Check size={16} />
@@ -1236,7 +1296,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
           dataset={dataset}
           datasetPlaceholder={datasetPlaceholder}
           onDataset={setDataset}
-          busy={!!busy}
+          busy={!!busy || submittingExport}
           disabled={loading}
           error={error}
         />
@@ -1250,6 +1310,10 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
         projectId={project?.project_id}
         open={queueOpen}
         items={queue}
+        jobs={exportJobs}
+        pendingJobIds={pendingJobIds}
+        onCancelJob={cancelJob}
+        onRetryJob={retryJob}
         session={queueSession}
         busy={!!busy}
         onClose={() => setQueueOpen(false)}
@@ -1257,6 +1321,8 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
         onDelete={deleteQueueItem}
         onClear={clearQueue}
         onExport={exportItems}
+        onRestore={restoreQueueItem}
+        error={error}
       />
 
       {horizonImport && (
@@ -1270,8 +1336,21 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
             )
           }
           onImport={importHorizon}
+          horizons={view.horizons}
+          onOrganization={patch => setHorizonImport(current => current ? { ...current, ...patch } : current)}
         />
       )}
+
+      {organizationOpen && <HorizonOrganizationModal key={project?.project_id} horizons={view.horizons}
+        onClose={() => setOrganizationOpen(false)} onApply={organized => {
+          const updates = new Map(organized.map(h => [h.id, h]));
+          setView(current => ({ ...current, horizons: current.horizons.map(h => {
+            const updated = updates.get(h.id);
+            return updated ? { ...h, model_group: updated.model_group, horizon_key: updated.horizon_key, color: updated.color } : h;
+          }) }));
+          setOrganizationOpen(false);
+          setNotice("已更新模型分组、层位对应关系和统一配色。");
+        }} />}
 
       {horizonToDelete && (
         <div className="modal-backdrop" onClick={() => !busy && setHorizonToDelete(null)}>

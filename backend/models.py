@@ -68,6 +68,14 @@ class Outline(BaseModel):
 class HorizonStyle(BaseModel):
     id: str
     name: str
+    model_group: str = Field("", max_length=80)
+    horizon_key: str = Field("", max_length=80)
+
+    @field_validator("model_group", "horizon_key")
+    @classmethod
+    def trimmed_identity(cls, value):
+        return value.strip()
+
     visible: bool = True
     color: str = Field("#e6b450", pattern=r"^#[0-9a-fA-F]{6}$")
     line: Line = Field(default_factory=Line)
@@ -356,6 +364,8 @@ class LocalHorizonRequest(BaseModel):
     inline_column: int = Field(default=0, ge=0)
     xline_column: int = Field(default=1, ge=0)
     time_column: int = Field(default=2, ge=0)
+    model_group: str = Field("", max_length=80)
+    horizon_keys: list[Annotated[str, Field(max_length=80)]] | None = None
 
 
 class SceneVectorPath(BaseModel):
@@ -398,6 +408,14 @@ class SceneExportRequest(BaseModel):
 
 
 class HorizonMapState(BaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def automatic_contours(cls, values):
+        # UI keeps the last manual interval while automatic spacing is active.
+        if isinstance(values, dict) and values.get("interval_auto") is True:
+            return {**values, "interval": None}
+        return values
+
     horizon: str
     #: Active color scalar: horizon TWT, seismic amplitude along the horizon,
     #: or the difference between two horizons.
@@ -553,6 +571,14 @@ class QueueProfileRequest(ProfileDisplayState):
             if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(color)):
                 raise ValueError(f"Invalid curve color {color!r}.")
         return value
+
+
+class ExportRestoreSnapshot(BaseModel):
+    """Versioned settings only; never contains captured pixels or mutable state."""
+    version: Literal[1] = 1
+    kind: Literal["2d", "3d", "map", "profile"]
+    request: dict
+    sources: dict[str, str] | None = None
 
 
 QueueAddRequest = Annotated[

@@ -1,7 +1,7 @@
 """Request identity is checked again under the same lock as data access."""
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import time
 import re
 from fastapi import HTTPException, Request
@@ -16,6 +16,7 @@ class RequestScope:
     epoch: str
     revision: int | None
     result_revision: int | None = None
+    timings: dict[str, float] = field(default_factory=dict)
 
 
 scope = ContextVar("project_scope", default=None)
@@ -34,9 +35,13 @@ def conflict(code, message):
 
 @contextmanager
 def guarded_lock():
+    started = time.perf_counter()
     with lock:
-        current = store()
+        acquired = time.perf_counter()
         identity = scope.get()
+        if identity is not None:
+            identity.timings["lock_wait_ms"] = identity.timings.get("lock_wait_ms", 0) + (acquired - started) * 1000
+        current = store()
         if identity is not None:
             document = current.read()
             project_id = document["id"] if document else "none"
@@ -49,10 +54,16 @@ def guarded_lock():
         try:
             yield
         finally:
+            if identity is not None:
+                identity.timings["lock_held_ms"] = identity.timings.get("lock_held_ms", 0) + (time.perf_counter() - acquired) * 1000
             document = current.read()
             if identity is not None and document and identity.project_id == document["id"] and identity.epoch == current.epoch:
                 identity.result_revision = document["revision"]
-                identity.revision = document["revision"]
+                # Reads carry project/epoch identity, but no revision fence.
+                # Do not invent one during preflight: autosave may legitimately
+                # commit before this same read acquires the lock again.
+                if identity.revision is not None:
+                    identity.revision = document["revision"]
 
 
 class ProjectRoute(APIRoute):
@@ -104,6 +115,9 @@ class ProjectRoute(APIRoute):
                 response = await handler(request)
                 if identity.result_revision is not None:
                     response.headers["X-Project-Revision"] = str(identity.result_revision)
+                if identity.timings:
+                    response.headers["Server-Timing"] = ", ".join(
+                        f"{name};dur={value:.3f}" for name, value in identity.timings.items())
                 return response
             finally:
                 scope.reset(token)

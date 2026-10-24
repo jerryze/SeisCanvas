@@ -173,6 +173,7 @@ export default function HorizonMap({
   const [profileFailure, setProfileFailure] = useState<{ key: string; message: string } | null>(null);
   const [profileExportOpen, setProfileExportOpen] = useState(false);
   const [profileExportBusy, setProfileExportBusy] = useState(false);
+  const [profileExportError, setProfileExportError] = useState("");
   const profileRef = useRef<HTMLDivElement>(null);
   const profileRenderer = useRef<ReturnType<typeof createProfilePlotRenderer> | null>(null);
   const profileRenderedInputs = useRef<unknown[] | null>(null);
@@ -1311,9 +1312,10 @@ export default function HorizonMap({
           profile
           settings={profileSettings}
           onChange={(p) => setProfileSettings((s) => ({ ...s, ...p }))}
-          onClose={() => { setProfileExportOpen(false); onCloseExport(); }}
+          onClose={() => { setProfileExportError(""); setProfileExportOpen(false); onCloseExport(); }}
           onExport={async () => {
             if (!profileData || profileError || profilePending) return;
+            setProfileExportError("");
             setProfileExportBusy(true);
             try {
               await onAddProfileToExport({
@@ -1339,13 +1341,15 @@ export default function HorizonMap({
               });
               setProfileExportOpen(false);
               onCloseExport();
+            } catch (e) {
+              setProfileExportError((e as Error).message);
             } finally {
               setProfileExportBusy(false);
             }
           }}
           busy={profileExportBusy}
           disabled={!profileData || !!profileError || profilePending}
-          error={profileError}
+          error={profileExportError || profileError}
           rendering={false}
           dataset={dataset}
           onDataset={onDataset}

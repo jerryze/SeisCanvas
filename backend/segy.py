@@ -104,6 +104,27 @@ class Survey:
             geometry_cache_saved=self.geometry_cache_saved,
         )
 
+    def section_indices(self, mode, number):
+        """Return native coordinates and trace IDs with the section's exact ordering.
+
+        Dense geometry retains its selected trace for each grid node. Sparse
+        geometry retains every trace, including duplicate coordinates, using
+        the same sort as full section reads.
+        """
+        if mode not in ("inline", "crossline") or (self.regular is None and number not in self.maps[mode]):
+            raise ValueError("Section does not exist in this survey.")
+        if self.regular is not None:
+            return self.regular.section_ids(mode, number)
+        coords = self.xls if mode == "inline" else self.ils
+        if self.trace_lookup is not None:
+            position = self.axis_positions[mode][number]
+            ids = self.trace_lookup[position, :] if mode == "inline" else self.trace_lookup[:, position]
+            ids = ids[ids >= 0]
+        else:
+            ids = self.maps[mode][number]
+            ids = ids[np.argsort(coords[ids])]
+        return coords[ids], ids
+
     def section(self, mode, number):
         if mode not in ("inline", "crossline") or (self.regular is None and number not in self.maps[mode]):
             raise ValueError("Section does not exist in this survey.")
@@ -112,18 +133,7 @@ class Survey:
             if key in self.cache:
                 self.cache.move_to_end(key)
                 return self.cache[key]
-            if self.regular is not None:
-                section_coords, ids = self.regular.section_ids(mode, number)
-            else:
-                coords = self.xls if mode == "inline" else self.ils
-                if self.trace_lookup is not None:
-                    position = self.axis_positions[mode][number]
-                    ids = self.trace_lookup[position, :] if mode == "inline" else self.trace_lookup[:, position]
-                    ids = ids[ids >= 0]
-                else:
-                    ids = self.maps[mode][number]
-                    ids = ids[np.argsort(coords[ids])]
-                section_coords = coords[ids]
+            section_coords, ids = self.section_indices(mode, number)
             with segyio.open(str(self.path), ignore_geometry=True) as f:
                 # Allocate once; a list of all traces plus stack doubles peak memory.
                 z = np.empty((len(self.times), len(ids)), dtype=np.float32)
