@@ -9,6 +9,7 @@ import { mapSelectionError } from "./components/horizonMapLogic";
 import HorizonImportModal, {
   HorizonImportState,
 } from "./components/HorizonImportModal";
+import ServerFilesModal from "./components/ServerFilesModal";
 import Sidebar from "./components/Sidebar";
 import { SidebarStateProvider } from "./components/SidebarState";
 import DataPanel, { ImportProgress } from "./components/panels/DataPanel";
@@ -187,6 +188,23 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
   useEffect(() => () => restoreRequest.current?.abort(), []);
 
   const [geometryMode, setGeometryMode] = useState("auto");
+  const [serverPathMode, setServerPathMode] = useState(false);
+  const [serverFiles, setServerFiles] = useState<{ kind: string; multiple: boolean } | null>(null);
+  const serverFilesResolve = useRef<((paths: string[] | null) => void) | null>(null);
+
+  function selectServerFiles(kind: string, multiple = false): Promise<string[] | null | undefined> {
+    if (!serverPathMode) return Promise.resolve(undefined);
+    return new Promise(resolve => {
+      serverFilesResolve.current = resolve;
+      setServerFiles({ kind, multiple });
+    });
+  }
+
+  function finishServerFiles(paths: string[] | null) {
+    setServerFiles(null);
+    serverFilesResolve.current?.(paths);
+    serverFilesResolve.current = null;
+  }
   const [bytes, setBytes] = useState({ il: 189, xl: 21 });
 
   const [selected, setSelected] = useState("");
@@ -300,6 +318,11 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
       await waitForMutations();
       action.signal?.throwIfAborted();
       if (action.type === "relink") {
+        if (!action.relink?.path) {
+          const paths = await selectServerFiles(action.relink?.horizon_id ? "层位" : "SEG-Y");
+          if (paths === null) return { cancelled: true };
+          if (paths) action = { ...action, relink: { ...action.relink!, path: paths[0] } };
+        }
         setBusy("正在重新关联文件…");
         const result = await (await api(`/projects/${action.id}/relink`, json(action.relink))).json();
         if (result.project_id && action.relink?.confirm) onActivate(result);
@@ -399,7 +422,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
   useEffect(() => {
     api("/catalog")
       .then((r) => r.json())
-      .then((c) => { setMaps(c.colormaps); setMapColors(c.map_colormaps || c.colormaps); })
+      .then((c) => { setMaps(c.colormaps); setMapColors(c.map_colormaps || c.colormaps); setServerPathMode(!!c.server_path_mode); })
       .catch((e) => setError(e.message));
   }, []);
 
@@ -530,12 +553,14 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
 
   function openSegy() {
     task("正在导入 SEG-Y…", async () => {
+      const paths = await selectServerFiles("SEG-Y");
+      if (paths === null) return;
       await persistence.flush();
       persistence.pause();
       const job_id = crypto.randomUUID();
       setImportProgress({
         percent: 0,
-        stage: "请在系统窗口选择文件",
+        stage: paths ? "正在读取服务器文件" : "请在系统窗口选择文件",
         status: "waiting",
       });
       let active = true;
@@ -556,6 +581,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
           "/segy/pick",
           json({
             job_id,
+            path: paths?.[0],
             ilbyte: bytes.il,
             xlbyte: bytes.xl,
             geometry_mode: geometryMode,
@@ -588,8 +614,10 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
 
   function uploadHorizons() {
     task("读取层位列…", async () => {
+      const paths = await selectServerFiles("层位", true);
+      if (paths === null) return;
       const preview = await (
-        await api("/horizons/pick", { method: "POST" })
+        await api("/horizons/pick", paths ? json({ paths }) : { method: "POST" })
       ).json();
       if (preview.cancelled) return;
 
@@ -890,7 +918,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
 
         <div className="top-status">
           <span className="status-dot" />
-          本地
+          {serverPathMode ? "远程" : "本地"}
           <span className="autosave-status" role="status">
             {busy === "正在恢复上次工作…" ? "恢复中…" : project?.issues.length ? "恢复待处理" : saveStatus === "saving" ? "保存中…" : saveStatus === "saved" ? "已保存" : saveStatus === "error" ? "保存失败" : saveStatus === "dirty" ? "有未保存更改" : ""}
           </span>
@@ -1324,6 +1352,8 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
         onRestore={restoreQueueItem}
         error={error}
       />
+
+      {serverFiles && <ServerFilesModal {...serverFiles} onDone={finishServerFiles} />}
 
       {horizonImport && (
         <HorizonImportModal

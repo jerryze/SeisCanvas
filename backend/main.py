@@ -1,7 +1,7 @@
 from pathlib import Path
 from contextlib import asynccontextmanager
 import numpy as np
-from backend.file_picker import choose_segy
+from backend.file_picker import choose_segy, server_path_mode
 from uuid import uuid4
 import shutil
 import tempfile
@@ -23,6 +23,7 @@ from backend.models import (
     HorizonRenameRequest,
     LocalSegyRequest,
     PickSegyRequest,
+    PickHorizonRequest,
     SampleRequest,
     SectionRequest,
     ViewState3D,
@@ -460,6 +461,7 @@ def catalog():
         for name in ("petrel", "turbo", "viridis", "cividis", "jet", "RdBu", "coolwarm", "seismic", "magma")
     }
     return {
+        "server_path_mode": server_path_mode(),
         "segy": [
             p.name
             for p in sorted((ROOT / "data").glob("*"))
@@ -517,9 +519,9 @@ def pick_local_segy(req: PickSegyRequest):
                     if key != job_id and import_progress[key]["status"] in ["done", "cancelled", "error"]:
                         del import_progress[key]
                         break
-    report(0, "请在系统窗口选择文件", "waiting")
+    report(0, "正在读取服务器文件" if req.path else "请在系统窗口选择文件", "waiting")
     try:
-        path = choose_segy()
+        path = req.path if req.path is not None else choose_segy()
         if path is None:
             report(0, "已取消导入", "cancelled")
             return {"cancelled": True}
@@ -588,18 +590,20 @@ def upload_segy(
         file.file.close()
 
 
-# Only paths selected in the native dialog can be imported through this route.
+# Preview tokens bind selected server files to the current project activation.
 horizon_selections = {}
 
 
 @app.post("/api/horizons/pick")
-def pick_horizon():
+def pick_horizon(req: PickHorizonRequest | None = None):
     try:
-        paths = choose_segy("Horizon", multiple=True)
+        paths = req.paths if req is not None else choose_segy("Horizon", multiple=True)
         if not paths:
             return {"cancelled": True}
-        paths = [Path(path) for path in paths]
+        paths = [Path(str(path).strip() if req is not None else path).expanduser() for path in paths]
         for path in paths:
+            if not path.is_absolute() or not path.is_file():
+                raise ValueError(f"请填写存在的服务器文件绝对路径：{path}")
             if path.suffix.lower() not in HORIZON_SUFFIXES:
                 raise ValueError(f"{path.name}: Horizon files must use .txt or .dat extension.")
         preview = horizon_preview(paths[0])

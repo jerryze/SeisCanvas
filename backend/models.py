@@ -349,6 +349,7 @@ class LocalSegyRequest(BaseModel):
 
 
 class PickSegyRequest(BaseModel):
+    path: str | None = Field(None, min_length=1)
     geometry_mode: Literal["auto", "regular"] = "auto"
     job_id: str | None = Field(None, pattern=r"^[a-zA-Z0-9-]{1,64}$")
     ilbyte: int = Field(189, ge=1, le=237)
@@ -357,6 +358,10 @@ class PickSegyRequest(BaseModel):
 
 class HorizonRenameRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+
+
+class PickHorizonRequest(BaseModel):
+    paths: list[str] = Field(min_length=1, max_length=1000)
 
 
 class LocalHorizonRequest(BaseModel):

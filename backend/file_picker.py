@@ -1,12 +1,23 @@
 """Native file chooser for the local desktop hosting SeisCanvas."""
 import subprocess
 import sys
+import os
 from threading import Lock
 
 _picker_lock = Lock()
 
 
+def server_path_mode():
+    """Remote sessions must select paths in the browser, without a Tk window."""
+    return os.environ.get("SEISCANVAS_REMOTE", "").lower() in {"1", "true", "yes"} or (
+        sys.platform.startswith("linux")
+        and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    )
+
+
 def choose_segy(kind="SEG-Y", multiple=False):
+    if server_path_mode():
+        raise ValueError("远程模式请在网页中填写服务器文件的绝对路径。")
     if not _picker_lock.acquire(blocking=False):
         raise ValueError("文件选择窗口已打开，请先完成选择或取消。")
     try:

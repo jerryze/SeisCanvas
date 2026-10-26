@@ -38,6 +38,7 @@ def test_batch_import_and_rename(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('platform', ['darwin', 'win32', 'linux'])
 def test_multi_picker(platform, monkeypatch):
+    monkeypatch.setattr(picker, 'server_path_mode', lambda: False)
     monkeypatch.setattr(picker.sys, 'platform', platform)
     commands = []
     def run(command, **kwargs):
