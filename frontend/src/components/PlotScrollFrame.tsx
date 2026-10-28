@@ -242,7 +242,7 @@ function ScrollBar({
       aria-valuenow={Math.round((metrics?.fraction ?? 0) * 100)}
       aria-valuetext={text}
       tabIndex={enabled ? 0 : -1}
-      title={enabled ? text : `${text} · 已显示完整范围`}
+      title={enabled ? text : `${text}（已显示完整范围）`}
       onPointerDown={(e) => {
         if (!enabled || !metrics || !bounds || !range || e.button !== 0) return;
         e.preventDefault();

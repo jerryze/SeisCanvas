@@ -108,7 +108,7 @@ class ProjectRoute(APIRoute):
                             if value["expires"] < time.monotonic():
                                 current.pending.pop(key, None)
                         # Reads expressed as POST don't change project config.
-                        read_post = re.fullmatch(r"/api/(section|sample|scene|horizon-map(?:/profile|/export)?|export(?:/3d)?)", request.url.path)
+                        read_post = re.fullmatch(r"/api/(section|sample|scene|horizon-map(?:/profile|/export)?|export(?:/3d|/map-name|/name)?)", request.url.path)
                         if request.method not in {"GET", "HEAD"} and not read_post and current.read() and identity.revision is None:
                             raise HTTPException(428, {"code": "REVISION_REQUIRED", "message": "请求缺少项目版本，请重新加载页面。"})
                 await run_in_threadpool(check)

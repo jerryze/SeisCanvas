@@ -22,6 +22,7 @@ type Props = {
   onSelect: (id: string) => void;
   busy: string;
   meta: Meta | null;
+  hasSeismic: boolean;
   onStyle: (patch: Partial<HS>, id: string) => void;
   /** Toggle one horizon's visibility in the app-level view state. */
   onPatch: (update: (v: VS) => VS) => void;
@@ -39,6 +40,7 @@ export default function HorizonPanel({
   onSelect,
   busy,
   meta,
+  hasSeismic,
   onStyle: onHorizonStyle,
   onPatch,
   onDelete,
@@ -52,13 +54,14 @@ export default function HorizonPanel({
     selected,
   );
   const mapMode = view.view_mode === "map";
+  const hasRenderControls = !!meta;
 
   return (
     <Group
       icon={<Layers size={20} />}
-      title={mapMode ? "层位管理" : "层位"}
+      title="层位管理"
       count={view.horizons.length}
-      defaultOpen={!mapMode}
+      defaultOpen={!mapMode || !hasSeismic}
     >
       <button
         className="panel-action full"
@@ -66,7 +69,7 @@ export default function HorizonPanel({
         onClick={onOrganize}
       >
         <Settings2 size={14} />
-        管理模型与层位
+        分组与层位设置
       </button>
       <div className="horizon-list">
         {modelGroups(view.horizons).map((group) => (
@@ -76,6 +79,7 @@ export default function HorizonPanel({
             members={group.members}
             busy={!!busy}
             view={view}
+            hasRenderControls={hasRenderControls}
             onPatch={onPatch}
           >
             {group.members.map((h) => {
@@ -84,9 +88,10 @@ export default function HorizonPanel({
               return (
                 <SidebarObject
                   key={h.id}
-                  open={openId === h.id}
+                  open={hasRenderControls && openId === h.id}
+                  expandable={hasRenderControls}
                   selected={selectedId === h.id}
-                  hidden={!h.visible}
+                  hidden={hasRenderControls && !h.visible}
                   title={`${openId === h.id ? "收起" : "展开"} ${h.name} ${mapMode ? "的剖面层位样式" : "属性"}`}
                   label={h.name}
                   labelControls={
@@ -96,10 +101,11 @@ export default function HorizonPanel({
                         aria-label={`${h.name} 层位颜色`}
                         title={
                           layerOf(h)
-                            ? `统一修改 ${layerOf(h)} 的颜色（所有模型）`
+                            ? `统一修改 ${layerOf(h)} 的颜色（所有分组）`
                             : "修改层位颜色：用于线条、图例和单色曲面"
                         }
                         type="color"
+                        disabled={!!busy}
                         value={h.color}
                         onInput={(e) =>
                           onStyle({ color: e.currentTarget.value })
@@ -116,8 +122,9 @@ export default function HorizonPanel({
                       <HorizonName
                         name={h.name}
                         disabled={!!busy}
+                        expandable={hasRenderControls}
                         onOpen={() => {
-                          setOpenId(h.id);
+                          if (hasRenderControls) setOpenId(h.id);
                           setSelectedId(h.id);
                           onSelect(h.id);
                         }}
@@ -130,7 +137,7 @@ export default function HorizonPanel({
                     setSelectedId(h.id);
                     onSelect(h.id);
                   }}
-                  visibility={
+                  visibility={hasRenderControls ?
                     <input
                       aria-label={
                         mapMode
@@ -150,7 +157,7 @@ export default function HorizonPanel({
                           ),
                         }))
                       }
-                    />
+                    /> : <span aria-hidden="true" />
                   }
                   action={
                     <button
@@ -167,6 +174,7 @@ export default function HorizonPanel({
                     <Horizon3DControls
                       horizon={h}
                       seismic={view.seismic}
+                      hasSeismic={hasSeismic}
                       onChange={onStyle}
                     />
                   )}
@@ -224,8 +232,8 @@ export default function HorizonPanel({
                               {[
                                 ["solid", "─ 实线"],
                                 ["dashed", "┄ 虚线"],
-                                ["dotted", "··· 点线"],
-                                ["dashdot", "┄· 点划线"],
+                                ["dotted", "点线"],
+                                ["dashdot", "点划线"],
                               ].map(([value, label]) => (
                                 <option key={value} value={value}>
                                   {label}
@@ -234,7 +242,7 @@ export default function HorizonPanel({
                             </Select>
                           </label>
                           <label>
-                            线宽 · pt
+                            线宽（pt）
                             <Num
                               label={
                                 view.view_mode === "3d"
@@ -304,7 +312,7 @@ export default function HorizonPanel({
                           </label>
 
                           <label>
-                            大小 · pt
+                            大小（pt）
                             <Num
                               label="标记大小（pt）"
                               disabled={!h.marker.visible}
@@ -351,7 +359,7 @@ export default function HorizonPanel({
 
       <button
         className="panel-action full"
-        disabled={!meta || !!busy}
+        disabled={!!busy}
         onClick={onAdd}
       >
         <Plus size={14} />
@@ -409,6 +417,7 @@ function ModelHorizonGroup({
   members,
   busy,
   view,
+  hasRenderControls,
   onPatch,
   children,
 }: {
@@ -416,6 +425,7 @@ function ModelHorizonGroup({
   members: HS[];
   busy: boolean;
   view: VS;
+  hasRenderControls: boolean;
   onPatch: Props["onPatch"];
   children: ReactNode;
 }) {
@@ -439,11 +449,11 @@ function ModelHorizonGroup({
     view.view_mode !== "3d" ||
     members.some((h) => h.display_mode === "slice_intersections");
   return (
-    <section className="horizon-model-group" aria-label={`模型 ${label}`}>
+    <section className="horizon-model-group" aria-label={`分组 ${label}`}>
       <div className="horizon-model-heading">
-        <input
+        {hasRenderControls && <input
           type="checkbox"
-          aria-label={`显示模型 ${label}`}
+          aria-label={`显示分组 ${label}`}
           checked={visible === members.length}
           disabled={busy}
           ref={(node) => {
@@ -453,21 +463,21 @@ function ModelHorizonGroup({
           onChange={(e) =>
             patchGroup((h) => ({ ...h, visible: e.target.checked }))
           }
-        />
+        />}
         <button
           className="horizon-model-toggle"
           aria-expanded={open}
           onClick={() => setOpen(!open)}
-          title={`${open ? "收起" : "展开"}模型 ${label}`}
+          title={`${open ? "收起" : "展开"}分组 ${label}`}
         >
           {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           <span>{label}</span>
           <small>{members.length}</small>
         </button>
-        <button
+        {hasRenderControls && <button
           className="horizon-model-solo"
           disabled={busy}
-          title={`仅显示模型 ${label}`}
+          title={`仅显示分组 ${label}`}
           onClick={() =>
             onPatch((current) => ({
               ...current,
@@ -479,11 +489,11 @@ function ModelHorizonGroup({
           }
         >
           仅此组
-        </button>
+        </button>}
       </div>
       {open && (
         <>
-          {showLines && (
+          {hasRenderControls && showLines && (
             <details className="horizon-group-style">
               <summary>组样式</summary>
               <div className="field-row">
@@ -511,7 +521,7 @@ function ModelHorizonGroup({
                   </select>
                 </label>
                 <Num
-                  label="线宽 · pt"
+                  label="线宽（pt）"
                   value={members[0].line.width}
                   min={0.2}
                   max={6}
@@ -534,11 +544,13 @@ function ModelHorizonGroup({
 function HorizonName({
   name,
   disabled,
+  expandable = true,
   onOpen,
   onRename,
 }: {
   name: string;
   disabled: boolean;
+  expandable?: boolean;
   onOpen: () => void;
   onRename: (name: string) => void;
 }) {
@@ -601,7 +613,7 @@ function HorizonName({
       type="button"
       className="horizon-name"
       aria-label={`重命名 ${name}`}
-      title={`${name} · 单击展开，双击重命名（键盘 Enter / F2）`}
+      title={`${name}：${expandable ? "单击展开，" : ""}双击重命名（键盘 Enter / F2）`}
       disabled={disabled}
       onClick={onOpen}
       onDoubleClick={beginEditing}

@@ -5,8 +5,46 @@ import ts from 'typescript';
 
 const source = await readFile(new URL('../src/components/horizonMapLogic.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
-const { mapPresentation, mapSelectionError, profileEndpointError, profileRequestKey, profileProbeRequest, profileHorizonStyleKey, profileContainerViewport, profileAspectPair, mapViewForKey } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'));
+const { mapPresentation, mapSelectionError, profileEndpointError, profileRequestKey, profileProbeRequest, profileHorizonStyleKey, profileContainerViewport, profileAspectPair, mapViewForKey, mapWorkspaceForData } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'));
 const horizons = [{ id: 'r', name: '参考' }, { id: 'c', name: '对比' }];
+
+test('horizon-only projects replace unavailable amplitude while preserving profile work', () => {
+  const workspace = {
+    activeView: 'section', profileOn: true, profileA: [10, 20], profileB: [30, 40],
+    state: { horizon: 'r', color_by: 'amplitude', colormap: 'seismic',
+      range_mode: 'manual', vmin: -200, vmax: 200, interval_auto: false,
+      x_range: [20, 40], y_range: [10, 30] },
+  };
+  const available = mapWorkspaceForData(workspace, false);
+  assert.equal(available.activeView, 'section');
+  assert.equal(available.profileOn, true);
+  assert.equal(available.state.color_by, 'twt');
+  assert.equal(available.state.colormap, 'petrel');
+  assert.equal(available.state.range_mode, 'auto');
+  assert.equal(available.state.vmin, null);
+  assert.equal(available.state.vmax, null);
+  assert.equal(available.state.interval_auto, true);
+  assert.deepEqual(available.state.x_range, workspace.state.x_range);
+  assert.deepEqual(available.profileA, workspace.profileA);
+  assert.equal(workspace.state.color_by, 'amplitude');
+  assert.equal(mapWorkspaceForData(workspace, true), workspace);
+  assert.equal(mapWorkspaceForData(available, false), available);
+});
+
+test('horizon-only projects retain time/difference color, contour, export and zoom settings', () => {
+  for (const color_by of ['twt', 'difference']) {
+    const workspace = { activeView: 'map', profileOn: false,
+      state: { color_by, colormap: 'RdBu', display: 'overlay', range_mode: 'manual',
+        vmin: -12, vmax: 12, interval_auto: false, interval: 4,
+        x_range: [20, 40], y_range: [10, 30] },
+      settings: { format: 'pdf', show_axes: false },
+    };
+    assert.equal(mapWorkspaceForData(workspace, false), workspace);
+    const available = mapWorkspaceForData({ ...workspace, activeView: 'section', profileOn: true }, false);
+    assert.equal(available.state, workspace.state);
+    assert.equal(available.settings, workspace.settings);
+  }
+});
 
 test('section sizing rejects hidden/unmeasured containers and reserves axes and A/B labels', () => {
   assert.equal(profileContainerViewport(0, 600), null);

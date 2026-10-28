@@ -8,6 +8,7 @@ from backend.models import ViewState
 from backend.section_service import section_raster
 from backend.trace_overlay import build_trace_overlay, overlays_enabled
 from backend.preview import sample_horizon_amplitude
+from backend.horizon_geometry import has_seismic
 
 
 #: Budget for the legacy preview endpoint without seismic display settings.
@@ -58,6 +59,8 @@ def timeslice(survey, time):
 
 
 def slice_data(survey, kind, position, maximum=256, interpolation="bilinear", *, seismic=None, viewport=None):
+    if not has_seismic(survey):
+        return survey.slice_frame(kind, position), np.empty((0, 0))
     from backend.preview import read_samples, preview_ids
     from backend import resample
     if kind not in ("time", "inline", "crossline"):
@@ -290,6 +293,7 @@ def horizon_intersection(horizon, kind, position, tolerance=4, maximum=None):
 
 
 def scene_data(survey, horizons, state):
+    seismic_available = has_seismic(survey)
     result = {
         "slices": [],
         "horizons": {},
@@ -299,6 +303,8 @@ def scene_data(survey, horizons, state):
             "z": [float(survey.times[0]), float(survey.times[-1])],
         },
     }
+    if not seismic_available:
+        result["has_seismic"] = False
     stats = []
     native_slices = []
     maximum = state.scene.quality
@@ -329,6 +335,8 @@ def scene_data(survey, horizons, state):
     amplitude_meshes = {}
     for h in state.horizons:
         if h.visible and h.id in horizons and h.display_mode == "full_surface" and h.color_by == "amplitude":
+            if not seismic_available:
+                raise ValueError("振幅着色需要已导入的 SEG-Y 数据。")
             mesh = horizon_amplitude_mesh(survey, horizons[h.id], state.scene.quality)
             amplitude_meshes[h.id] = mesh
             values = np.asarray(mesh["amplitude"], dtype=float)
@@ -342,9 +350,10 @@ def scene_data(survey, horizons, state):
     # amplitude sets depend on their mesh, so compute those combinations fresh.
     cache_id = (tuple((sl["kind"], sl["position"]) for sl in result["slices"])
                 if not amplitude_meshes and any(isinstance(source, SliceSource) for source in stats) else None)
-    lo, hi = source_limits(stats, state.seismic, survey=survey, cache_id=cache_id, omit_empty_sources=True)
+    lo, hi = (source_limits(stats, state.seismic, survey=survey, cache_id=cache_id, omit_empty_sources=True)
+              if seismic_available else (None, None))
     result.update(vmin=lo, vmax=hi)
-    if overlays_enabled(state.seismic):
+    if seismic_available and overlays_enabled(state.seismic):
         for sl, native in zip(result["slices"], native_slices):
             if sl["kind"] == "time":
                 continue  # A fixed-TWT plane has no time-directed seismic traces.

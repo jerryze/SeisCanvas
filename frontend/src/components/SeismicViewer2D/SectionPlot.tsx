@@ -159,6 +159,7 @@ export default function SectionPlot({
         // The cursor readout asks the backend for the original sample; the
         // heatmap may be an interpolated render grid.
         el.on("plotly_hover", (event: any) => {
+          if (section.has_seismic === false || !section.z.length) return;
           const point = event?.points?.[0];
           if (!point) return;
           const request =

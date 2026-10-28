@@ -61,6 +61,22 @@ test('disabled overlays preserve the existing color background and horizons', ()
   assert.ok(traces.slice(1).every(trace => !trace.fill));
 });
 
+test('horizon-only sections preserve raw curves and styling without fabricated seismic traces', () => {
+  const section = { ...data(), has_seismic: false, z: [], vmin: null, vmax: null,
+    background_interpolation: false, interpolation: 'native' };
+  const view = state({ wiggle: true, variable_area: true, reverse_polarity: true });
+  const traces = buildTraces(section, view, colors);
+  assert.equal(traces.length, 2);
+  assert.ok(traces.every(trace => trace.type === 'scatter' && !trace.fill));
+  assert.deepEqual(traces.at(-1).x, [10, 11]);
+  assert.deepEqual(traces.at(-1).y, [100, 102]);
+  assert.equal(traces.at(-1).line.color, horizon.color);
+  assert.equal(traces.at(-1).line.width, 4 / 3);
+  assert.equal(sectionResponseError(section, view.seismic), null);
+  view.horizons = [{ ...horizon, visible: false }];
+  assert.deepEqual(buildTraces(section, view, colors), []);
+});
+
 test('hollow circles use a white fill and coloured ring in sections and A–B profiles without black outlines', () => {
   for (const horizontalLabel of [undefined, '距离 (网格)']) {
     for (const enabled of [false, true]) {

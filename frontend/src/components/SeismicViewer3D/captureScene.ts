@@ -243,7 +243,7 @@ export async function captureScene(
     cssHeight,
   );
   timings.scene_preparation = now() - start;
-  status(`渲染三维 · ${width} × ${height} px`);
+  status(`渲染三维（${width} × ${height} px）`);
   await paint();
   let pixels: Uint8Array;
   let restoreAxisText = () => {};
@@ -358,7 +358,7 @@ export async function captureScene(
   context.drawImage(source, offsetX, offsetY);
   if (vectorOverlay) vectorOverlay = translateVectorOverlay(vectorOverlay, offsetX, offsetY);
   timings.crop = now() - cropStart;
-  status(`编码 PNG · ${output.width} × ${output.height} px`);
+  status(`编码 PNG（${output.width} × ${output.height} px）`);
   const encodeStart = now();
   const png = await new Promise<string>((resolve, reject) =>
     output.toBlob((blob) => {

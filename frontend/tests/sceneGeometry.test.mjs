@@ -16,6 +16,28 @@ test('3D coordinates place all plane orientations without swapping axes',()=>{co
 test('polarity and colormap reversal preserve missing cells',()=>{const v=state();v.seismic.reverse_polarity=true;v.seismic.reverse_colormap=true;const [p]=buildTraces(data(),v,colors);assert.deepEqual(p.surfacecolor,[[-1,-2],[-3,null]]);assert.deepEqual(p.colorscale,[[0,'#ffffff'],[1,'#000000']])});
 test('exports preserve physical ranges and camera with independent visibility',()=>{const v=state(),d=data();const layout=buildLayout(d,v,'orbit',{background:'#aabbcc',show_axes:false,show_axis_labels:false});assert.deepEqual(layout.scene.zaxis.range,[1200,200]);assert.deepEqual(layout.scene.xaxis.range,[30,40]);assert.deepEqual(layout.scene.camera,v.scene.camera);assert.notEqual(layout.scene.camera,v.scene.camera);assert.equal(layout.scene.xaxis.visible,false);assert.equal(layout.scene.xaxis.title.text,'');assert.equal(layout.paper_bgcolor,'#aabbcc');assert.equal(layout.scene.aspectratio.z,.7);assert.equal(buildTraces(d,v,colors,{show_bounding_box:true}).length,4)});
 test('visibility omits hidden planes immediately, including their borders',()=>{const v=state();v.slices.inline[0].visible=false;assert.equal(buildTraces(data(),v,colors).length,2)});
+test('geometry-only slices retain exact frames and intersections without seismic surfaces', () => {
+  const v = state(), d = data();
+  d.has_seismic = false; d.vmin = d.vmax = null;
+  d.slices = d.slices.map(p => ({ ...p, geometry_only: true, has_seismic: false, amplitude: [] }));
+  for (const kind of ['inline', 'crossline', 'time'])
+    v.slices[kind][0].border = { visible: true, color: '#345678', width: 1.5 };
+  v.horizons = [{ id: 'h', name: 'H', visible: true, display_mode: 'slice_intersections',
+    color: '#ff8800', opacity: 1, line: { visible: true, style: 'solid', width: 1 },
+    outline: { enabled: false }, marker: { visible: false } }];
+  d.horizons.h = { intersections: [{ slice_id: 'inline', kind: 'inline',
+    x: [30, 40], y: [12, 12], z: [300, 350] }] };
+  const traces = buildTraces(d, v, colors);
+  assert.equal(traces.length, 4);
+  assert.ok(traces.every(t => t.type === 'scatter3d' && !t.meta?.probe));
+  assert.deepEqual(traces[0].x, [30, 40, 40, 30, 30]);
+  assert.deepEqual(traces[0].z, [200, 200, 204, 204, 200]);
+  assert.deepEqual(traces.at(-1).z, [300, 350]);
+  assert.equal(traces.at(-1).line.color, '#ff8800');
+  assert.equal(traces[0].line.width, 2);
+  v.slices.inline[0].visible = false;
+  assert.equal(buildTraces(d, v, colors).length, 2);
+});
 test('intersection foreground and outline have distinct depth layers without moving data or inflating widths',()=>{
   const v=state(),d=data();
   v.horizons=[{id:'h',name:'H',visible:true,display_mode:'slice_intersections',color:'#ff0000',opacity:1,line:{visible:true,style:'solid',width:1},outline:{enabled:true,width:.5},marker:{visible:false,shape:'none',size:2}}];

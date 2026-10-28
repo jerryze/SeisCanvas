@@ -158,7 +158,7 @@ class WorkspaceStore:
                 result.append({"id": d["id"], "name": d.get("name", "恢复的项目"), "revision": d["revision"],
                                "updated_at": d["updated_at"], "filename": Path(item["path"]).name if item else None,
                                "path": item["path"] if item else None, "horizon_count": len(d["horizons"]),
-                               "status": "missing" if missing else "unchecked" if item else "empty"})
+                               "status": "missing" if missing else "unchecked" if files else "empty"})
             except (ValueError, OSError, KeyError, TypeError):
                 result.append({"id": path.parent.name, "name": "损坏的项目", "status": "damaged", "updated_at": ""})
         recent = index.get("recent", [])
@@ -200,11 +200,15 @@ class WorkspaceStore:
                         created_at=timestamp())
         return self.write(document)
 
-    def new(self, survey_source, horizons):
+    def new(self, survey_source, horizons, *, seismic_view=None):
         current = self.read()
         if current and current["source"] is None:
             document = deepcopy(current)
-            document.update(source=survey_source, horizons=horizons, state=None, revision=current["revision"] + 1)
+            document.update(source=survey_source, horizons=[*current["horizons"], *horizons],
+                            revision=current["revision"] + 1)
+            if document["state"]:
+                document["state"]["view"].update(seismic_view or {})
+                document["state"]["view"]["horizons"].extend(h["style"] for h in horizons)
             result = self.commit(document)
             self.epoch = uuid4().hex
             self.pending.clear()

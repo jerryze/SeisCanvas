@@ -8,6 +8,7 @@ from matplotlib.collections import LineCollection, PolyCollection
 from backend import resample
 from backend.figure_export import figure_size, save_figure
 from backend.horizon_display import sg_section, pchip_display
+from backend.horizon_geometry import has_seismic
 from backend.style import get_cmap, font_family
 from backend.slice_source import polarity, read_window, section_input, source_limits
 from backend.trace_overlay import (
@@ -144,7 +145,7 @@ def draw_horizon(ax, points, style, zorder=3, label=None, display_points=None):
 @dataclass(frozen=True)
 class SectionRenderResult:
     data: bytes
-    colorbar_range: tuple[float, float]
+    colorbar_range: tuple[float, float] | None
 
 
 def render(survey, horizons, state, settings) -> bytes:
@@ -154,6 +155,8 @@ def render(survey, horizons, state, settings) -> bytes:
 
 def render_with_metadata(survey, horizons, state, settings) -> SectionRenderResult:
     """Render once and report the exact native amplitude range used to draw it."""
+    if not has_seismic(survey):
+        return render_horizon_section(survey, horizons, state, settings)
     x, t, z = section_input(survey, state.view_type, state.section_number)
     # Amplitude clipping always comes from the original section: the colour
     # range must not change with the interpolation mode or the zoom window.
@@ -250,3 +253,39 @@ def render_with_metadata(survey, horizons, state, settings) -> SectionRenderResu
         txt.set_fontfamily(font_family(settings.font))
         txt.set_fontsize(settings.font_size)
     return SectionRenderResult(save_figure(fig, settings, rasters), (lo, hi))
+
+
+def render_horizon_section(geometry, horizons, state, settings):
+    """Vector layer lines and picks on an empty section, without an amplitude image."""
+    x, time = geometry.section_axes(state.view_type, state.section_number)
+    ratio = (state.aspect_ratio_2d[0] / state.aspect_ratio_2d[1]
+             if state.aspect_ratio_2d else settings.width / settings.height)
+    fig = Figure(figsize=figure_size(settings, ratio), dpi=settings.dpi, layout="constrained")
+    ax = fig.subplots()
+    if state.aspect_ratio_2d is not None or settings.canvas == "fit":
+        ax.set_box_aspect(1 / ratio)
+    for style in state.horizons:
+        if not style.visible or style.id not in horizons:
+            continue
+        source = horizons[style.id]
+        points = np.asarray(source.section(state.view_type, state.section_number)).reshape(-1, 2)
+        curve = sg_section(source, state.view_type, state.section_number,
+                           state.horizon_sg_window, x, points) if state.horizon_sg else points
+        if state.smooth_horizons:
+            curve = pchip_display(curve, state.x_range or coordinate_edges(x),
+                                  settings.canvas_pixels()[0] if settings.canvas == "fixed" else settings.long_edge)
+        draw_horizon(ax, points, style, display_points=curve)
+    ax.set_xlim(state.x_range or coordinate_edges(x))
+    tr = state.time_range or [float(time[0]), float(time[-1])]
+    ax.set_ylim(max(tr), min(tr))
+    if not settings.show_axes:
+        ax.set_axis_off()
+    if settings.show_axes and settings.show_labels:
+        ax.set_xlabel("Crossline" if state.view_type == "inline" else "Inline")
+        ax.set_ylabel("Time (ms)")
+    if settings.show_title:
+        ax.set_title(f"{state.view_type.title()} {state.section_number}")
+    for text in [ax.title, ax.xaxis.label, ax.yaxis.label, *ax.get_xticklabels(), *ax.get_yticklabels()]:
+        text.set_fontfamily(font_family(settings.font))
+        text.set_fontsize(settings.font_size)
+    return SectionRenderResult(save_figure(fig, settings), None)

@@ -3,6 +3,7 @@ import { ChevronDown } from "lucide-react";
 
 export default function SidebarObject({
   open,
+  expandable = true,
   selected,
   hidden = false,
   label,
@@ -15,6 +16,7 @@ export default function SidebarObject({
   children,
 }: {
   open: boolean;
+  expandable?: boolean;
   selected: boolean;
   hidden?: boolean;
   label: ReactNode;
@@ -40,7 +42,7 @@ export default function SidebarObject({
     else if (bottom > area.bottom - 20)
       viewport.scrollTop += bottom - area.bottom + 20;
   };
-  const toggle = (
+  const toggle = expandable ? (
     <button
       type="button"
       className={`object-toggle${labelControls ? " object-disclosure" : ""}`}
@@ -57,11 +59,11 @@ export default function SidebarObject({
       {metadata}
       <ChevronDown className="object-chevron" size={12} />
     </button>
-  );
+  ) : !labelControls && <div className="object-toggle"><span className="object-label">{label}</span>{metadata}</div>;
   return (
     <div
       ref={row}
-      className={`sidebar-object${open ? " is-open" : ""}${selected ? " is-selected" : ""}${hidden ? " is-hidden" : ""}`}
+      className={`sidebar-object${expandable && open ? " is-open" : ""}${selected ? " is-selected" : ""}${hidden ? " is-hidden" : ""}`}
     >
       <div className="object-row">
         {visibility}
@@ -75,9 +77,9 @@ export default function SidebarObject({
         )}
         {action}
       </div>
-      <div id={id} className="object-body" hidden={!open}>
+      {expandable && <div id={id} className="object-body" hidden={!open}>
         {open && children}
-      </div>
+      </div>}
     </div>
   );
 }

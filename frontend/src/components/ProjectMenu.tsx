@@ -118,7 +118,7 @@ export default function ProjectMenu({ project, disabled, onAction }: Props) {
         <div className="modal-heading"><h2 id="project-dialog-title">{repair ? "确认重新关联" : ({ create: "新建项目", clone: "另存为新项目", rename: "重命名项目", open: "打开项目" })[mode]}</h2><button className="icon" disabled={pending && !canCancel} onClick={close} aria-label="关闭"><X size={18}/></button></div>
         {repair ? <>
           {repair.issue.horizon_id === null && <p>剖面范围和切片位置将重置。</p>}
-          <dl className="project-detail"><dt>原文件</dt><dd>{repair.candidate.previous_path}</dd><dt>新文件</dt><dd>{repair.candidate.path}</dd><dt>数据概况</dt><dd>{repair.candidate.metadata.points ? `${repair.candidate.metadata.points} 个层位点` : `${repair.candidate.metadata.traces} 道 · ${repair.candidate.metadata.samples} 个采样点`}</dd></dl>
+          <dl className="project-detail"><dt>原文件</dt><dd>{repair.candidate.previous_path}</dd><dt>新文件</dt><dd>{repair.candidate.path}</dd><dt>数据概况</dt><dd>{repair.candidate.metadata.points ? `${repair.candidate.metadata.points} 个层位点` : `${repair.candidate.metadata.traces} 道，${repair.candidate.metadata.samples} 个采样点`}</dd></dl>
           {error && <p className="project-error" role="alert">{error}</p>}
           <div className="project-actions"><button className="secondary" disabled={pending} onClick={() => setRepair(null)}>返回</button><button className="primary" disabled={pending} onClick={() => {
             void execute({ type: "relink", id: repair.projectId, relink: { horizon_id: repair.issue.horizon_id, path: repair.candidate.path, confirm: true, revision: repair.candidate.revision, file_identity: repair.candidate.file_identity } }).then(result => {

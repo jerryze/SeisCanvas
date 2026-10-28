@@ -111,7 +111,7 @@ def test_fit_queue_metadata_and_archive_do_not_render(client, monkeypatch, fmt):
     assert response.status_code == 200, response.text
     item = response.json()
     assert max(item['pixel_size']) == 800
-    assert f"{item['pixel_size'][0]}x{item['pixel_size'][1]}px" in item['filename']
+    assert item["filename"] == f"2D_IL10.{fmt}"
     from pathlib import Path
     saved = Path(item['temporary_path']).read_bytes()
     def fail(*a, **kw):

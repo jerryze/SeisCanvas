@@ -514,32 +514,45 @@ class HorizonProfileRequest(ProfileDisplayState):
     interpolation: Literal["nearest", "bilinear", "bicubic"] | None = None
 
 
-class Queue2DRequest(BaseModel):
-    kind: Literal["2d"] = "2d"
+class NamedExport(BaseModel):
     dataset: str | None = Field(None, max_length=120)
+    filename: str | None = Field(None, min_length=1, max_length=200)
+
+    @field_validator("filename")
+    @classmethod
+    def filename_not_blank(cls, value):
+        if value is not None and not value.strip():
+            raise ValueError("文件名不能为空。")
+        return value
+
+
+class Queue2DRequest(NamedExport):
+    kind: Literal["2d"] = "2d"
     state: ViewState
     settings: Settings
 
 
-class QueueMapRequest(HorizonMapExport):
+class QueueMapRequest(HorizonMapExport, NamedExport):
     kind: Literal["map"] = "map"
-    dataset: str | None = Field(None, max_length=120)
 
 
-class Queue3DRequest(BaseModel):
+class SceneNameRequest(NamedExport):
+    """Name a 3D figure before capturing or transferring any pixels."""
+    kind: Literal["3d"] = "3d"
+    format: Literal["png", "pdf", "svg"] = "png"
+    settings: Scene3DSettings = Field(default_factory=Scene3DSettings)
+    state: ViewState3D
+
+
+class Queue3DRequest(SceneNameRequest):
     """The browser ships its exact WebGL PNG plus the settings used to draw it."""
 
-    kind: Literal["3d"] = "3d"
-    dataset: str | None = Field(None, max_length=120)
     png: str = Field(max_length=135_000_000)
-    format: Literal["png", "pdf", "svg"] = "png"
     width_px: int = Field(ge=64, le=4000)
     height_px: int = Field(ge=64, le=4000)
     scale: int = Field(ge=1, le=4)
     render_dpi: float | None = Field(None, ge=1, le=2000)
     timings: dict[str, float] = Field(default_factory=dict, max_length=20)
-    settings: Scene3DSettings = Field(default_factory=Scene3DSettings)
-    state: ViewState3D
     vector_overlay: SceneVectorOverlay | None = None
 
     @model_validator(mode="after")
@@ -549,11 +562,10 @@ class Queue3DRequest(BaseModel):
         return self
 
 
-class QueueProfileRequest(ProfileDisplayState):
+class QueueProfileRequest(ProfileDisplayState, NamedExport):
     """Standalone A–B profile figure: interpolated seismic section + overlays."""
 
     kind: Literal["profile"] = "profile"
-    dataset: str | None = Field(None, max_length=120)
     state: HorizonMapState
     a: tuple[float, float]
     b: tuple[float, float]
@@ -588,6 +600,12 @@ class ExportRestoreSnapshot(BaseModel):
 
 QueueAddRequest = Annotated[
     Union[Queue2DRequest, QueueMapRequest, Queue3DRequest, QueueProfileRequest],
+    Field(discriminator="kind"),
+]
+
+
+ExportNameRequest = Annotated[
+    Union[Queue2DRequest, QueueMapRequest, SceneNameRequest, QueueProfileRequest],
     Field(discriminator="kind"),
 ]
 

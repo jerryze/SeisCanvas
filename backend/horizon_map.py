@@ -15,6 +15,7 @@ from matplotlib import colormaps
 from matplotlib.colors import LinearSegmentedColormap, Normalize, to_hex
 from matplotlib.figure import Figure
 from backend.figure_export import figure_size, save_figure
+from backend.horizon_geometry import has_seismic
 from matplotlib.cm import ScalarMappable
 from backend.models import HorizonMapExport, HorizonMapState, Seismic, ViewState
 from backend import resample
@@ -244,6 +245,8 @@ def sample_seismic_line(survey, qil, qxl):
     traces missing at a node yield NaN; the result has shape ``(len(qil), ns)``
     with rows ordered along the path.
     """
+    if not has_seismic(survey):
+        return np.empty((len(qil), 0), dtype=float)
     ns = len(survey.times)
     i0 = np.clip(np.searchsorted(survey.inlines, qil, side="right") - 1, 0, len(survey.inlines) - 2)
     i1 = i0 + 1
@@ -303,6 +306,11 @@ def _profile_data(survey, state, horizons, a, b, target_width=None, target_heigh
     # Clip the extended path to the surveyed rectangle.
     il_lo, il_hi = float(survey.inlines[0]), float(survey.inlines[-1])
     xl_lo, xl_hi = float(survey.crosslines[0]), float(survey.crosslines[-1])
+    # Only the optional extensions may be clipped. Clipping A/B themselves
+    # would turn an outside endpoint into an unsigned distance inside the plot.
+    if any(not (il_lo <= il <= il_hi and xl_lo <= xl <= xl_hi)
+           for il, xl in ((ail, axl), (bil, bxl))):
+        raise ValueError("A、B 端点必须位于数据范围内。")
     t_lo, t_hi = -PROFILE_EXTENSION, 1.0 + PROFILE_EXTENSION
     for bound_lo, bound_hi, start, delta in ((il_lo, il_hi, ail, d_il), (xl_lo, xl_hi, axl, d_xl)):
         if delta == 0:
@@ -333,6 +341,27 @@ def _profile_data(survey, state, horizons, a, b, target_width=None, target_heigh
     # (a Plotly heatmap needs monotonic x); A and B sit inside it.
     distance = np.hypot(qil - qil[0], qxl - qxl[0])
 
+    # Horizon geometry is independent of a seismic raster or its resolution.
+    view = display_state or ViewState(section_number=0, seismic=Seismic(clip_percentile=99))
+    curves = []
+    for key, h in (horizons or {}).items():
+        hx, hy, hgrid = horizon_grid(h)
+        curves.append(dict(id=key, name=h.name, values=_bilinear_points(hx, hy, hgrid, qxl, qil)))
+    if not has_seismic(survey):
+        empty = np.empty((0, 0), dtype=float)
+        return dict(
+            has_seismic=False, distance=distance, time=survey.times,
+            amplitude=empty, distance_edges=np.empty(0), time_edges=np.empty(0),
+            raster_extent=[float(distance[0]), float(distance[-1]), float(survey.times[0]), float(survey.times[-1])],
+            native_distance=distance, native_time=survey.times, native_amplitude=empty,
+            trace_amplitudes=empty, trace_overlay=None, view=view, curves=curves, curve_distance=distance,
+            a_distance=float(round(np.hypot(ail-qil[0], axl-qxl[0]), 3)),
+            b_distance=float(round(np.hypot(bil-qil[0], bxl-qxl[0]), 3)),
+            path_start=[float(qil[0]), float(qxl[0])], path_end=[float(qil[-1]), float(qxl[-1])],
+            vmin=None, vmax=None, method="none", native_shape=[0, 0], preview_shape=[0, 0],
+            resampled=False, label_y="Time (ms)",
+        )
+
     path_key = ("ab-native", ail, axl, bil, bxl, count)
     native = survey.cache.get(path_key)
     if native is None:
@@ -345,19 +374,8 @@ def _profile_data(survey, state, horizons, a, b, target_width=None, target_heigh
     display = section_raster(survey, distance, survey.times, native, view,
                              target_width, target_height, cache_id=path_key)
     display_distance, display_time = display["x"], display["time"]
-    # Interpretations keep the fixed original path coordinates. Background
-    # pixels and interpolation switches never rebuild horizon curve geometry.
-    curves = []
-    for key, h in (horizons or {}).items():
-        hx, hy, hgrid = horizon_grid(h)
-        curves.append(
-            dict(
-                id=key,
-                name=h.name,
-                values=_bilinear_points(hx, hy, hgrid, qxl, qil),
-            )
-        )
     return dict(
+        has_seismic=True,
         # Resampled coordinate axes, matching the display raster exactly.
         distance=display_distance,
         time=display_time,
@@ -400,6 +418,7 @@ def map_profile(
     """Serialized A–B section for the web profile subplot."""
     d = _profile_data(survey, state, horizons, a, b, target_width, target_height, interpolation, display_state)
     return dict(
+        has_seismic=d["has_seismic"],
         distance=d["distance"].tolist(),
         time=[float(v) for v in d["time"]],
         amplitude=serial(d["amplitude"]),
@@ -456,7 +475,7 @@ def render_profile(
     layout_view = view.model_copy(update={"seismic": view.seismic.model_copy(update={"background_interpolation": False})})
     d = _profile_data(survey, state, horizons, a, b, display_state=layout_view)
     d["view"] = view
-    ratio = view.aspect_ratio_2d[0] / view.aspect_ratio_2d[1] if view.aspect_ratio_2d else d["amplitude"].shape[1] / d["amplitude"].shape[0]
+    ratio = view.aspect_ratio_2d[0] / view.aspect_ratio_2d[1] if view.aspect_ratio_2d else (d["amplitude"].shape[1] / d["amplitude"].shape[0] if d["has_seismic"] else 1.6)
     fig = Figure(
         figsize=figure_size(settings, ratio),
         dpi=settings.dpi,
@@ -470,7 +489,7 @@ def render_profile(
     cmap = get_cmap(view.seismic.colormap, view.seismic.reverse_colormap)
     values = -d["amplitude"] if view.seismic.reverse_polarity else d["amplitude"]
     rasters = []
-    if view.seismic.background_interpolation:
+    if d["has_seismic"] and view.seismic.background_interpolation:
         image = ax.imshow(values, extent=extent, aspect="auto", cmap=cmap,
                           vmin=d["vmin"], vmax=d["vmax"], origin="lower",
                           interpolation="none", rasterized=True, zorder=0)
@@ -478,7 +497,7 @@ def render_profile(
             d["native_distance"], d["native_time"], d["trace_amplitudes"], width, height, extent,
         )
         rasters = [(image, values, sampler)]
-    else:
+    elif d["has_seismic"]:
         ax.pcolormesh(d["distance_edges"], d["time_edges"], values, shading="flat",
                       cmap=cmap, vmin=d["vmin"], vmax=d["vmax"],
                       edgecolors="none", antialiased=False, rasterized=True, zorder=0)
@@ -537,7 +556,7 @@ def render_profile(
     if settings.show_title:
         ax.set_title("A–B Profile")
     colorbars = []
-    if state.colorbar:
+    if state.colorbar and d["has_seismic"]:
         norm = Normalize(d["vmin"], d["vmax"])
         cb = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax)
         cb.set_label("Amplitude")
@@ -550,6 +569,7 @@ def render_profile(
         text.set_fontsize(settings.font_size)
     content = save_figure(fig, settings, rasters, colorbars)
     info = dict(
+        has_seismic=d["has_seismic"],
         a=list(a) if not isinstance(a, (list, tuple)) else [float(a[0]), float(a[1])],
         b=[float(b[0]), float(b[1])],
         a_distance=d["a_distance"],
@@ -630,7 +650,11 @@ def map_values(survey, horizon, state, horizons=None):
         count = int(np.floor((hi - start) / interval)) + 1
         if count > 500:
             raise ValueError("Too many contours; increase the interval (maximum 500 levels).")
-        levels = start + np.arange(max(0, count)) * interval
+        # Near-constant differences can span only a few floating-point values.
+        # Several nominal steps then round to the same level; contourpy accepts
+        # those separately, but matplotlib requires strictly increasing levels.
+        # Deduplicate levels only, preserving the scalar grid and color range.
+        levels = np.unique(start + np.arange(max(0, count)) * interval)
     return data, lo, hi, vmin, vmax, cmap, levels
 
 

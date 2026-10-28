@@ -73,7 +73,7 @@ export default function LayerMappingEditor({
         ))}
       </datalist>
       <p className="organization-help">
-        为每个文件填写真实层位名，例如 T24。同名层位在所有模型中使用同一种颜色。
+        同一层位使用相同名称，例如 T24；颜色会跨分组同步。
       </p>
       <div className="mapping-tools">
         <label>
@@ -88,11 +88,11 @@ export default function LayerMappingEditor({
               setError("");
             }}
           >
-            <option value="">选择方式（也可直接逐行填写）</option>
-            <option value="filename">从当前文件名提取层位名</option>
+            <option value="">选择批量填写方式</option>
+            <option value="filename">从文件名提取层位名</option>
             {groups.map((g) => (
               <option key={g.name} value={`model:${g.name}`}>
-                沿用 {g.name} 的层位顺序
+                按 {g.name} 组的文件顺序配对
               </option>
             ))}
           </select>
@@ -116,7 +116,7 @@ export default function LayerMappingEditor({
             <strong>核对这组对应关系</strong>
             <p className="organization-help">
               {method === "filename"
-                ? "已去掉模型前缀或后缀。请确认剩余名称就是实际层位名。"
+                ? "已去掉分组名称前缀或后缀。请确认剩余名称就是实际层位名。"
                 : "按两组文件名的数字顺序配对（1、2、…、10）。请确认没有缺层或顺序差异。"}{" "}
               应用后仍可逐行修改。
             </p>
@@ -147,7 +147,7 @@ export default function LayerMappingEditor({
               disabled={disabled}
               onClick={() => setPreview(null)}
             >
-              放弃预览
+              取消预览
             </button>
             <button
               className="primary"
@@ -157,7 +157,7 @@ export default function LayerMappingEditor({
                 setPreview(null);
               }}
             >
-              应用这组对应
+              应用对应
             </button>
           </div>
         </div>
@@ -191,7 +191,7 @@ export default function LayerMappingEditor({
                           maxLength={80}
                           disabled={disabled}
                           value={keys[index] || ""}
-                          placeholder="例如 T24，可留空稍后设置"
+                          placeholder="选择或输入层位名"
                           onChange={(e) =>
                             onChange(
                               names.map((_, i) =>
@@ -209,7 +209,7 @@ export default function LayerMappingEditor({
           </div>
           {duplicates.size > 0 && (
             <p className="mapping-warning" role="status">
-              当前模型有多个文件对应 {Array.from(duplicates).join("、")}
+              当前分组有多个文件对应 {Array.from(duplicates).join("、")}
               ，请确认是否为同一层位的分段文件。
             </p>
           )}

@@ -36,17 +36,19 @@ def _now():
 
 def validate_sources(document, request, restore=None):
     """Check the frozen files, including default-all A–B profile overlays."""
-    from backend.export_restore import dependencies, source_signatures
+    from backend.export_restore import figure_dependencies, source_signatures, requires_seismic, uses_seismic
     from backend.workspace import check_source
 
-    if not document.get("source"):
+    needs_seismic = uses_seismic(request, document)
+    if requires_seismic(request) and not document.get("source"):
         raise ValueError("后台导出需要已保存的数据来源，请重新打开数据后再试。")
-    check_source(document["source"])
-    ids = dependencies(request["kind"], request)
+    if needs_seismic:
+        check_source(document["source"])
+    ids = figure_dependencies(request, document)
     entries = {h["id"]: h for h in document.get("horizons", [])}
     if ids - entries.keys():
         raise ValueError("图件所需层位的数据来源缺失，无法后台导出。")
-    signatures = source_signatures(document, ids)
+    signatures = source_signatures(document, ids, include_survey=needs_seismic)
     expected = (restore or {}).get("sources")
     if expected is not None and signatures != expected:
         raise ValueError("图件的源数据或解析参数已变化，请重新提交导出。")
@@ -83,6 +85,8 @@ def prepare_export(payload_path, staging_folder):
     """
     from backend import export_service
     from backend.horizon import Horizon
+    from backend.export_restore import uses_seismic
+    from backend.horizon_geometry import HorizonGeometry
     from backend.models import Queue2DRequest, Queue3DRequest, QueueMapRequest, QueueProfileRequest
     from backend.segy import Survey
 
@@ -100,13 +104,18 @@ def prepare_export(payload_path, staging_folder):
     if req.kind == "3d":
         # The browser has already rendered the exact scene. Only its dataset
         # filename is needed; re-reading SEG-Y would waste memory and time.
-        survey = SimpleNamespace(path=Path(entry["path"]))
+        survey = SimpleNamespace(path=Path(entry["path"])) if entry else None
         horizons = {}
     else:
-        survey = Survey(entry["path"], ilbyte=entry["ilbyte"], xlbyte=entry["xlbyte"],
-                        geometry_mode=entry["geometry_mode"])
         horizons = {h["id"]: Horizon(h["path"], name=h["name"], columns=h["columns"])
                     for h in document.get("horizons", []) if h["id"] in ids}
+        if uses_seismic(request, document):
+            survey = Survey(entry["path"], ilbyte=entry["ilbyte"], xlbyte=entry["xlbyte"],
+                            geometry_mode=entry["geometry_mode"])
+        elif req.kind == "map" and req.profile is None:
+            survey = SimpleNamespace(path=Path(entry["path"])) if entry else None
+        else:
+            survey = HorizonGeometry(horizons)
     timings = {"source_read_ms": (perf_counter() - started) * 1000}
     atomic_json(progress_path, {"stage": "rendering", "timings": timings}, backup=False)
     phase = perf_counter()
@@ -196,7 +205,12 @@ class ExportJobManager:
     def _public(self, project, job):
         result = {key: deepcopy(value) for key, value in job.items() if key not in {"folder", "queued_at"}}
         if job["status"] == "running":
-            progress = read_json(project["root"] / job["id"] / "staging" / "progress.json")
+            try:
+                progress = read_json(project["root"] / job["id"] / "staging" / "progress.json")
+            except ValueError:
+                # Progress is disposable and may appear between read_json's
+                # read and existence checks. Keep the authoritative job state.
+                progress = None
             if progress and job["stage"] != "writing":
                 result["stage"] = progress.get("stage", result["stage"])
                 result["timings"].update(progress.get("timings", {}))
@@ -255,8 +269,11 @@ class ExportJobManager:
             if kind == "2d":
                 state = request["state"]
                 label += f" · {'Inline' if state.get('view_type', 'inline') == 'inline' else 'Crossline'} {state.get('section_number', '')}"
+            if request.get("filename"):
+                label = request["filename"]
             job = {"id": uuid4().hex, "project_id": project_id, "folder": str(project["folder"]),
                    "kind": kind, "status": "queued", "stage": "queued", "label": label,
+                   "filename": request.get("filename"),
                    "error": None, "item": None, "created_at": now, "updated_at": now,
                    "queued_at": now, "attempts": 1, "timings": deepcopy(timings or {})}
             path = self._payload_path(project, job)

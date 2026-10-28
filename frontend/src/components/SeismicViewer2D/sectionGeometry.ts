@@ -16,7 +16,8 @@ export function buildTraces(section: Section, view: VS, colors: any[], horizonta
 
   const inline = view.view_type === "inline";
 
-  const traces: any[] = [
+  const hasSeismic = section.has_seismic !== false && section.z.length > 0;
+  const traces: any[] = hasSeismic ? [
     {
       type: "heatmap",
       x: section.x_edges ?? section.x,
@@ -35,13 +36,13 @@ export function buildTraces(section: Section, view: VS, colors: any[], horizonta
         `<br>Time: %{y:.1f} ms` +
         `<extra></extra>`,
     },
-  ];
+  ] : [];
 
   // Overlay coordinates are computed from the original samples by the backend;
   // reuse them as supplied so raster interpolation never shifts a trace or
   // applies clipping/polarity/gain a second time.
   const overlay = section.trace_overlay;
-  if (s.variable_area && overlay?.variable_area.x.length) {
+  if (hasSeismic && s.variable_area && overlay?.variable_area.x.length) {
     traces.push({
       type: "scatter",
       mode: "lines",
@@ -56,7 +57,7 @@ export function buildTraces(section: Section, view: VS, colors: any[], horizonta
       cliponaxis: true,
     });
   }
-  if (s.wiggle && overlay?.wiggle.x.length) {
+  if (hasSeismic && s.wiggle && overlay?.wiggle.x.length) {
     traces.push({
       type: "scatter",
       mode: "lines",

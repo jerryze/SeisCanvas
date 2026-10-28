@@ -1,8 +1,22 @@
-import type { HorizonMapState } from "../workspace";
+import type { HorizonMapState, MapWorkspace } from "../workspace";
 import type { HS, SS } from "../types";
 import type { ProbeRequest } from "./Probe";
 
 export const PROFILE_MARGIN = { l: 72, r: 24, t: 28, b: 56 };
+
+/** Resolve unavailable seismic views before making requests from restored state. */
+export function mapWorkspaceForData(workspace: MapWorkspace, hasSeismic: boolean): MapWorkspace {
+  if (hasSeismic) return workspace;
+  const amplitude = workspace.state.color_by === "amplitude";
+  if (!amplitude) return workspace;
+  return {
+    ...workspace,
+    state: amplitude ? {
+      ...workspace.state, color_by: "twt", colormap: "petrel",
+      range_mode: "auto", vmin: null, vmax: null, interval_auto: true,
+    } : workspace.state,
+  };
+}
 
 /** Measure the visible section, including letterboxing, before Plotly exists. */
 export function profileContainerViewport(width: number, height: number, aspectRatio: number | null = null) {

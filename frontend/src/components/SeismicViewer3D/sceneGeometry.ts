@@ -1,6 +1,8 @@
 import type { VS, Export3D, Section } from "../../types";
 import { PLOT_DASH } from "../plotStyle";
 export type SliceData = {
+  has_seismic?: boolean;
+  geometry_only?: boolean;
   id: string;
   kind: "inline" | "crossline" | "time";
   position: number;
@@ -14,7 +16,7 @@ export type SliceData = {
   trace_overlay?: Section["trace_overlay"];
   source_a_range?: number[];
   source_b_range?: number[];
-  interpolation?: "sinc8" | "linear" | "native";
+  interpolation?: "sinc8" | "linear" | "native" | "none";
   background_interpolation?: boolean;
   wiggle_interpolation?: boolean;
 };
@@ -42,11 +44,12 @@ export type Mesh = {
   preview_shape: number[];
 };
 export type SceneData = {
+  has_seismic?: boolean;
   slices: SliceData[];
   horizons: Record<string, { mesh?: Mesh; intersections?: Intersection[] }>;
   bounds: { x: number[]; y: number[]; z: number[] };
-  vmin: number;
-  vmax: number;
+  vmin: number | null;
+  vmax: number | null;
 };
 // Shared by horizons only; seismic colors and amplitude clipping are independent.
 export const PETREL_COLORMAP: [number, string][] = [
@@ -131,7 +134,7 @@ function sliceCells(plane: SliceData, colorscale: any[], data: SceneData, view: 
   plane.amplitude.forEach((row, r) => row.forEach((sample, c) => {
     if (sample === null || !Number.isFinite(sample)) return;
     const value = view.seismic.reverse_polarity ? -sample : sample;
-    const index = Math.max(0, Math.min(255, Math.floor(256 * (value - data.vmin) / (data.vmax - data.vmin))));
+    const index = Math.max(0, Math.min(255, Math.floor(256 * (value - data.vmin!) / (data.vmax! - data.vmin!))));
     const a = r * width + c, b = a + 1, d = a + width, e = d + 1;
     i.push(a, a); j.push(b, e); k.push(e, d);
     facecolor.push(palette[index], palette[index]);
@@ -248,7 +251,9 @@ export function buildTraces(
   for (const plane of data.slices) {
     const state = view.slices[plane.kind].find((p) => p.id === plane.id);
     if (!state?.visible) continue;
-    traces.push({
+    const hasAmplitude = data.has_seismic !== false && plane.has_seismic !== false &&
+      !plane.geometry_only && plane.amplitude.length > 0;
+    if (hasAmplitude) traces.push({
       ...(plane.a_edges && plane.b_edges ? sliceCells(plane, colorscale, data, view)
         : sliceSurface(plane, s.reverse_polarity)),
       uid: actorUid("slice", plane.kind, plane.id, "background"),
@@ -276,7 +281,7 @@ export function buildTraces(
         plane.position +
         "</extra>",
     });
-    if (plane.kind !== "time" && plane.trace_overlay) {
+    if (hasAmplitude && plane.kind !== "time" && plane.trace_overlay) {
       if (s.variable_area && plane.trace_overlay.variable_area.x.length)
         traces.push({ ...variableAreaMesh(plane), color: s.variable_area_color,
           uid: actorUid("slice", plane.kind, plane.id, "variable-area"),

@@ -44,6 +44,7 @@ export type Scene3DHandle = {
 type Props = {
   view: VS;
   meta: Meta;
+  hasSeismic: boolean;
   maps: Record<string, any[]>;
   revision: number;
   busy?: string;
@@ -73,7 +74,7 @@ const presets: Record<string, Camera> = {
   },
 };
 const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
-  { view, meta, maps, revision, busy = "", onCamera, onError, onReady },
+  { view, meta, hasSeismic, maps, revision, busy = "", onCamera, onError, onReady },
   ref,
 ) {
   const plot = useRef<HTMLDivElement>(null),
@@ -119,7 +120,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
       samplingTimer.current = null;
       const el = plot.current as any;
       const current = latest.current.view;
-      if (!mounted.current || !dataRef.current || !el || loadingRef.current ||
+      if (!mounted.current || !dataRef.current || dataRef.current.has_seismic === false || !el || loadingRef.current ||
           plotUpdating.current || exporting.current || interaction.current.pointer) return;
       if (!current.seismic.background_interpolation && !current.seismic.wiggle && !current.seismic.variable_area) return;
       const gl = el._fullLayout?.scene?._scene?.glplot;
@@ -172,6 +173,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
     el.on("plotly_relayout", (event: any) => activeCamera(event, true));
     el.on("plotly_relayouting", (event: any) => activeCamera(event, false));
     el.on("plotly_hover", (event: any) => {
+      if (dataRef.current?.has_seismic === false) return;
       const point = event?.points?.[0];
       const info = point?.data?.meta?.probe;
       if (!info) return;
@@ -262,9 +264,9 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
         });
         const next: SceneData = await response.json();
         if (!active) return;
-        if (next.slices.some(plane => plane.background_interpolation !== latest.current.view.seismic.background_interpolation))
+        if (next.has_seismic !== false && next.slices.some(plane => plane.background_interpolation !== latest.current.view.seismic.background_interpolation))
           throw new Error("三维显示版本不匹配，请重启 SeisCanvas。");
-        if (latest.current.view.horizons.some(h => h.visible && h.display_mode === "full_surface"
+        if (next.has_seismic !== false && latest.current.view.horizons.some(h => h.visible && h.display_mode === "full_surface"
           && h.color_by === "amplitude" && !next.horizons[h.id]?.mesh?.amplitude))
           throw new Error("三维层位版本不匹配，请重启 SeisCanvas。");
         const apply = () => {
@@ -502,8 +504,8 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
         </div>
         <div className="viewer-bottom scene-bottom">
           <div className="scene-readouts">
-            <ProbeReadout reading={probe} />
-            {data && (
+            {hasSeismic && data?.has_seismic !== false && <ProbeReadout reading={probe} />}
+            {hasSeismic && data?.has_seismic !== false && data?.vmin != null && data.vmax != null && (
               <div className="amplitude-key">
                 <b>共享振幅</b>
                 <span>
@@ -518,9 +520,10 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
               .map((h) => (
                 <span key={h.id}>
                   <i style={{ background: h.color }} />
-                  {h.name}{h.display_mode === "full_surface" && h.color_by === "amplitude" ? " · 振幅" :
-                    h.display_mode === "full_surface" && h.color_by !== "solid" && h.twt_range ? ` · ${Number(h.twt_range[0].toFixed(1))}–${Number(h.twt_range[1].toFixed(1))} ms` : ""} ·{" "}
-                  {h.display_mode === "full_surface" ? "曲面" : "交线"}
+                  {h.name}
+                  <small>{h.display_mode === "full_surface" ? "曲面" : "交线"}</small>
+                  {h.display_mode === "full_surface" && h.color_by === "amplitude" ? <small>振幅</small> :
+                    h.display_mode === "full_surface" && h.color_by !== "solid" && h.twt_range ? <small>{Number(h.twt_range[0].toFixed(1))}–{Number(h.twt_range[1].toFixed(1))} ms</small> : null}
                 </span>
               ))}
           </div>

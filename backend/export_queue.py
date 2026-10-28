@@ -271,6 +271,7 @@ class ExportSession:
         *,
         data: bytes,
         filename: str,
+        preserve_filename: bool = False,
         view_type: str,
         dataset: str,
         view_state: dict,
@@ -315,8 +316,9 @@ class ExportSession:
                 pixel_size = (round(w * factor), round(h * factor))
                 dpi = render["long_edge"] / (max(width_mm, height_mm) / 25.4)
             scale = 1
-            filename = re.sub(r"_[\d.]+x[\d.]+mm_[\d.]+dpi(?=\.)",
-                              f"_{pixel_size[0]}x{pixel_size[1]}px", filename)
+            if not preserve_filename:
+                filename = re.sub(r"_[\d.]+x[\d.]+mm_[\d.]+dpi(?=\.)",
+                                  f"_{pixel_size[0]}x{pixel_size[1]}px", filename)
             render = {**render, "pixel_size": list(pixel_size), "width": width_mm,
                       "height": height_mm, "dpi": dpi}
         filename = self._unique(filename)

@@ -17,7 +17,7 @@
   align-items: center;
   gap: 8px;
   height: var(--ui-control-height);
-  padding: 0 7px;
+  padding: 0 8px;
   font-size: var(--ui-label-size);
   font-weight: 400;
   text-align: left;
@@ -25,7 +25,7 @@
 .colormap-trigger {
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--border);
+  border: var(--stroke-hairline) solid var(--border);
   border-radius: var(--ui-radius);
   color: var(--text);
   background: var(--surface);
@@ -48,8 +48,8 @@
   display: block;
   width: 64px;
   height: 11px;
-  border: 1px solid #1f293714;
-  border-radius: 3px;
+  border: var(--stroke-hairline) solid #1f293714;
+  border-radius: var(--radius-inset);
   background-color: var(--surface-hover);
   /* Cover the border box once; repeating a padding-box gradient wraps the
      opposite endpoint into the translucent border. */
@@ -69,13 +69,14 @@
   font-variant-numeric: tabular-nums;
 }
 .colormap-menu {
+  --ui-label-size: var(--font-compact);
   position: fixed;
   z-index: 1100;
   overflow: hidden auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
-  padding: 3px 0;
-  border: 1px solid var(--border);
+  padding: 4px 0;
+  border: var(--stroke-hairline) solid var(--border);
   border-radius: var(--ui-radius);
   color: var(--text);
   background: var(--surface);
@@ -92,7 +93,7 @@
 }
 .colormap-option[aria-selected="true"] {
   background: var(--primary-soft);
-  box-shadow: inset 0 0 0 1px var(--primary-border);
+  box-shadow: inset 0 0 0 var(--stroke-hairline) var(--primary-border);
 }
 .colormap-option > svg {
   color: var(--accent);

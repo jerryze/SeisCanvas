@@ -102,6 +102,7 @@ export type WorkspaceResponse = {
   activation_epoch?: string;
   notice?: string;
   metadata: Meta | null;
+  horizon_metadata?: Meta | null;
   horizons: HS[];
   state: WorkspaceState | null;
   updated_at?: string;

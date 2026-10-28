@@ -103,7 +103,7 @@ export function referenceMapping(names: string[], reference: HS[]): string[] {
   const ordered = [...reference].sort((a, b) => naturalOrder(a.name, b.name));
   if (names.length !== ordered.length)
     throw new Error(
-      `所选文件有 ${names.length} 个，参照模型有 ${ordered.length} 个；数量不同，请逐项设置对应关系。`,
+      `所选文件有 ${names.length} 个，参照分组有 ${ordered.length} 个；数量不同，请逐项设置对应关系。`,
     );
   const keys = ordered.map(layerOf);
   if (
@@ -111,7 +111,7 @@ export function referenceMapping(names: string[], reference: HS[]): string[] {
     keys.some((key) => !key) ||
     new Set(keys).size !== keys.length
   )
-    throw new Error("参照模型需要先设置完整且不重复的层位对应关系。");
+    throw new Error("参照分组需要先设置完整且不重复的层位对应关系。");
   const indices = names
     .map((_, i) => i)
     .sort((a, b) => naturalOrder(names[a], names[b]));

@@ -37,8 +37,8 @@ type Props = {
 
 const folderLabel = (folder: string) =>
   ({
-    "2D/Inline": "2D · Inline",
-    "2D/Crossline": "2D · Crossline",
+    "2D/Inline": "2D Inline",
+    "2D/Crossline": "2D Crossline",
     "3D": "3D 场景",
     HorizonMap: "层位地图 / A–B",
     HorizonProfile: "层位剖面",
@@ -291,18 +291,18 @@ export default function ExportQueue({
           {!!pendingJobs.length && (
             <section className="queue-jobs" aria-label="图件生成任务">
               <div className="queue-jobs-heading">
-                <b>生成任务{activeJobs > 0 ? ` · ${activeJobs} 项进行中` : ""}</b>
+                <b className="meta-inline">生成任务{activeJobs > 0 && <span className="meta-count">{activeJobs} 项进行中</span>}</b>
                 <span>可关闭队列继续浏览</span>
               </div>
               <div className="queue-jobs-list">
                 {pendingJobs.map(job => (
                   <article className={`queue-job queue-job-${job.status}`} key={job.id}>
                     <div className="queue-job-body">
-                      <p className="queue-job-title" title={job.label}>{job.label || jobKind[job.kind]}</p>
+                      <p className="queue-job-title meta-inline" title={job.label?.replaceAll(" · ", "　")}>{(job.label || jobKind[job.kind]).split(" · ").map((part, index) => <span key={index}>{part}</span>)}</p>
                       <span className="queue-job-stage">
                         {job.status === "running" && <LoaderCircle size={12} className="spin" />}
-                        {jobKind[job.kind]} · {jobStage[job.stage] || jobStatus[job.status]}
-                        {(job.attempts || 1) > 1 && ` · 第 ${job.attempts} 次尝试`}
+                        <span>{jobKind[job.kind]}</span><span>{jobStage[job.stage] || jobStatus[job.status]}</span>
+                        {(job.attempts || 1) > 1 && <span>第 {job.attempts} 次尝试</span>}
                       </span>
                       {job.status === "failed" && job.error && <p className="queue-job-error">{job.error}</p>}
                     </div>
@@ -362,8 +362,8 @@ export default function ExportQueue({
                   <img loading="lazy" src={fileUrl(item)} alt="" />
                 )}
                 <span>
-                  {String(item.index).padStart(2, "0")} ·{" "}
-                  {item.format.toUpperCase()}
+                  <span>{String(item.index).padStart(2, "0")}</span>
+                  <span>{item.format.toUpperCase()}</span>
                 </span>
               </button>
               <div className="queue-body">
@@ -403,12 +403,12 @@ export default function ExportQueue({
                     {item.filename}
                   </p>
                 )}
-                <span className="queue-detail">{item.detail}</span>
+                <span className="queue-detail meta-inline">{item.detail.split(" · ").map((part, index) => <span key={index}>{part}</span>)}</span>
                 <span
                   className="queue-location"
-                  title={`${item.dataset} · ${folderLabel(item.folder)}`}
+                  title={`${item.dataset}（${folderLabel(item.folder)}）`}
                 >
-                  {item.dataset} · {folderLabel(item.folder)}
+                  {item.dataset}（{folderLabel(item.folder)}）
                 </span>
                 {deleting === item.id ? (
                   <div className="queue-delete-confirm" role="alert">
@@ -563,8 +563,8 @@ export default function ExportQueue({
                 <X size={20} />
               </button>
             </div>
-            <p className="export-note">
-              {preview.detail} · {preview.dataset}
+            <p className="export-note meta-inline">
+              {preview.detail.split(" · ").map((part, index) => <span key={index}>{part}</span>)}<span>{preview.dataset}</span>
             </p>
             {preview.format === "pdf" ? (
               <iframe

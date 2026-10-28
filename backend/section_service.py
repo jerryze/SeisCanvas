@@ -4,6 +4,7 @@ import numpy as np
 
 from backend import resample
 from backend.horizon_display import sg_section, json_points
+from backend.horizon_geometry import has_seismic
 from backend.rendering import amplitude, window_indices
 from backend.slice_source import read_window, section_input
 from backend.trace_overlay import build_trace_overlay, coordinate_cell_edges, overlays_enabled, reconstruction_extent
@@ -79,6 +80,8 @@ def section_raster(survey, x, t, z, state, target_width=None, target_height=None
 
 def interactive_section(survey, horizons, req) -> dict:
     """Serialize native blocks or a Sinc8-time/linear-trace amplitude raster."""
+    if not has_seismic(survey):
+        return horizon_section(survey, horizons, req)
     x, t, z = section_input(survey, req.view_type, req.section_number)
     trace_amplitudes, lo, hi = amplitude(z, req.seismic)
     display = section_raster(survey, x, t, z, req, req.target_width, req.target_height,
@@ -104,4 +107,28 @@ def interactive_section(survey, horizons, req) -> dict:
         }
     if overlays_enabled(req.seismic):
         result["trace_overlay"] = build_trace_overlay(x, t, trace_amplitudes, req, lo, hi)
+    return result
+
+
+def horizon_section(geometry, horizons, req):
+    """Only real pick curves; empty amplitude arrays cannot be mistaken for data."""
+    x, time = geometry.section_axes(req.view_type, req.section_number)
+    edges = coordinate_cell_edges(x)
+    result = {
+        "has_seismic": False, "x": x.tolist(), "time": time.tolist(),
+        "raster_extent": [float(edges[0]), float(edges[-1]), float(time[0]), float(time[-1])],
+        "z": [], "vmin": None, "vmax": None,
+        "native_shape": [0, len(x)], "render_shape": [0, len(x)], "preview_shape": [0, 0],
+        "window": {"x_range": [float(x[0]), float(x[-1])], "time_range": time.tolist()},
+        "interpolation": "none", "adaptive": False, "quality": req.quality,
+        "background_interpolation": False, "wiggle_interpolation": False,
+        "horizons": {key: h.section(req.view_type, req.section_number) for key, h in horizons.items()},
+    }
+    if req.horizon_sg:
+        result["horizon_display"] = {
+            "algorithm": "sg", "window": req.horizon_sg_window,
+            "view_type": req.view_type, "section_number": req.section_number,
+            "points": {key: json_points(sg_section(h, req.view_type, req.section_number,
+                        req.horizon_sg_window, x, result["horizons"][key])) for key, h in horizons.items()},
+        }
     return result

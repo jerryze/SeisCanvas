@@ -68,11 +68,12 @@ export type Meta = {
   traces: number;
 };
 export type Section = {
+  has_seismic?: boolean;
   x: number[];
   time: number[];
   z: (number | null)[][];
-  vmin: number;
-  vmax: number;
+  vmin: number | null;
+  vmax: number | null;
   horizons: Record<string, number[][]>;
   /** Separate SG display geometry; raw horizons remain the only picks. */
   horizon_display?: {
@@ -100,7 +101,7 @@ export type Section = {
   native_shape?: number[];
   render_shape?: number[];
   preview_shape?: number[];
-  interpolation?: Interpolation | "sinc8" | "native";
+  interpolation?: Interpolation | "sinc8" | "native" | "none";
   background_interpolation?: boolean;
   wiggle_interpolation?: boolean;
   adaptive?: boolean;

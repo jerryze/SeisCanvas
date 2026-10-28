@@ -16,7 +16,7 @@ export async function apiError(response: Response, fallback?: string): Promise<A
     typeof detail === "object" ? detail?.code || "" : "", detail);
 }
 
-const readPost = /^\/(section|sample|scene|horizon-map(?:\/profile|\/export)?|export(?:\/3d)?)$/;
+const readPost = /^\/(section|sample|scene|horizon-map(?:\/profile|\/export)?|export(?:\/3d|\/map-name|\/name)?)$/;
 export async function api(path: string, init?: RequestInit & { onRevision?: (revision: number) => void }, errorFallback?: string): Promise<Response> {
   const owner = context;
   const mutation = !!init?.method && init.method !== "GET" && !readPost.test(path.split("?")[0]);

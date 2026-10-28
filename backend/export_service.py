@@ -33,35 +33,49 @@ def dataset_label(survey, requested=None) -> str:
     """Project/dataset name, falling back to the SEG-Y file name (requirement 7)."""
     if requested and requested.strip():
         return naming.dataset_label(requested)
-    if survey is not None:
+    if survey is not None and getattr(survey, "path", None) is not None:
         return naming.dataset_label(survey.path.stem, "Dataset")
-    return "Dataset"
+    return "层位数据"
+
+
+def resolved_export_name(req, filename):
+    fmt = req.format if req.kind == "3d" else req.settings.format
+    if req.filename is not None:
+        return naming.requested_filename(req.filename, fmt)
+    return filename
+
+
+def export_name(survey, horizons, req):
+    if req.kind == "map":
+        return map_export_name(survey, horizons, req)[0]
+    if req.kind == "2d":
+        filename = section_export_name(survey, horizons, req)[0]
+    elif req.kind == "3d":
+        filename = scene_export_name(survey, req)[0]
+    else:
+        filename = profile_export_name(survey, horizons, req)
+    return resolved_export_name(req, filename)
 
 
 def _visible_horizons(state, horizons):
     return [h for h in state.horizons if h.visible and h.id in horizons]
 
 
-def add_2d(survey, horizons, req: Queue2DRequest, restore=None, sink=None) -> dict:
+def section_export_name(survey, horizons, req: Queue2DRequest):
     state, settings = req.state, req.settings
     dataset = dataset_label(survey, req.dataset)
     inline = state.view_type == "inline"
     visible = _visible_horizons(state, horizons)
-    names = [horizons[h.id].name for h in visible]
-    content = naming.horizons_label(names) or "SeismicOnly"
-    colormap = naming.colormap_label(state.seismic.colormap, "Seismic")
-    builder = naming.inline_name if inline else naming.crossline_name
     view_type = "2d_inline" if inline else "2d_crossline"
-    filename = builder(
-        dataset,
-        state.section_number,
-        content,
-        colormap,
-        settings.width,
-        settings.height,
-        settings.dpi,
-        settings.format,
-    )
+    filename = naming.figure_name("2D", f"{'IL' if inline else 'XL'}{naming.number(state.section_number)}", ext=settings.format)
+    return filename, dataset, view_type, visible
+
+
+def add_2d(survey, horizons, req: Queue2DRequest, restore=None, sink=None) -> dict:
+    state, settings = req.state, req.settings
+    filename, dataset, view_type, visible = section_export_name(survey, horizons, req)
+    filename = resolved_export_name(req, filename)
+    inline = state.view_type == "inline"
     rendered = render_with_metadata(survey, horizons, state, settings)
     location = {"inline" if inline else "crossline": state.section_number}
     summary = {
@@ -77,7 +91,7 @@ def add_2d(survey, horizons, req: Queue2DRequest, restore=None, sink=None) -> di
         "symmetric": state.seismic.symmetric,
         "vmin": state.seismic.vmin,
         "vmax": state.seismic.vmax,
-        "colorbar_range": list(rendered.colorbar_range),
+        "colorbar_range": list(rendered.colorbar_range) if rendered.colorbar_range is not None else None,
         "reverse_polarity": state.seismic.reverse_polarity,
         "wiggle": state.seismic.wiggle,
         "variable_area": state.seismic.variable_area,
@@ -95,6 +109,7 @@ def add_2d(survey, horizons, req: Queue2DRequest, restore=None, sink=None) -> di
     return (sink if sink is not None else session()).add(
         data=rendered.data,
         filename=filename,
+        preserve_filename=True,
         view_type=view_type,
         dataset=dataset,
         view_state=state.model_dump(),
@@ -107,7 +122,8 @@ def add_2d(survey, horizons, req: Queue2DRequest, restore=None, sink=None) -> di
     )
 
 
-def add_map(survey, horizons, req: QueueMapRequest, restore=None, sink=None) -> dict:
+def map_export_name(survey, horizons, req: QueueMapRequest):
+    """Resolve map naming without reading rasters or rendering a figure."""
     state, settings = req.state, req.settings
     if state.horizon not in horizons:
         raise ValueError("Horizon not found.")
@@ -128,20 +144,19 @@ def add_map(survey, horizons, req: QueueMapRequest, restore=None, sink=None) -> 
             "type": state.difference_type,
             "operation": "comparison - reference",
         }
-    display = naming.display_label(state.display)
-    colormap = naming.colormap_label(state.colormap, "Petrel")
-    filename = naming.horizon_map_name(
-        dataset,
-        horizon.name,
-        content,
-        display,
-        colormap,
-        settings.width,
-        settings.height,
-        settings.dpi,
-        settings.format,
-        difference_type=state.difference_type if difference is not None else None,
-    )
+    if difference is not None:
+        figure_type = "差值图" if state.difference_type == "signed" else "误差图"
+        filename = naming.figure_name(figure_type, content, ext=settings.format)
+    else:
+        filename = naming.figure_name("层位图", horizon.name, ext=settings.format)
+    filename = resolved_export_name(req, filename)
+    return filename, dataset, scalar, difference
+
+
+def add_map(survey, horizons, req: QueueMapRequest, restore=None, sink=None) -> dict:
+    state, settings = req.state, req.settings
+    filename, dataset, scalar, difference = map_export_name(survey, horizons, req)
+    horizon = horizons[state.horizon]
     data = render_map(survey, horizon, state, settings, horizons, req.profile)
     profile = req.profile.model_dump(mode="json") if req.profile is not None else None
     summary = {
@@ -169,6 +184,7 @@ def add_map(survey, horizons, req: QueueMapRequest, restore=None, sink=None) -> 
     return (sink if sink is not None else session()).add(
         data=data,
         filename=filename,
+        preserve_filename=True,
         view_type="horizon_map",
         dataset=dataset,
         view_state={**state.model_dump(), "profile": profile},
@@ -179,6 +195,12 @@ def add_map(survey, horizons, req: QueueMapRequest, restore=None, sink=None) -> 
         height_mm=settings.height,
         dpi=settings.dpi,
     )
+
+
+def profile_export_name(survey, horizons, req: QueueProfileRequest):
+    if req.state.horizon not in horizons:
+        raise ValueError("Horizon not found.")
+    return naming.figure_name("AB剖面", naming.profile_location(req.a, req.b), ext=req.settings.format)
 
 
 def add_profile(survey, horizons, req: QueueProfileRequest, restore=None, sink=None) -> dict:
@@ -204,16 +226,7 @@ def add_profile(survey, horizons, req: QueueProfileRequest, restore=None, sink=N
         req.section_state(seismic=Seismic(colormap=req.colormap, reverse_colormap=req.reverse_colormap)),
         req.horizons,
     )
-    filename = naming.map_profile_name(
-        dataset,
-        horizon.name,
-        "Seismic",
-        naming.colormap_label(req.seismic.colormap if req.seismic else req.colormap, "Seismic"),
-        req.settings.width,
-        req.settings.height,
-        req.settings.dpi,
-        req.settings.format,
-    )
+    filename = resolved_export_name(req, profile_export_name(survey, horizons, req))
     summary = {
         "horizon": horizon.name,
         "figure": "ab_profile",
@@ -229,7 +242,7 @@ def add_profile(survey, horizons, req: QueueProfileRequest, restore=None, sink=N
         "show_curves": req.show_curves,
         "show_legend": req.show_legend,
         "show_ab": req.show_ab,
-        "amplitude_range": [info["vmin"], info["vmax"]],
+        "amplitude_range": [info["vmin"], info["vmax"]] if info["vmin"] is not None else None,
         "seismic": req.section_state(seismic=Seismic(colormap=req.colormap, reverse_colormap=req.reverse_colormap)).seismic.model_dump(),
         "aspect_ratio_2d": req.aspect_ratio_2d,
         "horizons": [h.model_dump() for h in req.horizons] if req.horizons is not None else None,
@@ -238,6 +251,7 @@ def add_profile(survey, horizons, req: QueueProfileRequest, restore=None, sink=N
     return (sink if sink is not None else session()).add(
         data=data,
         filename=filename,
+        preserve_filename=True,
         view_type="horizon_map",
         dataset=dataset,
         view_state=state.model_dump(),
@@ -250,8 +264,7 @@ def add_profile(survey, horizons, req: QueueProfileRequest, restore=None, sink=N
     )
 
 
-def add_3d(survey, req: Queue3DRequest, restore=None, sink=None) -> dict:
-    started = perf_counter()
+def scene_export_name(survey, req):
     state, settings = req.state, req.settings
     dataset = dataset_label(survey, req.dataset)
     slice_positions = {
@@ -261,38 +274,23 @@ def add_3d(survey, req: Queue3DRequest, restore=None, sink=None) -> dict:
     surfaces = [
         h for h in state.horizons if h.visible and h.display_mode == "full_surface"
     ]
-    names = [h.name for h in state.horizons if h.visible]
-    content = naming.horizons_label(names)
-    has_slices = any(slice_positions.values())
-    if has_slices:
+    if any(slice_positions.values()):
         view_type = "3d_multislice"
-        label = naming.slice_label(
-            slice_positions["inline"],
-            slice_positions["crossline"],
-            slice_positions["time"],
-        )
-        filename = naming.multislice_name(
-            dataset, label, content, settings.width, settings.height, settings.dpi, req.format
-        )
+        # Compact numeric positions without redundant zero padding.
+        filename = naming.figure_name("3D", naming.compact_slices(slice_positions), ext=req.format)
     else:
         view_type = "3d_horizon_surface"
-        amplitude_surfaces = [h for h in surfaces if h.color_by == "amplitude"]
-        if amplitude_surfaces:
-            scalar = "Amplitude" if len(amplitude_surfaces) == len(surfaces) else "Mixed"
-            colormap = state.seismic.colormap if scalar == "Amplitude" else "Mixed"
-        else:
-            scalar = "Time"
-            colormap = surfaces[0].horizon_colormap if surfaces else "petrel"
-        filename = naming.horizon_surface_name(
-            dataset,
-            naming.horizons_label([h.name for h in surfaces]) or content or "Horizons",
-            scalar,
-            naming.colormap_label(colormap, "Petrel"),
-            settings.width,
-            settings.height,
-            settings.dpi,
-            req.format,
-        )
+        names = list(dict.fromkeys(h.name for h in surfaces))
+        content = "-".join(names) if len(names) <= 3 else f"{len(names)}个层位"
+        filename = naming.figure_name("3D层位", content or "未选择层位", ext=req.format)
+    return filename, dataset, view_type, slice_positions, surfaces
+
+
+def add_3d(survey, req: Queue3DRequest, restore=None, sink=None) -> dict:
+    started = perf_counter()
+    state, settings = req.state, req.settings
+    filename, dataset, view_type, slice_positions, surfaces = scene_export_name(survey, req)
+    filename = resolved_export_name(req, filename)
     request = SceneExportRequest(
         dpi=(req.render_dpi or 300) if settings.canvas == "fit" else None,
         png=req.png,
@@ -335,6 +333,7 @@ def add_3d(survey, req: Queue3DRequest, restore=None, sink=None) -> dict:
     return (sink if sink is not None else session()).add(
         data=data,
         filename=filename,
+        preserve_filename=True,
         view_type=view_type,
         dataset=dataset,
         view_state=state.model_dump(),

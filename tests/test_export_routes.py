@@ -125,3 +125,34 @@ def test_archive_response_cleans_only_its_zip_when_body_send_is_interrupted(isol
     assert sent == ["http.response.start", "http.response.body"]
     assert not path.exists()
     assert other.exists()
+
+
+@pytest.mark.parametrize("fmt", ["png", "pdf", "svg"])
+def test_map_name_preview_and_custom_name_match_saved_figure(isolated_exports, fmt):
+    client, router, project, headers, _ = isolated_exports
+    body = {"kind": "map", "state": {"horizon": "isolated"},
+            "settings": {"canvas": "fit", "long_edge": 600, "format": fmt}}
+    read_headers = {k: v for k, v in headers.items() if k != "X-SeisCanvas-Revision"}
+    preview = client.post("/api/export/map-name", headers=read_headers, json=body)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["filename"] == f"层位图_{isolated_exports[-1]['isolated'].name}.{fmt}"
+    assert client.get("/api/export/queue", headers=headers).json()["count"] == 0
+    # Dots in stems and dimension-looking text must not be rewritten after render.
+    body["filename"] = "T24.v2_180x100mm_300dpi.png"
+    preview = client.post("/api/export/map-name", headers=headers, json=body).json()["filename"]
+    assert preview == f"T24.v2_180x100mm_300dpi.{fmt}"
+    saved = client.post("/api/export/queue", headers=headers, json=body)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["filename"] == preview
+    assert max(saved.json()["pixel_size"]) == 600
+    next_name = client.post("/api/export/map-name", headers=headers, json=body).json()["filename"]
+    assert next_name == f"T24.v2_180x100mm_300dpi_02.{fmt}"
+
+
+def test_map_name_rejects_blank_and_sanitizes_paths(isolated_exports):
+    client, _, _, headers, _ = isolated_exports
+    body = {"kind": "map", "state": {"horizon": "isolated"}, "settings": {"format": "svg"}, "filename": "  "}
+    assert client.post("/api/export/map-name", headers=headers, json=body).status_code == 422
+    body["filename"] = "../测试:地图.png"
+    name = client.post("/api/export/map-name", headers=headers, json=body).json()["filename"]
+    assert name == "测试-地图.svg"

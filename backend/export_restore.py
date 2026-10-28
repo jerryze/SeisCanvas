@@ -21,10 +21,38 @@ def dependencies(kind, request):
     return ids - {None, ""}
 
 
-def source_signatures(document, ids):
-    if not document or not document.get("source"):
+def requires_seismic(request):
+    """Only explicit amplitude colouring requires a seismic volume."""
+    if request["kind"] == "map":
+        return request["state"].get("color_by", "twt") == "amplitude"
+    if request["kind"] == "3d":
+        return any(h.get("visible", True) and h.get("display_mode", "full_surface") == "full_surface"
+                   and h.get("color_by", "twt") == "amplitude" for h in request["state"].get("horizons", []))
+    return False
+
+
+def uses_seismic(request, document):
+    """Record real seismic backgrounds and survey-clipped A–B geometry."""
+    return bool(document and document.get("source")) and (
+        request["kind"] != "map" or requires_seismic(request) or request.get("profile") is not None)
+
+
+def figure_dependencies(request, document):
+    ids = dependencies(request["kind"], request)
+    # A horizon-only scene's bounds are derived from all imported picks, even
+    # when some layers are hidden. Freeze those geometry inputs as well.
+    geometry_only = not (document or {}).get("source") and (
+        request["kind"] != "map" or request.get("profile") is not None)
+    if geometry_only or (request["kind"] == "profile" and request.get("horizons") is None):
+        ids.update(h["id"] for h in (document or {}).get("horizons", []))
+    return ids
+
+
+def source_signatures(document, ids, *, include_survey=True):
+    """Fingerprint only the scientific sources used by this figure."""
+    if not document:
         return None
-    entries = {"survey": document["source"]}
+    entries = {"survey": document["source"]} if include_survey and document.get("source") else {}
     entries.update({f"horizon:{h['id']}": h for h in document["horizons"] if h["id"] in ids})
     result = {}
     for key, entry in entries.items():
@@ -43,7 +71,8 @@ def make_snapshot(req, document):
         request["settings"]["format"] = req.format
         request["state"]["scene"].update(export_long_edge=None, slice_viewports={})
     return ExportRestoreSnapshot(kind=req.kind, request=request,
-        sources=source_signatures(document, dependencies(req.kind, request))).model_dump(mode="json")
+        sources=source_signatures(document, figure_dependencies(request, document),
+                                  include_survey=uses_seismic(request, document))).model_dump(mode="json")
 
 
 def restore_payload(item, document, horizons):
@@ -61,11 +90,13 @@ def restore_payload(item, document, horizons):
     else:
         model = {"2d": Queue2DRequest, "map": QueueMapRequest, "profile": QueueProfileRequest}[snapshot.kind]
         request = model.model_validate(request).model_dump(mode="json")
-    ids = dependencies(snapshot.kind, request)
+    ids = figure_dependencies(request, document)
     missing = ids - horizons.keys()
     if missing:
         raise ValueError("无法恢复：图件所需层位已移除（" + "、".join(sorted(missing)) + "）。")
-    current = source_signatures(document, ids)
+    if requires_seismic(request) and not (document or {}).get("source"):
+        raise ValueError("此图件需要已导入的 SEG-Y 数据。")
+    current = source_signatures(document, ids, include_survey=uses_seismic(request, document))
     if snapshot.sources is not None and snapshot.sources != current:
         raise ValueError("无法恢复：源数据或解析参数已变化，请使用与图件一致的数据。")
     warnings = [] if snapshot.sources is not None else ["该图件缺少数据来源标识，无法核对数据是否与出图时一致。"]

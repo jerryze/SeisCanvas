@@ -1,3 +1,4 @@
+import type { useExportName } from "../../hooks/useExportName";
 import ExportDialog from "../ExportDialog";
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -14,6 +15,7 @@ import {
 import { Num, Toggle, Group, OpacityControl, StrokeControl, Select } from "../Controls";
 import SidebarObject from "../SidebarObject";
 import { useSidebarValue } from "../SidebarState";
+import { geometryTimeCenter, geometryPositions, snapGeometryPosition } from "../../viewGeometry";
 import { PETREL_COLORMAP } from "./sceneGeometry";
 import ColormapSelect from "../ColormapSelect";
 import {
@@ -49,9 +51,7 @@ export function SliceManager({
   const [draft, setDraft] = useState({
     inline: meta.inlines[Math.floor(meta.inlines.length / 2)],
     crossline: meta.crosslines[Math.floor(meta.crosslines.length / 2)],
-    time:
-      meta.time_range[0] +
-      Math.round((meta.samples - 1) / 2) * meta.sample_interval,
+    time: geometryTimeCenter(meta),
   });
   const [pendingDelete, setPendingDelete] = useState<{ kind: SliceKind; slice: Slice } | null>(null);
   const deleteDialog = useRef<HTMLDivElement>(null);
@@ -61,19 +61,10 @@ export function SliceManager({
   const allSlices = Object.values(slices).flat();
   const [openId, setOpenId] = useSidebarValue<string>("slice-open", "");
   const [selectedId, setSelectedId] = useSidebarValue<string>("slice-selected", "");
-  const positions = (kind: SliceKind) =>
-    kind === "inline"
-      ? meta.inlines
-      : kind === "crossline"
-        ? meta.crosslines
-        : Array.from(
-            { length: meta.samples },
-            (_, i) => meta.time_range[0] + i * meta.sample_interval,
-          );
+  const positions = (kind: SliceKind) => geometryPositions(meta, kind);
+  const continuousTime = (kind: SliceKind) => kind === "time" && meta.samples === 0;
   function snap(kind: SliceKind, value: number) {
-    return positions(kind).reduce((a, b) =>
-      Math.abs(b - value) < Math.abs(a - value) ? b : a,
-    );
+    return snapGeometryPosition(meta, kind, value);
   }
   function update(kind: SliceKind, id: string, patch: Partial<Slice>) {
     onChange({
@@ -148,12 +139,13 @@ export function SliceManager({
                     aria-label={`${prefixes[kind]} ${slice.position} 位置滑块`}
                     type="range"
                     disabled={disabled}
-                    min={0}
-                    max={positions(kind).length - 1}
-                    value={positions(kind).indexOf(slice.position)}
+                    min={continuousTime(kind) ? meta.time_range[0] : 0}
+                    max={continuousTime(kind) ? meta.time_range[1] : positions(kind).length - 1}
+                    step={continuousTime(kind) ? "any" : 1}
+                    value={continuousTime(kind) ? slice.position : positions(kind).indexOf(slice.position)}
                     onChange={(e) =>
                       update(kind, slice.id, {
-                        position: positions(kind)[+e.target.value],
+                        position: continuousTime(kind) ? +e.target.value : positions(kind)[+e.target.value],
                       })
                     }
                   />
@@ -163,7 +155,7 @@ export function SliceManager({
                     value={slice.position}
                     min={positions(kind)[0]}
                     max={positions(kind).at(-1)}
-                    step={kind === "time" ? meta.sample_interval : 1}
+                    step={kind === "time" ? meta.sample_interval || 0.1 : 1}
                     onChange={(position) => {
                       const snapped = snap(kind, position);
                       update(kind, slice.id, { position: snapped });
@@ -234,7 +226,7 @@ export function SliceManager({
                 disabled={disabled}
                 min={positions(addKind)[0]}
                 max={positions(addKind).at(-1)}
-                step={addKind === "time" ? meta.sample_interval : 1}
+                step={addKind === "time" ? meta.sample_interval || 0.1 : 1}
                 onChange={(n) => {
                   const snapped = snap(addKind, n);
                   setDraft((v) => ({ ...v, [addKind]: snapped }));
@@ -350,9 +342,9 @@ export function SceneControls({
             patch({ quality: Number(e.target.value) as 128 | 256 | 512 })
           }
         >
-          <option value={128}>快速 · 128</option>
-          <option value={256}>均衡 · 256</option>
-          <option value={512}>精细 · 512</option>
+          <option value={128}>快速（128）</option>
+          <option value={256}>均衡（256）</option>
+          <option value={512}>精细（512）</option>
         </Select>
       </label>
     </Group>
@@ -361,10 +353,12 @@ export function SceneControls({
 export function Horizon3DControls({
   horizon: h,
   seismic,
+  hasSeismic = true,
   onChange,
 }: {
   horizon: HS;
   seismic: SS;
+  hasSeismic?: boolean;
   onChange: (p: Partial<HS>) => void;
 }) {
   return (
@@ -399,7 +393,7 @@ export function Horizon3DControls({
               }
             >
               <option value="twt">Time 时间</option>
-              <option value="amplitude">振幅</option>
+              <option value="amplitude" disabled={!hasSeismic}>振幅</option>
               <option value="solid">单色</option>
             </Select>
           </label>
@@ -407,7 +401,7 @@ export function Horizon3DControls({
             <div className="field">
               <span>振幅色标</span>
               <span title="使用地震显示的色标、极性和振幅裁剪设置">
-                {seismic.colormap} · 跟随地震显示
+                {seismic.colormap}（跟随地震显示）
               </span>
             </div>
           ) : (
@@ -439,7 +433,7 @@ export function Horizon3DControls({
         </>
       ) : (
         <label className="field">
-          时间容差 · ms
+          时间容差（ms）
           <Num
             value={h.time_slice_tolerance}
             min={0}
@@ -455,23 +449,19 @@ export function Horizon3DControls({
   );
 }
 export function Export3DDialog({
+  filename,
   settings,
   onSettings,
   busy,
   error,
-  dataset,
-  datasetPlaceholder,
-  onDataset,
   onClose,
   onExport,
 }: {
+  filename: ReturnType<typeof useExportName>;
   settings: Export3D;
   onSettings: (s: Export3D) => void;
   busy: string;
   error: string;
-  dataset: string;
-  datasetPlaceholder?: string;
-  onDataset: (value: string) => void;
   onClose: () => void;
   onExport: (s: Export3D) => void;
 }) {
@@ -479,15 +469,13 @@ export function Export3DDialog({
     onSettings({ ...settings, ...(p as Partial<Export3D>) });
   return (
     <ExportDialog
-      title="三维场景 · 保存图件"
+      title="保存三维图件"
+      filename={filename}
       scene
       settings={settings}
       onChange={patch}
       onClose={onClose}
       onExport={() => onExport(settings)}
-      dataset={dataset}
-      onDataset={onDataset}
-      datasetPlaceholder={datasetPlaceholder}
       busy={!!busy}
       error={error}
     />

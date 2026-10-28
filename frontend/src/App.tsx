@@ -1,3 +1,4 @@
+import { useExportName } from "./hooks/useExportName";
 import { restoreFigure } from "./exportRestore";
 import ExportDialog from "./components/ExportDialog";
 import brandSymbol from "./assets/seiscanvas-symbol.svg?url";
@@ -48,6 +49,7 @@ import {
 } from "./types";
 import { api, json, getApiProject, setApiProject, waitForMutations } from "./api/client";
 import { formatAmplitude } from "./format";
+import { geometryTimeCenter, reconcileViewGeometry } from "./viewGeometry";
 import { useOriginalProbe, ProbeReadout } from "./components/Probe";
 import Scene3D, { Scene3DHandle } from "./components/SeismicViewer3D/Scene3D";
 import {
@@ -138,7 +140,7 @@ const initialExport: ExportDialogSettings = {
 function loadedView(meta: Meta, horizons: HS[]): VS {
   const inline = meta.inlines[Math.floor(meta.inlines.length / 2)];
   const crossline = meta.crosslines[Math.floor(meta.crosslines.length / 2)];
-  const time = meta.time_range[0] + Math.round((meta.samples - 1) / 2) * meta.sample_interval;
+  const time = geometryTimeCenter(meta);
   return {
     ...initial, scene: structuredClone(defaultScene), horizons, section_number: inline,
     slices: { inline: [makeSlice(inline)], crossline: [makeSlice(crossline)], time: [makeSlice(time)] },
@@ -168,6 +170,8 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
   const [mapReady, setMapReady] = useState(false);
 
   const [meta, setMeta] = useState<Meta | null>(null);
+  const [horizonMeta, setHorizonMeta] = useState<Meta | null>(null);
+  const geometry = meta ?? horizonMeta;
   const [view, setView] = useState<VS>(initial);
 
   const viewRef = useRef(view);
@@ -239,7 +243,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
 
   const [revision, setRevision] = useState(0);
   const { section, loading, plotWrap, sectionViewportRef, measuredSectionViewport, resetSection } =
-    useSectionData(meta, view, revision, setError);
+    useSectionData(geometry, view, revision, setError);
   useModalFocus(deleteDialog, !!horizonToDelete, () => setHorizonToDelete(null), !busy);
 
   viewRef.current = view;
@@ -266,8 +270,9 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
         if (unique.length === 1) chosenDraft = unique[0].state;
       } catch { /* Server state is available without browser storage. */ }
     }
+    const restoredGeometry = result.metadata ?? result.horizon_metadata ?? null;
     const defaults: WorkspaceState = {
-      version: 1, view: result.metadata ? loadedView(result.metadata, result.horizons) : initial,
+      version: 1, view: restoredGeometry ? { ...loadedView(restoredGeometry, result.horizons), view_mode: result.metadata ? "2d" : "map" } : initial,
       map: initialMapWorkspace(), settings: initialExport, settings3D: initialExport3D,
       dataset: "", selected: result.horizons[0]?.id || "", sidebar: true, drag: "zoom",
       bytes: { il: result.source?.ilbyte || 189, xl: result.source?.xlbyte || 21 },
@@ -280,7 +285,12 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
     setOrganizationOpen(false);
     setHorizonImport(null);
     setMeta(result.metadata);
-    setView(result.metadata ? state.view : { ...state.view, view_mode: "2d" });
+    setHorizonMeta(result.horizon_metadata ?? null);
+    const recoveredView = restoredGeometry ? reconcileViewGeometry(state.view, restoredGeometry, !!result.metadata) : state.view;
+    // A saved empty project has no initial slice positions yet.
+    if (restoredGeometry && state.view.section_number !== recoveredView.section_number &&
+        Object.values(state.view.slices).every(items => !items.length)) recoveredView.slices = defaults.view.slices;
+    setView(restoredGeometry ? recoveredView : { ...recoveredView, view_mode: "2d" });
     setMapWorkspace(state.map);
     setSettings(state.settings);
     setSettings3D(state.settings3D);
@@ -292,7 +302,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
     setSidebarValues(state.sidebarValues || {});
     setSidebarScroll(state.sidebarScroll || {});
     setRevision(v => v + 1);
-    if (!result.issues.length && result.metadata) setNotice(result.notice || "已恢复项目");
+    if (!result.issues.length && (result.metadata || result.horizons.length)) setNotice(result.notice || "已恢复项目");
   }
 
   useEffect(() => {
@@ -493,7 +503,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
   }
 
   async function restoreQueueItem(item: ExportItem) {
-    if (!meta || conflict || project?.issues.length) return;
+    if (conflict || project?.issues.length) return;
     await task("正在恢复图件设置…", async () => {
       const owner = getApiProject();
       const controller = new AbortController();
@@ -501,7 +511,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
       restoreRequest.current = controller;
       const snapshot = await restoreSettings(item, controller.signal);
       if (controller.signal.aborted || getApiProject() !== owner) return;
-      const next = restoreFigure(workspaceState, snapshot, meta);
+      const next = restoreFigure(workspaceState, snapshot, geometry, !!meta);
       setRestoreUndo({ state: structuredClone(workspaceState), revision: revision + 1, filename: item.filename, warnings: snapshot.warnings });
       applyFigurePresentation(next);
       setQueueOpen(false);
@@ -526,6 +536,12 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
   /* ------------------------------------------------------------------------ */
   /* Dataset name                                                             */
   /* ------------------------------------------------------------------------ */
+
+  const figureName = useExportName(exportOpen && (view.view_mode === "2d" || view.view_mode === "3d"),
+    view.view_mode === "3d"
+      ? { kind: "3d", dataset, state: view, settings: settings3D, format: settings3D.format }
+      : { kind: "2d", dataset, state: view, settings },
+    view.view_mode === "3d" ? settings3D.format : settings.format);
 
   const datasetPlaceholder = meta
     ? meta.filename.replace(/\.[^.]+$/, "")
@@ -645,6 +661,8 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
     if (!horizonImport) return;
 
     task("加载层位…", async () => {
+      await persistence.flush();
+      persistence.pause();
       const hs = await (
         await api(
           "/horizons/local",
@@ -659,10 +677,20 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
         )
       ).json();
 
-      setView((v) => ({
-        ...v,
-        horizons: [...v.horizons, ...inheritLayerColors(v.horizons, hs)],
-      }));
+      if (!project?.project_id) {
+        onActivate(await (await api("/workspace")).json());
+        return;
+      }
+
+      const nextGeometry = meta ?? (await (await api("/workspace")).json()).horizon_metadata ?? null;
+      if (!meta) setHorizonMeta(nextGeometry);
+      setView((v) => {
+        const horizons = [...v.horizons, ...inheritLayerColors(v.horizons, hs)];
+        const next = !geometry && nextGeometry
+          ? { ...loadedView(nextGeometry, horizons), view_mode: "map" as const }
+          : { ...v, horizons };
+        return nextGeometry ? reconcileViewGeometry(next, nextGeometry, !!meta) : next;
+      });
 
       setSelected(hs[0].id);
 
@@ -694,11 +722,17 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
       await api(`/horizons/${h.id}`, { method: "DELETE" });
       const remaining = viewRef.current.horizons.filter(a => a.id !== h.id);
       const next = remaining[Math.min(viewRef.current.horizons.findIndex(a => a.id === h.id), remaining.length - 1)]?.id || remaining[0]?.id || "";
-      setView((v) => ({
+      const nextGeometry = meta ?? (await (await api("/workspace")).json()).horizon_metadata ?? null;
+      if (!meta) setHorizonMeta(nextGeometry);
+      if (!nextGeometry) resetSection();
+      setView((v) => {
+        const nextView: VS = {
         ...v,
         horizons: v.horizons.filter((a) => a.id !== h.id),
         view_mode: v.view_mode === "map" && !remaining.length ? "2d" : v.view_mode,
-      }));
+        };
+        return nextGeometry ? reconcileViewGeometry(nextView, nextGeometry, !!meta) : { ...nextView, view_mode: "2d" };
+      });
       setSelected(current => current === h.id ? next : current);
       setMapWorkspace(current => reconcileMapWorkspace(current, remaining));
       setHorizonToDelete(null);
@@ -716,10 +750,10 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
     resetProbe();
   }, [view.view_type, view.section_number]);
 
-  const sections = meta
+  const sections = geometry
     ? view.view_type === "inline"
-      ? meta.inlines
-      : meta.crosslines
+      ? geometry.inlines
+      : geometry.crosslines
     : [];
 
   function changeSection(n: number) {
@@ -741,10 +775,10 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
   function changeMode(mode: "inline" | "crossline") {
     if (mode === view.view_type) return;
 
-    const list = meta
+    const list = geometry
       ? mode === "inline"
-        ? meta.inlines
-        : meta.crosslines
+        ? geometry.inlines
+        : geometry.crosslines
       : [];
 
     setView((v) => ({
@@ -819,9 +853,10 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
   /* ------------------------------------------------------------------------ */
 
   async function add2DToQueue() {
+    if (figureName.pending || figureName.error || !figureName.resolved) return;
     try {
       const job = await submitJob({
-        kind: "2d", dataset,
+        kind: "2d", dataset, filename: figureName.resolved,
         state: {
           ...view,
           trace_viewport_width: sectionViewportRef.current?.width ?? null,
@@ -836,6 +871,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
   }
 
   async function add3DToQueue(settings3D: any) {
+    if (figureName.pending || figureName.error || !figureName.resolved) return;
     setExportOpen(false);
     await task("正在保存三维图件…", async () => {
       const exportStarted = performance.now();
@@ -844,6 +880,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
       setBusy("正在提交三维图件…");
       await submitJob({
         kind: "3d",
+        filename: figureName.resolved,
         dataset,
         png: capture.png,
         format: capture.format,
@@ -866,9 +903,10 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
     });
   }
 
-  async function addMapToQueue(payload: { state: unknown; settings: unknown; profile: MapProfileOverlay | null }) {
+  async function addMapToQueue(payload: { state: unknown; settings: unknown; profile: MapProfileOverlay | null; filename: string }) {
     await submitJob({
       kind: "map",
+      filename: payload.filename,
       dataset,
       state: payload.state,
       settings: payload.settings,
@@ -911,7 +949,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
             height={24}
           />
 
-          <span className="version">V0.3</span>
+          <span className="version">V0.4</span>
         </div>
 
         <ProjectMenu project={project} disabled={!!busy || !!conflict} onAction={projectAction}/>
@@ -929,7 +967,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
         <button
           className="primary"
           disabled={
-            !meta ||
+            (view.view_mode !== "map" && !geometry) ||
             !!busy ||
             submittingExport ||
             (view.view_mode === "2d"
@@ -950,7 +988,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
           title="导出队列"
         >
           <Package size={15} />
-          导出队列 · {queue.length}
+          导出队列 <span className="meta-count">{queue.length}</span>
           {activeJobCount > 0 && <span className="queue-active-count">{activeJobCount} 生成中</span>}
         </button>
       </header>
@@ -971,8 +1009,8 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
                 {(["2d", "3d", "map"] as const).map(mode => (
                   <button
                     key={mode}
-                    disabled={!!busy || (mode !== "2d" && !meta) || (mode === "map" && !view.horizons.length)}
-                    title={busy ? busy : mode !== "2d" && !meta ? "导入 SEG-Y 后可用" : mode === "map" && !view.horizons.length ? "导入层位后可用" : undefined}
+                    disabled={!!busy || (mode !== "map" && !geometry) || (mode === "map" && !view.horizons.length)}
+                    title={busy ? busy : mode !== "map" && !geometry ? "导入数据后可用" : mode === "map" && !view.horizons.length ? "导入层位后可用" : undefined}
                     className={view.view_mode === mode ? "active" : ""}
                     aria-pressed={view.view_mode === mode}
                     onClick={() => { setExportOpen(false); setView(v => ({ ...v, view_mode: mode })); }}
@@ -987,6 +1025,8 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
               progress={importProgress}
               busy={busy}
               onOpenSegy={openSegy}
+              onImportHorizons={uploadHorizons}
+              horizonCount={view.horizons.length}
               onLoadExample={loadExample}
               geometryMode={geometryMode}
               onGeometryMode={setGeometryMode}
@@ -1000,11 +1040,11 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
             {/* ------------------------------------------------------------ */}
 
             <div id="horizon-map-controls" ref={setMapControlsHost} />
-            {view.view_mode === "3d" && meta && (
+            {view.view_mode === "3d" && geometry && (
               <>
                 <SliceManager
-                  key={meta.filename + revision}
-                  meta={meta}
+                  key={geometry.filename + revision}
+                  meta={geometry}
                   slices={view.slices}
                   disabled={!!busy}
                   onChange={(slices) => setView((v) => ({ ...v, slices }))}
@@ -1013,12 +1053,12 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
               </>
             )}
 
-            {meta && view.view_mode === "2d" && (
+            {geometry && view.view_mode === "2d" && (
               <SectionPanel
                 view={view}
                 sections={sections}
                 busy={busy}
-                meta={meta}
+                meta={geometry}
                 onMode={changeMode}
                 onSection={changeSection}
                 onPatch={setView}
@@ -1034,13 +1074,14 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
               />
             )}
 
-            {meta && (
+            {(meta || view.horizons.length > 0) && (
               <HorizonPanel
                 view={view}
                 selected={selected}
                 onSelect={setSelected}
                 busy={busy}
-                meta={meta}
+                meta={geometry}
+                hasSeismic={!!meta}
                 onStyle={style}
                 onPatch={setView}
                 onRename={renameHorizon}
@@ -1050,7 +1091,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
               />
             )}
 
-            {meta && view.view_mode === "3d" && (
+            {geometry && view.view_mode === "3d" && (
               <SceneControls
                 scene={view.scene}
                 onChange={(scene) => setView((v) => ({ ...v, scene }))}
@@ -1076,6 +1117,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
 
           {view.view_mode === "map" ? (
             <HorizonMap key={revision}
+              hasSeismic={!!meta}
               controlsHost={mapControlsHost}
               workspace={mapWorkspace}
               onWorkspace={setMapWorkspace}
@@ -1089,16 +1131,15 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
               onCloseExport={() => setExportOpen(false)}
               onReady={setMapReady}
               dataset={dataset}
-              datasetPlaceholder={datasetPlaceholder}
-              onDataset={setDataset}
               onAddToExport={addMapToQueue}
             />
-          ) : view.view_mode === "3d" && meta ? (
+          ) : view.view_mode === "3d" && geometry ? (
             <Scene3D
               busy={busy}
               ref={sceneRef}
               view={view}
-              meta={meta}
+              meta={geometry}
+              hasSeismic={!!meta}
               maps={maps}
               revision={revision}
               onReady={setSceneReady}
@@ -1121,9 +1162,9 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
 
               <div className="viewer-card">
                 <div className="viewer-toolbar">
-                  <b>{meta ? `${view.view_type === "inline" ? "Inline" : "Crossline"} ${view.section_number}` : "二维剖面"}</b>
+                  <b>{geometry ? `${view.view_type === "inline" ? "Inline" : "Crossline"} ${view.section_number}` : "二维剖面"}</b>
 
-                  {meta && <SectionNavigation sections={sections} value={view.section_number}
+                  {geometry && <SectionNavigation sections={sections} value={view.section_number}
                     disabled={!!busy} onChange={changeSection} />}
 
                   <div className="tools">
@@ -1147,7 +1188,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
 
                     <button
                       className="reset"
-                      disabled={!meta}
+                      disabled={!geometry}
                       onClick={() =>
                         setView((v) => ({
                           ...v,
@@ -1165,7 +1206,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
                 <div className="plot-wrap" ref={plotWrap}>
                   {section ? (
                     <SectionPlot
-                      meta={meta}
+                      meta={geometry}
                       view={view}
                       section={section}
                       colors={colors}
@@ -1196,10 +1237,10 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
                         <button
                           className="secondary"
                           disabled={!!busy}
-                          onClick={loadExample}
+                          onClick={uploadHorizons}
                         >
                           <Layers size={15} />
-                          加载示例
+                          导入层位
                         </button>
                       </div>
                     </div>
@@ -1214,7 +1255,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
                 </div>
 
                 <div className="viewer-bottom">
-                  <ProbeReadout reading={probe} />
+                  {meta && section?.has_seismic !== false && <ProbeReadout reading={probe} />}
 
                   <div className="legend">
                     {view.horizons
@@ -1227,7 +1268,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
                       ))}
                   </div>
 
-                  {section && (
+                  {meta && section?.has_seismic !== false && section?.vmin != null && section.vmax != null && (
                     <div className="amplitude-key">
                       <span>{formatAmplitude(section.vmin)}</span>
 
@@ -1242,13 +1283,13 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
               </div>
 
               <div className="canvas-footer">
-                {meta ? (
+                {geometry ? (
                   <span>
                     {view.view_type === "inline"
-                      ? `Crossline ${meta.crosslines[0]}–${meta.crosslines.at(-1)}`
-                      : `Inline ${meta.inlines[0]}–${meta.inlines.at(-1)}`}
-                    <span className="dot-separator">·</span>
-                    Time {meta.time_range[0]}–{meta.time_range[1]} ms
+                      ? `Crossline ${geometry.crosslines[0]}–${geometry.crosslines.at(-1)}`
+                      : `Inline ${geometry.inlines[0]}–${geometry.inlines.at(-1)}`}
+                    <span className="meta-divider" aria-hidden="true" />
+                    Time {geometry.time_range[0]}–{geometry.time_range[1]} ms
                   </span>
                 ) : (
                   <span>未加载数据</span>
@@ -1264,7 +1305,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
       {busy && busy !== "正在恢复上次工作…" && <div className="project-switch-progress" role="status"><LoaderCircle className="spin" size={16}/>{busy}</div>}
       {!!draftChoices.length && <div className="modal-backdrop project-backdrop"><div className="modal project-dialog" ref={draftsDialog} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="drafts-title">
         <h2 id="drafts-title">恢复草稿</h2>
-        <div className="project-draft-choices">{draftChoices.map((draft, index) => <div key={draft.key}><span>草稿 {index + 1} · {draft.updated_at ? new Date(draft.updated_at).toLocaleString() : `版本 ${draft.revision}`}<small>{draft.compatible ? "可恢复" : "与当前版本冲突"}</small></span><button className="secondary" onClick={() => {
+        <div className="project-draft-choices">{draftChoices.map((draft, index) => <div key={draft.key}><span>草稿 {index + 1}　{draft.updated_at ? new Date(draft.updated_at).toLocaleString() : `版本 ${draft.revision}`}<small>{draft.compatible ? "可恢复" : "与当前版本冲突"}</small></span><button className="secondary" onClick={() => {
           const url = URL.createObjectURL(new Blob([JSON.stringify(draft, null, 2)], { type: "application/json" })); const a = document.createElement("a"); a.href = url; a.download = `SeisCanvas-draft-${index + 1}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
         }}>下载</button>{draft.compatible && <button className="primary" onClick={() => resolveDraft(draft.state)}>恢复</button>}</div>)}</div>
         <div className="project-actions"><button className="secondary" onClick={() => resolveDraft(null)}>使用已保存版本</button></div>
@@ -1298,13 +1339,11 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
 
       {exportOpen && view.view_mode === "3d" && (
         <Export3DDialog
+          filename={figureName}
           settings={settings3D}
           onSettings={setSettings3D}
           busy={busy}
           error={error}
-          dataset={dataset}
-          datasetPlaceholder={datasetPlaceholder}
-          onDataset={setDataset}
           onClose={() => setExportOpen(false)}
           onExport={add3DToQueue}
         />
@@ -1316,14 +1355,12 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
 
       {exportOpen && view.view_mode === "2d" && (
         <ExportDialog
-          title="二维剖面 · 保存图件"
+          title="保存二维图件"
+          filename={figureName}
           settings={settings}
           onChange={(p) => setSettings((s) => ({ ...s, ...p }))}
           onClose={() => setExportOpen(false)}
           onExport={add2DToQueue}
-          dataset={dataset}
-          datasetPlaceholder={datasetPlaceholder}
-          onDataset={setDataset}
           busy={!!busy || submittingExport}
           disabled={loading}
           error={error}
@@ -1359,6 +1396,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
         <HorizonImportModal
           state={horizonImport}
           busy={busy}
+          error={error}
           onClose={() => setHorizonImport(null)}
           onColumn={(key, value) =>
             setHorizonImport((current) =>
@@ -1379,7 +1417,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
             return updated ? { ...h, model_group: updated.model_group, horizon_key: updated.horizon_key, color: updated.color } : h;
           }) }));
           setOrganizationOpen(false);
-          setNotice("已更新模型分组、层位对应关系和统一配色。");
+          setNotice("已更新分组、层位对应关系和统一配色。");
         }} />}
 
       {horizonToDelete && (

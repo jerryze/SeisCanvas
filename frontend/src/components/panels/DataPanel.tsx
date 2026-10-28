@@ -9,6 +9,8 @@ type Props = {
   progress: ImportProgress | null;
   busy: string;
   onOpenSegy: () => void;
+  onImportHorizons: () => void;
+  horizonCount: number;
   onLoadExample: () => void;
   geometryMode: string;
   onGeometryMode: (mode: string) => void;
@@ -19,12 +21,14 @@ type Props = {
   meta: Meta | null;
 };
 
-/** Sidebar "数据" group: SEG-Y import, example data, byte positions, metadata. */
+/** Data import entry points and seismic metadata. */
 export default function DataPanel({
   datasetName,
   progress,
   busy,
   onOpenSegy,
+  onImportHorizons,
+  horizonCount,
   onLoadExample,
   geometryMode,
   onGeometryMode,
@@ -52,7 +56,7 @@ export default function DataPanel({
           </span>
         ) : undefined
       }
-      defaultOpen={!meta}
+      defaultOpen={!meta && !horizonCount}
     >
       {progress && importing && (
         <div className="import-progress" role="status" aria-live="polite">
@@ -119,7 +123,18 @@ export default function DataPanel({
           {meta ? "新建项目并导入 SEG-Y" : "导入 SEG-Y"}
         </button>
 
-        {!meta && (
+        {!meta && !horizonCount && (
+          <button
+            className="panel-action full"
+            disabled={!!busy}
+            onClick={onImportHorizons}
+          >
+            <Layers size={14} />
+            导入层位
+          </button>
+        )}
+
+        {!meta && !horizonCount && (
           <button
             className="panel-action full"
             disabled={!!busy}
@@ -131,7 +146,7 @@ export default function DataPanel({
         )}
 
         <details className="subsettings">
-          <SubsectionSummary title="导入设置" tooltip="用于下一次导入" />
+          <SubsectionSummary title="SEG-Y 导入设置" tooltip="用于下一次导入" />
           <div className="subsettings-body">
             <label className="field">
               几何模式
@@ -167,7 +182,7 @@ export default function DataPanel({
                 />
               </label>
             </div>
-            {meta && (
+            {(meta || horizonCount > 0) && (
               <button
                 className="panel-action full"
                 disabled={!!busy}

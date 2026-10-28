@@ -52,10 +52,10 @@ export function useSectionData(meta: Meta | null, view: VS, revision: number, on
     const fullX = [positions[0] - (positions.length > 1 ? (positions[1] - positions[0]) / 2 : .5),
       positions.at(-1)! + (positions.length > 1 ? (positions.at(-1)! - positions.at(-2)!) / 2 : .5)];
     const loaded = loadedSection.current;
-    if (loaded?.meta === meta && loaded.key === contentKey &&
+    if (loaded?.meta === meta && loaded.key === contentKey && (loaded.data.has_seismic === false ||
       coversViewport(loaded.data, view.x_range ?? fullX, view.time_range ?? meta.time_range,
         Math.round(width * ratio), Math.round(height * ratio), view.seismic.background_interpolation,
-        view.seismic.wiggle || view.seismic.variable_area)) {
+        view.seismic.wiggle || view.seismic.variable_area))) {
       setLoading(false);
       return;
     }

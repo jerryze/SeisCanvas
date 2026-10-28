@@ -1,10 +1,11 @@
 import ExportDialog from "./ExportDialog";
+import { useExportName } from "../hooks/useExportName";
 import { Layers, MousePointer2, Move, Plus, RotateCcw, ScanLine, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import type { HorizonMapState, MapWorkspace } from "../workspace";
 import { reconcileMapWorkspace } from "../workspace";
 import { mapPresentation, mapSelectionError, profileEndpointError, profileRequestKey, profileProbeRequest, profileHorizonStyleKey,
-  PROFILE_MARGIN, profileContainerViewport, profileAspectPair, mapViewForKey } from "./horizonMapLogic";
+  PROFILE_MARGIN, profileContainerViewport, profileAspectPair, mapViewForKey, mapWorkspaceForData } from "./horizonMapLogic";
 import { createProfilePlotRenderer } from "./profilePlotRenderer";
 import { createPortal } from "react-dom";
 import Plotly from "plotly.js-dist-min";
@@ -25,6 +26,7 @@ import { useOriginalProbe, ProbeReadout } from "./Probe";
 type State = HorizonMapState;
 type ProfileCurve = { id: string; name: string; values: (number | null)[] };
 type ProfileData = {
+  has_seismic?: boolean;
   distance: number[];
   time: number[];
   /** Time-major heatmap rows: amplitude[time][position]. */
@@ -35,8 +37,8 @@ type ProfileData = {
   b_distance: number;
   path_start: [number, number];
   path_end: [number, number];
-  vmin: number;
-  vmax: number;
+  vmin: number | null;
+  vmax: number | null;
   label_y: string;
   distance_edges: number[];
   time_edges: number[];
@@ -74,6 +76,7 @@ export default function HorizonMap({
   workspace,
   onWorkspace,
   horizons,
+  hasSeismic,
   maps,
   mapColors,
   seismic,
@@ -83,14 +86,13 @@ export default function HorizonMap({
   onCloseExport,
   onReady,
   dataset,
-  datasetPlaceholder,
-  onDataset,
   onAddToExport,
 }: {
   controlsHost: HTMLDivElement | null;
   workspace: MapWorkspace;
   onWorkspace: Dispatch<SetStateAction<MapWorkspace>>;
   horizons: HS[];
+  hasSeismic: boolean;
   maps: Record<string, any[]>;
   mapColors: Record<string, any[]>;
   /** Shared with the 2D window: the profile reuses its display settings. */
@@ -98,6 +100,7 @@ export default function HorizonMap({
   onSeismic: (patch: Partial<SS>) => void;
   /** Queue the standalone A–B profile figure (payload built here). */
   onAddProfileToExport: (payload: {
+    filename: string;
     state: State;
     a: [number, number];
     b: [number, number];
@@ -120,12 +123,11 @@ export default function HorizonMap({
   onCloseExport: () => void;
   onReady: (v: boolean) => void;
   dataset: string;
-  datasetPlaceholder?: string;
-  onDataset: (value: string) => void;
-  onAddToExport: (payload: { state: State; settings: Record<string, unknown>; profile: MapProfileOverlay | null }) => Promise<void>;
+  onAddToExport: (payload: { state: State; settings: Record<string, unknown>; profile: MapProfileOverlay | null; filename: string }) => Promise<void>;
 }) {
-  const { state: savedState, settings, drag, profileOn, profileA, profileB, profileSettings } = workspace;
-  const activeView = workspace.activeView ?? "map";
+  const availableWorkspace = mapWorkspaceForData(workspace, hasSeismic);
+  const { state: savedState, settings, drag, profileOn, profileA, profileB, profileSettings } = availableWorkspace;
+  const activeView = availableWorkspace.activeView ?? "map";
   const mapActive = activeView === "map";
   const sectionActive = activeView === "section";
   const profileAspectRatio = workspace.profileAspectRatio ?? null;
@@ -161,6 +163,8 @@ export default function HorizonMap({
     [loading, setLoading] = useState(false),
     [saving, setSaving] = useState(false);
   const data = !mapIssue && mapResult?.key === mapQueryKey ? mapResult.data : null;
+  const exportName = useExportName(exportOpen && mapActive && !mapIssue,
+    { kind: "map", state, settings, dataset }, settings.format);
   const plot = useRef<HTMLDivElement>(null),
     queue = useRef(Promise.resolve()),
     version = useRef(0),
@@ -174,6 +178,10 @@ export default function HorizonMap({
   const [profileExportOpen, setProfileExportOpen] = useState(false);
   const [profileExportBusy, setProfileExportBusy] = useState(false);
   const [profileExportError, setProfileExportError] = useState("");
+  const profileExportName = useExportName(
+    (profileExportOpen || (exportOpen && sectionActive)) && !!profileA && !!profileB,
+    { kind: "profile", state, a: profileA, b: profileB, dataset, settings: profileSettings,
+      colormap: seismic.colormap, seismic }, profileSettings.format);
   const profileRef = useRef<HTMLDivElement>(null);
   const profileRenderer = useRef<ReturnType<typeof createProfilePlotRenderer> | null>(null);
   const profileRenderedInputs = useRef<unknown[] | null>(null);
@@ -205,6 +213,12 @@ export default function HorizonMap({
   useEffect(() => {
     onWorkspace(current => reconcileMapWorkspace(current, horizons));
   }, [horizons, state.horizon, state.difference_reference, state.difference_comparison]);
+  useEffect(() => {
+    onWorkspace(current => mapWorkspaceForData(current, hasSeismic));
+    if (!hasSeismic) {
+      resetProfileProbe();
+    }
+  }, [hasSeismic, onWorkspace]);
   const profileSampling = samplingViewport(seismic, profileViewport);
   const profileQueryKey = profileRequestKey(state, horizonKey, profileA, profileB, seismic,
     profileSampling,
@@ -518,15 +532,15 @@ export default function HorizonMap({
   }, [mapActive, data, state.x_range, state.y_range, drag, profileOn, profileA, profileB, profilePathKey, presentation.scalar, presentation.unit]);
   // Map coloring does not change the A–B seismic raster or horizon curves.
   useEffect(() => {
-    if (!sectionActive || !profileA || !profileB || endpointError || mapIssue || profileFresh) return;
-    const box = profileRef.current;
+    if ((!sectionActive && !profileOn) || !profileA || !profileB || endpointError || mapIssue || profileFresh) return;
+    const box = sectionActive ? profileRef.current : plot.current;
     if (!box?.clientWidth || !box.clientHeight) return;
     setProfileFailure(null);
     const abort = new AbortController();
     let active = true;
     const timer = setTimeout(async () => {
       try {
-        const box = profileRef.current!;
+        const box = (sectionActive ? profileRef.current : plot.current)!;
         const ratio = Math.min(window.devicePixelRatio || 1, 2);
         const res = await api("/horizon-map/profile", {
           method: "POST",
@@ -546,7 +560,7 @@ export default function HorizonMap({
         });
         const result = await res.json();
         if (active) {
-          if (result.background_interpolation !== seismic.background_interpolation)
+          if (hasSeismic && result.background_interpolation !== seismic.background_interpolation)
             throw new Error("剖面显示后端版本不匹配，请重启 SeisCanvas 后端以启用插值和波形功能。");
           setProfileResult({ key: profileQueryKey, contentKey: profileContentKey, pathKey, data: result });
         }
@@ -560,7 +574,7 @@ export default function HorizonMap({
       clearTimeout(timer);
       abort.abort();
     };
-  }, [sectionActive, profileQueryKey, profileContentKey, endpointError, mapIssue, profileFresh]);
+  }, [sectionActive, profileOn, profileQueryKey, profileContentKey, endpointError, mapIssue, profileFresh, hasSeismic]);
 
   useEffect(() => {
     onReady(mapActive ? mapDrawn && !!data && !loading : profileDrawn && !!profileData && !profilePending && !profileError);
@@ -588,7 +602,7 @@ export default function HorizonMap({
     }
     setProfileDrawn(false);
     // Same colormap the 2D window uses, reversal included.
-    const sharedSection: Section = { x: profileData.distance, time: profileData.time,
+    const sharedSection: Section = { has_seismic: profileData.has_seismic, x: profileData.distance, time: profileData.time,
       x_edges: profileData.distance_edges, time_edges: profileData.time_edges,
       raster_extent: profileData.raster_extent, z: profileData.amplitude,
       vmin: profileData.vmin, vmax: profileData.vmax, trace_overlay: profileData.trace_overlay,
@@ -597,7 +611,9 @@ export default function HorizonMap({
     // Keep every loaded horizon's trace slot. Toggling it only restyles visibility.
     const traces = sectionTraces(sharedSection, { seismic, horizons: horizons.map(h => ({ ...h, visible: true })), view_type: "inline", section_number: 0 } as VS,
       maps[seismic.colormap] || [], "距离 (网格)");
-    traces[0].hovertemplate = "距离 %{x:.1f}<br>Time %{y:.1f} ms<extra></extra>";
+    const raster = traces.find(trace => trace.type === "heatmap");
+    if (raster)
+      raster.hovertemplate = "距离 %{x:.1f}<br>Time %{y:.1f} ms<extra></extra>";
     const xRange = workspace.profileXRange || profileData.x_range;
     const timeRange = workspace.profileTimeRange || profileData.time_range;
     const abShape = (x: number) => ({
@@ -662,7 +678,7 @@ export default function HorizonMap({
         el.removeAllListeners?.("plotly_hover");
         el.on("plotly_hover", (event: any) => {
           const point = event?.points?.[0];
-          if (!point) return;
+          if (!point || !hasSeismic || profileData.has_seismic === false) return;
           const request = profileProbeRequest(profileData, point);
           if (request) probeProfile(request);
         });
@@ -679,7 +695,7 @@ export default function HorizonMap({
         });
       },
     );
-  }, [sectionActive, profileData, maps, profileStyleKey, seismic, profileAspectRatio, workspace.profileDrag, workspace.profileXRange, workspace.profileTimeRange]);
+  }, [sectionActive, profileData, maps, profileStyleKey, seismic, hasSeismic, profileAspectRatio, workspace.profileDrag, workspace.profileXRange, workspace.profileTimeRange]);
 
   useEffect(() => {
     if (sectionActive && profileData) void profileRenderer.current?.visibility(horizons);
@@ -735,10 +751,10 @@ export default function HorizonMap({
     };
   }, []);
   async function addToExport() {
-    if (!data || loading || mapIssue) return;
+    if (!data || loading || mapIssue || exportName.pending || exportName.error || !exportName.resolved) return;
     setSaving(true);
     try {
-      await onAddToExport({ state, settings,
+      await onAddToExport({ state, settings, filename: exportName.resolved,
         profile: validEndpoints && settings.show_ab !== false ? {
           a: profileA!, b: profileB!,
           ...(profileOn && profilePath ? { path_start: profilePath.path_start, path_end: profilePath.path_end } : {}),
@@ -763,7 +779,7 @@ export default function HorizonMap({
       <Select aria-label={label} value={value} onChange={(e) => change(e.target.value)}>
         {!options.some(([id]) => id === value) && <option value="" disabled>请选择{label}</option>}
         {options.map(([v, l]) => (
-          <option key={v} value={v} disabled={label === "颜色变量" && v === "difference" && horizons.length < 2}>
+          <option key={v} value={v} disabled={label === "颜色变量" && ((v === "difference" && horizons.length < 2) || (v === "amplitude" && !hasSeismic))}>
             {l}
           </option>
         ))}
@@ -832,35 +848,37 @@ export default function HorizonMap({
                 (difference_comparison) => patch({ difference_comparison }),
               )}
             </div>
-            <label className="map-field-label" title="ΔTime = 对比层位 − 参考层位">差值类型</label>
-            <div
-              className="map-display-options"
-              role="group"
-              aria-label="差值类型"
-            >
-              {(
-                [
-                  ["signed", "有符号"],
-                  ["absolute", "绝对值"],
-                ] as const
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  className={state.difference_type === value ? "active" : ""}
-                  aria-pressed={state.difference_type === value}
-                  onClick={() =>
-                    patch({
-                      difference_type: value,
-                      colormap: value === "absolute" ? "viridis" : "RdBu",
-                      range_mode: "auto",
-                      vmin: null,
-                      vmax: null,
-                    })
-                  }
-                >
-                  {label}
-                </button>
-              ))}
+            <div className="map-field-stack">
+              <label className="map-field-label" title="ΔTime = 对比层位 − 参考层位">差值类型</label>
+              <div
+                className="map-display-options"
+                role="group"
+                aria-label="差值类型"
+              >
+                {(
+                  [
+                    ["signed", "有符号"],
+                    ["absolute", "绝对值"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    className={state.difference_type === value ? "active" : ""}
+                    aria-pressed={state.difference_type === value}
+                    onClick={() =>
+                      patch({
+                        difference_type: value,
+                        colormap: value === "absolute" ? "viridis" : "RdBu",
+                        range_mode: "auto",
+                        vmin: null,
+                        vmax: null,
+                      })
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
           </>
         )}
@@ -921,171 +939,175 @@ export default function HorizonMap({
               </span>
             </div>
           )}
-        <label className="map-field-label">显示方式</label>
-        <div
-          className="map-display-options"
-          role="group"
-          aria-label="地图显示方式"
-        >
-          {[
-            ["filled", "填色"],
-            ["contour", "等值线"],
-            ["filled_contour", "叠加"],
-          ].map(([value, label]) => (
-            <button
-              key={value}
-              className={state.display === value ? "active" : ""}
-              aria-pressed={state.display === value}
-              onClick={() => patch({ display: value, contours: value !== "filled" })}
+        <div className="map-display-section">
+          <div className="map-field-stack">
+            <label className="map-field-label">显示方式</label>
+            <div
+              className="map-display-options"
+              role="group"
+              aria-label="地图显示方式"
             >
-              {label}
-            </button>
-          ))}
-        </div>
-        <ColormapSelect
-          label="地图色标"
-          value={state.colormap}
-          options={((state.color_by === "amplitude"
-            ? [
-                ["seismic", "Seismic"],
-                ["RdBu", "RdBu"],
-                ["coolwarm", "Coolwarm"],
-              ]
-            : state.color_by === "difference"
-              ? state.difference_type === "absolute"
-                ? [
-                    ["viridis", "Viridis"],
-                    ["turbo", "Turbo"],
-                    ["magma", "Magma"],
-                  ]
+              {[
+                ["filled", "填色"],
+                ["contour", "等值线"],
+                ["filled_contour", "叠加"],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  className={state.display === value ? "active" : ""}
+                  aria-pressed={state.display === value}
+                  onClick={() => patch({ display: value, contours: value !== "filled" })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {state.display !== "filled" && (
+            <fieldset
+              className="map-contour-fields"
+              aria-label="等值线设置"
+            >
+              <label className="field">
+                线宽（pt）
+                <Num
+                  label="等值线线宽（pt）"
+                  value={state.line_width}
+                  min={0.1}
+                  max={6}
+                  step={0.1}
+                  onChange={(line_width) => patch({ line_width })}
+                />
+              </label>
+              <div className="check-row">
+                <Toggle
+                  label="自动间隔"
+                  checked={state.interval_auto}
+                  onChange={(interval_auto) => patch({ interval_auto })}
+                />
+                <Toggle
+                  label="显示数值标签"
+                  checked={state.labels}
+                  onChange={(labels) => patch({ labels })}
+                />
+              </div>
+              {!state.interval_auto && (
+                <label className="field">
+                  间隔{state.color_by === "amplitude" ? "" : "（ms）"}
+                  <Num
+                    label="等值线间隔"
+                    value={state.interval}
+                    min={0.01}
+                    step={1}
+                    onChange={(interval) => patch({ interval })}
+                  />
+                </label>
+              )}
+            </fieldset>
+          )}
+          <ColormapSelect
+            label="地图色标"
+            value={state.colormap}
+            options={((state.color_by === "amplitude"
+              ? [
+                  ["seismic", "Seismic"],
+                  ["RdBu", "RdBu"],
+                  ["coolwarm", "Coolwarm"],
+                ]
+              : state.color_by === "difference"
+                ? state.difference_type === "absolute"
+                  ? [
+                      ["viridis", "Viridis"],
+                      ["turbo", "Turbo"],
+                      ["magma", "Magma"],
+                    ]
+                  : [
+                      ["RdBu", "RdBu"],
+                      ["coolwarm", "Coolwarm"],
+                      ["seismic", "Seismic"],
+                    ]
                 : [
-                    ["RdBu", "RdBu"],
-                    ["coolwarm", "Coolwarm"],
-                    ["seismic", "Seismic"],
-                  ]
-              : [
-                  ["petrel", "Petrel"],
-                  ["turbo", "Turbo"],
-                  ["viridis", "Viridis"],
-                  ["cividis", "Cividis"],
-                  ["jet", "Jet"],
-                ]) as [string, string][]).map(([value, label]) => ({ value, label, colors: mapColors[value] || [] }))}
-          reverse={state.reverse_colormap}
-          onChange={(colormap) => patch({ colormap })}
-          range={data ? `${data.vmin.toFixed(1)}–${data.vmax.toFixed(1)}${presentation.unit ? ` ${presentation.unit}` : ""}` : undefined}
-        />
-        <div className="check-row">
-          <Toggle
-            label="反转色标"
-            checked={state.reverse_colormap}
-            onChange={(reverse_colormap) => patch({ reverse_colormap })}
+                    ["petrel", "Petrel"],
+                    ["turbo", "Turbo"],
+                    ["viridis", "Viridis"],
+                    ["cividis", "Cividis"],
+                    ["jet", "Jet"],
+                  ]) as [string, string][]).map(([value, label]) => ({ value, label, colors: mapColors[value] || [] }))}
+            reverse={state.reverse_colormap}
+            onChange={(colormap) => patch({ colormap })}
+            range={data ? `${data.vmin.toFixed(1)}–${data.vmax.toFixed(1)}${presentation.unit ? ` ${presentation.unit}` : ""}` : undefined}
           />
-          <Toggle
-            label="显示色标尺"
-            checked={state.colorbar}
-            onChange={(colorbar) => patch({ colorbar })}
-          />
-        </div>
-        <div className="map-range-mode">
-          <span>颜色范围</span>
-          <div
-            className="map-display-options"
-            role="group"
-            aria-label="颜色范围"
-          >
-            {[
-              ["auto", "自动"],
-              ["manual", "手动"],
-            ].map(([value, label]) => (
-              <button
-                key={value}
-                className={state.range_mode === value ? "active" : ""}
-                aria-pressed={state.range_mode === value}
-                onClick={() =>
-                  patch({
-                    range_mode: value,
-                    vmin: data?.vmin ?? 0,
-                    vmax: data?.vmax ?? 1,
-                  })
-                }
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-        {state.range_mode === "manual" && (
-          <div className="field-row">
-            <label>
-              最小值{state.color_by === "amplitude" ? "" : " · ms"}
-              <Num
-                value={state.vmin ?? 0}
-                onChange={(vmin) => patch({ vmin })}
-              />
-            </label>
-            <label>
-              最大值{state.color_by === "amplitude" ? "" : " · ms"}
-              <Num
-                value={state.vmax ?? 1}
-                onChange={(vmax) => patch({ vmax })}
-              />
-            </label>
-          </div>
-        )}
-        {state.color_by === "amplitude" && state.range_mode === "auto" && (
-          <div className="section-number">
-            <span>裁剪百分位 %</span>
-            <Num
-              value={state.clip_percentile}
-              min={0.1}
-              max={100}
-              step={0.1}
-              onChange={(clip_percentile) => patch({ clip_percentile })}
-            />
-          </div>
-        )}
-      </Group>
-      <Group icon={<ScanLine size={16} />} title="地图等值线" defaultOpen={false}>
-        <fieldset
-          className="map-contour-fields"
-          disabled={state.display === "filled"}
-        >
-          <label className="field">
-            线宽 · pt
-            <Num
-              label="等值线线宽（pt）"
-              value={state.line_width}
-              min={0.1}
-              max={6}
-              step={0.1}
-              onChange={(line_width) => patch({ line_width })}
-            />
-          </label>
           <div className="check-row">
             <Toggle
-              label="自动间隔"
-              checked={state.interval_auto}
-              onChange={(interval_auto) => patch({ interval_auto })}
+              label="反转色标"
+              checked={state.reverse_colormap}
+              onChange={(reverse_colormap) => patch({ reverse_colormap })}
             />
             <Toggle
-              label="显示数值标签"
-              checked={state.labels}
-              onChange={(labels) => patch({ labels })}
+              label="显示色标尺"
+              checked={state.colorbar}
+              onChange={(colorbar) => patch({ colorbar })}
             />
           </div>
-          {!state.interval_auto && (
-            <label className="field">
-              间隔{state.color_by === "amplitude" ? "" : " · ms"}
-              <Num
-                label="等值线间隔"
-                value={state.interval}
-                min={0.01}
-                step={1}
-                onChange={(interval) => patch({ interval })}
-              />
-            </label>
+          <div className="map-range-mode">
+            <span>颜色范围</span>
+            <div
+              className="map-display-options"
+              role="group"
+              aria-label="颜色范围"
+            >
+              {[
+                ["auto", "自动"],
+                ["manual", "手动"],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  className={state.range_mode === value ? "active" : ""}
+                  aria-pressed={state.range_mode === value}
+                  onClick={() =>
+                    patch({
+                      range_mode: value,
+                      vmin: data?.vmin ?? 0,
+                      vmax: data?.vmax ?? 1,
+                    })
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {state.range_mode === "manual" && (
+            <div className="field-row">
+              <label>
+                最小值{state.color_by === "amplitude" ? "" : "（ms）"}
+                <Num
+                  value={state.vmin ?? 0}
+                  onChange={(vmin) => patch({ vmin })}
+                />
+              </label>
+              <label>
+                最大值{state.color_by === "amplitude" ? "" : "（ms）"}
+                <Num
+                  value={state.vmax ?? 1}
+                  onChange={(vmax) => patch({ vmax })}
+                />
+              </label>
+            </div>
           )}
-        </fieldset>
+          {state.color_by === "amplitude" && state.range_mode === "auto" && (
+            <div className="section-number">
+              <span>裁剪百分位 %</span>
+              <Num
+                value={state.clip_percentile}
+                min={0.1}
+                max={100}
+                step={0.1}
+                onChange={(clip_percentile) => patch({ clip_percentile })}
+              />
+            </div>
+          )}
+        </div>
       </Group>
       <Group
         icon={<ScanLine size={16} />}
@@ -1101,64 +1123,62 @@ export default function HorizonMap({
             setPicking(null);
           }}
         />
-        {(profileOn || sectionActive) && (
-          <div className="map-profile-controls">
-            <div className="field-row">
-              <label>
-                A · Inline
-                <Num
-                  label="A 点 Inline"
-                  value={profileA?.[0] ?? centerInline}
-                  onChange={(v) => setPoint(setProfileA, profileA, 0, v)}
-                />
-              </label>
-              <label>
-                A · Crossline
-                <Num
-                  label="A 点 Crossline"
-                  value={profileA?.[1] ?? centerCrossline}
-                  onChange={(v) => setPoint(setProfileA, profileA, 1, v)}
-                />
-              </label>
-            </div>
-            <div className="field-row">
-              <label>
-                B · Inline
-                <Num
-                  label="B 点 Inline"
-                  value={profileB?.[0] ?? centerInline}
-                  onChange={(v) => setPoint(setProfileB, profileB, 0, v)}
-                />
-              </label>
-              <label>
-                B · Crossline
-                <Num
-                  label="B 点 Crossline"
-                  value={profileB?.[1] ?? centerCrossline}
-                  onChange={(v) => setPoint(setProfileB, profileB, 1, v)}
-                />
-              </label>
-            </div>
-            <div className="section-number" role="group" aria-label="A–B 剖面横纵比">
-              <Toggle label="固定横纵比" title="固定横向与纵向的比例；取消后自动适应工作区"
-                checked={profileAspectRatio !== null}
-                onChange={enabled => update("profileAspectRatio", enabled ? 2 : null)} />
-              <Num label="A–B 横纵比（横÷纵）" title="横÷纵，例如 2 表示 2:1"
-                disabled={profileAspectRatio === null} value={profileAspectRatio ?? 2}
-                min={0.02} max={50} step={0.1}
-                onChange={ratio => update("profileAspectRatio", ratio)} />
-            </div>
-            <button className="panel-action" disabled={!profileA && !profileB} onClick={clearProfile}>
-              清除 A–B 端点
-            </button>
-            <details className="subsettings">
-              <SubsectionSummary title="地震显示" />
-              <div className="subsettings-body">
-                <SeismicSettings seismic={seismic} maps={maps} onSeismic={onSeismic} />
-              </div>
-            </details>
+        <div className="map-profile-controls">
+          <div className="field-row">
+            <label>
+              A Inline
+              <Num
+                label="A 点 Inline"
+                value={profileA?.[0] ?? centerInline}
+                onChange={(v) => setPoint(setProfileA, profileA, 0, v)}
+              />
+            </label>
+            <label>
+              A Crossline
+              <Num
+                label="A 点 Crossline"
+                value={profileA?.[1] ?? centerCrossline}
+                onChange={(v) => setPoint(setProfileA, profileA, 1, v)}
+              />
+            </label>
           </div>
-        )}
+          <div className="field-row">
+            <label>
+              B Inline
+              <Num
+                label="B 点 Inline"
+                value={profileB?.[0] ?? centerInline}
+                onChange={(v) => setPoint(setProfileB, profileB, 0, v)}
+              />
+            </label>
+            <label>
+              B Crossline
+              <Num
+                label="B 点 Crossline"
+                value={profileB?.[1] ?? centerCrossline}
+                onChange={(v) => setPoint(setProfileB, profileB, 1, v)}
+              />
+            </label>
+          </div>
+          <div className="section-number" role="group" aria-label="A–B 剖面横纵比">
+            <Toggle label="固定横纵比" title="固定横向与纵向的比例；取消后自动适应工作区"
+              checked={profileAspectRatio !== null}
+              onChange={enabled => update("profileAspectRatio", enabled ? 2 : null)} />
+            <Num label="A–B 横纵比（横÷纵）" title="横÷纵，例如 2 表示 2:1"
+              disabled={profileAspectRatio === null} value={profileAspectRatio ?? 2}
+              min={0.02} max={50} step={0.1}
+              onChange={ratio => update("profileAspectRatio", ratio)} />
+          </div>
+          <button className="panel-action" disabled={!profileA && !profileB} onClick={clearProfile}>
+            清除 A–B 端点
+          </button>
+          {hasSeismic && <details className="subsettings">
+            <SubsectionSummary title="地震显示" />
+            <div className="subsettings-body">
+              <SeismicSettings seismic={seismic} maps={maps} onSeismic={onSeismic} />
+            </div>
+          </details>}
+        </div>
       </Group>
 
     </div>
@@ -1180,10 +1200,11 @@ export default function HorizonMap({
             }}>{view === "map" ? "地图" : "A–B 剖面"}</button>)}
         </div>
         <div className="map-view-content">
-        <section id={`${tabId}-map-panel`} role="tabpanel" aria-labelledby={`${tabId}-map-tab`}
+        <section id={`${tabId}-map-panel`} role="tabpanel"
+          aria-labelledby={`${tabId}-map-tab`}
           aria-hidden={!mapActive} inert={!mapActive} className={`map-view-panel${mapActive ? " is-active" : ""}`}>
         <div className="viewer-toolbar">
-          <b title={presentation.title}>{presentation.title}</b>
+          <b className="meta-inline" title={presentation.title.replaceAll(" · ", "　")}>{presentation.title.split(" · ").map((part, index) => <span key={index}>{part}</span>)}</b>
           <div className="tools">
             <button aria-pressed={profileOn} className={profileOn ? "chosen" : ""}
               title="在地图上拾取 A、B 端点；在“A–B 剖面”页签查看结果"
@@ -1285,7 +1306,7 @@ export default function HorizonMap({
             </div>}
             </div>
             <div className="profile-footer" style={{ visibility: sectionActive && profileData ? "visible" : "hidden" }}>
-            <div className="profile-readout-slot"><ProbeReadout reading={profileReading} /></div>
+            {hasSeismic && <div className="profile-readout-slot"><ProbeReadout reading={profileReading} /></div>}
             <div className="profile-legend" aria-label="剖面层位图例">
               {horizons.map(h => (
                 <span key={h.id} aria-hidden={!h.visible || !profileData}
@@ -1298,27 +1319,29 @@ export default function HorizonMap({
         </section>
         </div>
       </div>
-      {exportOpen && mapActive && <ExportDialog title="层位地图 · 保存图件" settings={settings}
+      {exportOpen && mapActive && <ExportDialog title="保存地图图件" settings={settings}
+        filename={exportName}
         mapProfileAvailable={validEndpoints}
         onChange={p => setSettings(s => ({...s, ...p}))}
         onClose={onCloseExport} onExport={addToExport} busy={saving}
         disabled={!data || loading || !!mapIssue} error={error || mapIssue} rendering={false}
-        dataset={dataset} onDataset={onDataset} datasetPlaceholder={datasetPlaceholder}
         colorbar={state.colorbar} onColorbar={colorbar => patch({colorbar})} />}
 
       {(profileExportOpen || (exportOpen && sectionActive)) && profileA && profileB && (
         <ExportDialog
-          title="A–B 剖面 · 保存图件"
+          title="保存 A–B 剖面图件"
+          filename={profileExportName}
           profile
           settings={profileSettings}
           onChange={(p) => setProfileSettings((s) => ({ ...s, ...p }))}
           onClose={() => { setProfileExportError(""); setProfileExportOpen(false); onCloseExport(); }}
           onExport={async () => {
-            if (!profileData || profileError || profilePending) return;
+            if (!profileData || profileError || profilePending || profileExportName.pending || profileExportName.error || !profileExportName.resolved) return;
             setProfileExportError("");
             setProfileExportBusy(true);
             try {
               await onAddProfileToExport({
+                filename: profileExportName.resolved,
                 state,
                 a: profileA,
                 b: profileB,
@@ -1351,9 +1374,6 @@ export default function HorizonMap({
           disabled={!profileData || !!profileError || profilePending}
           error={profileExportError || profileError}
           rendering={false}
-          dataset={dataset}
-          onDataset={onDataset}
-          datasetPlaceholder={datasetPlaceholder}
         />
       )}
 

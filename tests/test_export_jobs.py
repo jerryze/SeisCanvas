@@ -31,6 +31,20 @@ def thread_executor():
     return ThreadPoolExecutor(max_workers=1)
 
 
+def test_transient_progress_read_does_not_break_job_status(tmp_path, monkeypatch):
+    def unavailable_progress(_):
+        raise ValueError("progress changed during read")
+
+    monkeypatch.setattr("backend.export_jobs.read_json", unavailable_progress)
+    manager = ExportJobManager(lambda *_: {})
+    job = {"id": "job", "status": "running", "stage": "rendering",
+           "timings": {}, "label": "地图.png", "filename": "地图.png"}
+    try:
+        assert manager._public({"root": tmp_path}, job) == job
+    finally:
+        manager.shutdown()
+
+
 def fake_worker(path, staging):
     payload = json.loads(Path(path).read_text())
     sink = _StagingSink(staging)

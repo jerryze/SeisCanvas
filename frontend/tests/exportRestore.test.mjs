@@ -108,3 +108,77 @@ test('restoring a figure retains model identities and unifies later correspondin
   assert.equal(next.view.horizons[1].visible, false);
   assert.deepEqual(restoreState(base(), next, current.view.horizons).view.horizons, next.view.horizons);
 });
+
+test('horizon-only projects restore time and difference maps without inventing seismic bounds', () => {
+  const current = base();
+  for (const color_by of ['twt', 'difference']) {
+    const state = { ...current.map.state, horizon: 'h', color_by, difference_reference: 'h', difference_comparison: 'new', interval: null,
+      x_range: [1000, 2000], y_range: [3000, 4000] };
+    const snapshot = { version: 1, kind: 'map', warnings: [], request: { state, settings: { format: 'svg' }, profile: null } };
+    const before = structuredClone([current, snapshot]);
+    const next = restoreFigure(current, snapshot, null);
+    assert.equal(next.view.view_mode, 'map');
+    assert.equal(next.map.activeView, 'map');
+    assert.equal(next.map.state.color_by, color_by);
+    assert.deepEqual(next.map.state.x_range, [1000, 2000]);
+    assert.equal(next.map.settings.format, 'svg');
+    assert.equal(next.map.profileOn, false);
+    assert.equal(next.map.state.interval_auto, true);
+    assert.deepEqual([current, snapshot], before);
+    snapshot.request.state.x_range = [NaN, 2000];
+    assert.throws(() => restoreFigure(current, snapshot, null), /图件范围/);
+    snapshot.request.state.x_range = [2000, 1000];
+    assert.throws(() => restoreFigure(current, snapshot, null), /图件范围/);
+    snapshot.request.state.x_range = null;
+    snapshot.request.state.horizon = 'removed';
+    assert.throws(() => restoreFigure(current, snapshot, null), /所需层位/);
+  }
+});
+
+test('horizon geometry restores all layer views while amplitude still requires seismic', () => {
+  const current = base(), before = structuredClone(current);
+  const section = restoreFigure(current, snapshot2d(), meta, false);
+  assert.equal(section.view.section_number, 33);
+  assert.equal(section.view.view_mode, '2d');
+  const scene = { version: 1, kind: '3d', warnings: [], request: { state: {
+    horizons: [{ ...current.view.horizons[0], display_mode: 'full_surface', color_by: 'twt' }],
+    slices: { inline: [{ position: 12 }], crossline: [], time: [{ position: 208 }] }, scene: current.view.scene,
+  }, settings: { format: 'png' } } };
+  assert.equal(restoreFigure(current, scene, meta, false).view.view_mode, '3d');
+  const map = { version: 1, kind: 'map', warnings: [], request: {
+    state: { ...current.map.state, horizon: 'h', interval: null }, settings: {}, profile: { a: [10, 30], b: [12, 33] },
+  } };
+  assert.equal(restoreFigure(current, map, meta, false).map.profileOn, true);
+  const profile = { version: 1, kind: 'profile', warnings: [], request: {
+    state: map.request.state, settings: {}, a: [10, 30], b: [12, 33], horizons: current.view.horizons,
+    x_range: null, time_range: [202, 210], aspect_ratio_2d: null,
+  } };
+  assert.equal(restoreFigure(current, profile, meta, false).map.activeView, 'section');
+  scene.request.state.horizons[0].color_by = 'amplitude';
+  map.request.state.color_by = 'amplitude';
+  for (const snapshot of [scene, map]) {
+    assert.throws(() => restoreFigure(current, snapshot, meta, false), /振幅着色需要先导入 SEG-Y/);
+    assert.deepEqual(current, before);
+  }
+  assert.throws(() => restoreFigure(current, snapshot2d(), null, false), /先导入层位或 SEG-Y/);
+});
+
+test('attaching a smaller survey does not invalidate saved horizon map extents', () => {
+  const current = base();
+  for (const color_by of ['twt', 'difference']) {
+    const snapshot = { version: 1, kind: 'map', warnings: [], request: {
+      state: { ...current.map.state, horizon: 'h', color_by, difference_reference: 'h', difference_comparison: 'new', interval: null,
+        x_range: [1000, 2000], y_range: [3000, 4000] }, settings: { format: 'svg' }, profile: null,
+    } };
+    assert.deepEqual(restoreFigure(current, snapshot, meta), restoreFigure(current, snapshot, null));
+    snapshot.request.state.x_range = [2000, 1000];
+    assert.throws(() => restoreFigure(current, snapshot, meta), /图件范围/);
+  }
+  const amplitude = { version: 1, kind: 'map', warnings: [], request: {
+    state: { ...current.map.state, horizon: 'h', color_by: 'amplitude', interval: null, x_range: [1000, 2000] }, settings: {}, profile: null,
+  } };
+  assert.throws(() => restoreFigure(current, amplitude, meta), /图件范围/);
+  amplitude.request.state.color_by = 'twt';
+  amplitude.request.profile = { a: [10, 30], b: [12, 33] };
+  assert.throws(() => restoreFigure(current, amplitude, meta), /图件范围/);
+});

@@ -14,6 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from matplotlib.colors import LinearSegmentedColormap, to_hex
 from backend.segy import Survey
 from backend.horizon import Horizon, horizon_preview
+from backend.horizon_geometry import HorizonGeometry
 from backend.style import CMAPS, get_cmap
 from backend.models import (
     Horizon3DStyle,
@@ -26,6 +27,7 @@ from backend.models import (
     PickHorizonRequest,
     SampleRequest,
     SectionRequest,
+    SliceState,
     ViewState3D,
     WorkspaceSave,
     WorkspaceRelink,
@@ -60,7 +62,7 @@ async def lifespan(_: FastAPI):
             export_queue.shutdown()
 
 
-app = FastAPI(title="SeisCanvas", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="SeisCanvas", version="0.4.0", lifespan=lifespan)
 app.router.route_class = ProjectRoute
 # Local single-user application. Serialize mutations and section/export reads.
 lock = RLock()
@@ -79,6 +81,10 @@ def require_survey():
     return survey
 
 
+def require_geometry():
+    return survey if survey is not None else HorizonGeometry(horizons)
+
+
 def horizon_style(key, h, index):
     return Horizon3DStyle(
         id=key, name=h.name, color=COLORS[index % len(COLORS)],
@@ -87,6 +93,7 @@ def horizon_style(key, h, index):
 
 
 def add_horizons(pending, model_group="", horizon_keys=None):
+    global restored_project
     if horizon_keys is not None and len(horizon_keys) != len(pending):
         raise ValueError("层位对应关系数量与导入文件数量不一致。")
     added = {uuid4().hex: h for h in pending}
@@ -104,7 +111,15 @@ def add_horizons(pending, model_group="", horizon_keys=None):
         if key:
             palette.setdefault(key, COLORS[len(palette) % len(COLORS)])
             style["color"] = palette[key]
-    persist_horizons(added=added, added_styles={s["id"]: s for s in styles})
+    if document is None:
+        document = project.activate(project.create("层位项目", template={
+            "source": None, "state": None,
+            "horizons": [horizon_entry(s["id"], added[s["id"]], s) for s in styles],
+        }))
+        restored_project = document["id"]
+        export_queue.bind(project.export_folder(document))
+    else:
+        persist_horizons(added=added, added_styles={s["id"]: s for s in styles})
     horizons.update(added)
     return styles
 
@@ -135,18 +150,29 @@ def persist_horizons(removed=(), added=None, renamed=None, added_styles=None):
 
 def activate_survey(new, ilbyte, xlbyte, geometry_mode="auto", imported=()):
     global survey, restored_project
+    current = project.read()
+    # The first seismic volume supplements a horizon-only project. Replacing
+    # an existing volume still creates a separate project as before.
+    retained = dict(horizons) if current and current["source"] is None else {}
     pending = {uuid4().hex: h for h in imported}
     styles = [horizon_style(key, h, i) for i, (key, h) in enumerate(pending.items())]
     document = project.new(
         source(new.path, ilbyte=ilbyte, xlbyte=xlbyte, geometry_mode=geometry_mode),
         [horizon_entry(style["id"], pending[style["id"]], style) for style in styles],
+        seismic_view={
+            "view_type": "inline", "section_number": int(new.inlines[len(new.inlines) // 2]),
+            "x_range": None, "time_range": None,
+            "slices": {kind: [SliceState(id=uuid4().hex, position=float(axis[len(axis) // 2])).model_dump()]
+                       for kind, axis in (("inline", new.inlines), ("crossline", new.crosslines), ("time", new.times))},
+        },
     )
     survey = new
     horizons.clear()
+    horizons.update(retained)
     horizons.update(pending)
     restored_project = document["id"]
     export_queue.bind(project.export_folder(document))
-    return workspace_response(document, new, pending)
+    return workspace_response(document, new, horizons)
 
 
 def load_document(document):
@@ -173,6 +199,7 @@ def workspace_response(document, loaded_survey, loaded_horizons, issues=()):
         "activation_epoch": project.epoch, "revision": document["revision"],
         "updated_at": document["updated_at"], "state": document["state"],
         "metadata": loaded_survey.metadata() if loaded_survey else None,
+        "horizon_metadata": HorizonGeometry(loaded_horizons).metadata() if loaded_horizons and loaded_survey is None else None,
         "horizons": [{**styles.get(h["id"], h["style"]), "name": h["name"]} for h in document["horizons"] if h["id"] in loaded_horizons],
         "source": {k: document["source"][k] for k in ("ilbyte", "xlbyte", "geometry_mode")} if document["source"] else None,
         "issues": list(issues),
@@ -425,7 +452,7 @@ def horizon_map(state: HorizonMapState):
         if state.horizon not in horizons:
             raise HTTPException(404, "Horizon not found.")
         try:
-            return map_data(require_survey(), horizons[state.horizon], state, horizons)
+            return map_data(survey, horizons[state.horizon], state, horizons)
         except ValueError as e:
             raise error(e)
 
@@ -437,7 +464,7 @@ def horizon_map_profile(req: HorizonProfileRequest):
             raise HTTPException(404, "Horizon not found.")
         try:
             return map_profile(
-                require_survey(),
+                require_geometry(),
                 horizons[req.state.horizon],
                 req.state,
                 horizons,
@@ -672,7 +699,6 @@ def upload_horizons(
                 shutil.copyfileobj(file.file, output)
             pending.append(Horizon(path, Path(file.filename).stem, columns=columns))
         with guarded_lock():
-            require_survey()
             result = add_horizons(pending)
             return result
     except Exception as e:
@@ -721,7 +747,7 @@ def nearest_index(coordinates, value):
 def section(req: SectionRequest):
     try:
         with guarded_lock():
-            return interactive_section(require_survey(), horizons, req)
+            return interactive_section(require_geometry(), horizons, req)
     except ValueError as e:
         raise error(e)
 
@@ -777,7 +803,7 @@ def sample(req: SampleRequest):
 def scene(state: ViewState3D):
     try:
         with guarded_lock():
-            return scene_data(require_survey(), horizons, state)
+            return scene_data(require_geometry(), horizons, state)
     except (ValueError, OSError) as e:
         raise error(e)
 
@@ -826,7 +852,7 @@ def intersection(
 
 
 export_router = create_export_router(ExportContext(
-    require_survey=require_survey, get_horizons=lambda: horizons,
+    require_survey=require_survey, get_survey=lambda: survey, get_horizons=lambda: horizons,
     get_project=lambda: project, project_lock=lock,
 ))
 app.include_router(export_router)

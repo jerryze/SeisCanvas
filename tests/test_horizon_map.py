@@ -331,6 +331,35 @@ def test_difference_publication_render(tmp_path):
     assert content.startswith(b"\x89PNG")
 
 
+@pytest.mark.parametrize("nearly_constant", [False, True])
+@pytest.mark.parametrize("fmt", ["png", "pdf", "svg"])
+def test_constant_difference_auto_contour_export_keeps_values_and_color_range(tmp_path, nearly_constant, fmt):
+    from backend.horizon_map import map_values
+
+    # Decimal layer picks with a 60 ms offset yield differences a few ULPs
+    # apart; the automatic interval used to round several levels identically.
+    step = .6 if nearly_constant else 1
+    base = grid_horizon(tmp_path, "reference.txt", lambda y, x: 240 + step * x + y)
+    comp = grid_horizon(tmp_path, "comparison.txt", lambda y, x: 300 + step * x + y)
+    horizons = {"a": base, "b": comp}
+    state = difference_state("a", "a", "b", display="filled_contour", colormap="RdBu")
+    raw = (comp.data[:, 2] - base.data[:, 2]).reshape(5, 5)
+    data, lo, hi, _, _, _, levels = map_values(None, base, state, horizons)
+    np.testing.assert_array_equal(data.scalar, raw)
+    if nearly_constant:
+        assert 0 < hi - lo < 1e-10
+        assert len(levels) > 1 and np.all(np.diff(levels) > 0)
+    else:
+        assert hi == lo == 60 and len(levels) == 0
+    overlay = map_data(None, base, state, horizons)
+    filled = map_data(None, base, state.model_copy(update={"display": "filled"}), horizons)
+    for key in ("z", "vmin", "vmax", "colorscale", "statistics"):
+        assert overlay[key] == filled[key]
+    image = render_map(None, base, state, Settings(format=fmt, long_edge=600), horizons)
+    assert image.startswith({"png": b"\x89PNG", "pdf": b"%PDF", "svg": b"<?xml"}[fmt])
+    np.testing.assert_array_equal(map_values(None, base, state, horizons)[0].scalar, raw)
+
+
 @pytest.mark.parametrize("difference_type,show_title,expected", [
     ("signed", True, "Signed Difference: Prediction − Reference"),
     ("absolute", True, "Absolute Difference: |Prediction − Reference|"),
@@ -696,8 +725,8 @@ def test_profile_export_queue_naming_and_manifest(client, tmp_path):
     item = response.json()
     assert item["view_type"] == "horizon_map"
     assert item["folder"] == "HorizonMap"
-    assert item["filename"].startswith("F3_HorizonMap_h_Seismic_ProfileAB_")
-    assert "180x80mm_300dpi.png" in item["filename"]
+    assert item["filename"] == "AB剖面_IL10-12_XL30-33.png"
+    assert (item["width_mm"], item["height_mm"], item["dpi"]) == (180, 80, 300)
 
 
 def test_profile_export_rejects_bad_colors(client):

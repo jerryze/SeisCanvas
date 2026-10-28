@@ -31,6 +31,7 @@ export function samplingViewport(settings: SS, viewport: SectionViewport | null)
 
 /** A stale running backend must not silently ignore selected 2D capabilities. */
 export function sectionResponseError(section: Section, settings: SS): string | null {
+  if (section.has_seismic === false) return null;
   const overlay = settings.wiggle || settings.variable_area;
   const incompatible =
     (settings.background_interpolation &&

@@ -228,3 +228,26 @@ def test_jobs_routes_enforce_revision_and_cancel_only_queued(job_api):
     assert cancelled.status_code == 200 and cancelled.json()["status"] == "cancelled"
     state["gate"].proceed.set()
     completed(state, first["id"])
+
+
+@pytest.mark.parametrize("kind", ["2d", "3d", "map", "profile"])
+def test_jobs_reserve_names_and_publish_the_same_name(job_api, kind):
+    api = job_api
+    body = request_for(kind)
+    body["filename"] = "分组对比.v2.png"
+    fmt = body.get("format", body["settings"]["format"])
+    client, headers = api["client"], api["headers"]
+    initial = client.post("/api/export/name", headers=headers(), json=body).json()["filename"]
+    first = client.post("/api/export/jobs", headers=headers(), json=body)
+    assert first.status_code == 202, first.text
+    first = first.json()
+    assert first["filename"] == initial
+    assert first["label"] == initial
+    assert api["gate"].started.wait(3)
+    preview = client.post("/api/export/name", headers=headers(), json=body).json()["filename"]
+    assert preview == f"分组对比.v2_02.{fmt}"
+    second = client.post("/api/export/jobs", headers=headers(), json=body).json()
+    assert second["filename"] == preview
+    api["gate"].proceed.set()
+    assert completed(api, first["id"])["item"]["filename"] == initial
+    assert completed(api, second["id"])["item"]["filename"] == preview

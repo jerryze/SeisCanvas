@@ -328,7 +328,7 @@ export function Group({
         <span className="group-title">
           {title}
           {count !== undefined && (
-            <span className="group-count"> · {count}</span>
+            <span className="group-count">{count}</span>
           )}
         </span>
         <small

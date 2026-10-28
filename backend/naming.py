@@ -1,8 +1,7 @@
-"""Self-describing scientific file names for exported figures.
+"""Safe figure names and collision numbering.
 
-A name follows ``Dataset + View + Location/Target + Content + Key Style + Size
-+ DPI``.  Only parameters that make a figure recognisable at a glance belong in
-the name; the complete reproduction parameters live in export_manifest.json.
+User-facing defaults contain only the figure type and horizon/section identity.
+Complete rendering parameters belong in export_manifest.json.
 """
 
 from __future__ import annotations
@@ -257,3 +256,31 @@ def unique_name(filename, taken):
         if candidate.lower() not in used:
             return candidate
         counter += 1
+
+
+def requested_filename(value, fmt):
+    """Keep a user-supplied stem safe and bind it to the selected format."""
+    stem = re.sub(r"\.(png|pdf|svg)$", "", str(value).strip(), flags=re.I)
+    stem = sanitize(stem)[:MAX_STEM].rstrip("-_.") or "Untitled"
+    return f"{stem}.{extension(fmt)}"
+
+
+def figure_name(kind, target, *, ext="png"):
+    """Only figure type and its horizon/section identity belong in defaults."""
+    return requested_filename(f"{kind}_{sanitize(target)}", ext)
+
+
+def compact_slices(positions):
+    return "_".join(part for part in (
+        _range(positions["inline"], "IL"),
+        _range(positions["crossline"], "XL"),
+        _range(positions["time"], "T", suffix="ms"),
+    ) if part)
+
+
+def profile_location(a, b):
+    # Preserve A -> B direction instead of sorting endpoints.
+    def span(index, prefix):
+        start, end = number(a[index]), number(b[index])
+        return f"{prefix}{start}" if start == end else f"{prefix}{start}-{end}"
+    return f"{span(0, 'IL')}_{span(1, 'XL')}"

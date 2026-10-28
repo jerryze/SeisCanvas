@@ -124,7 +124,7 @@ def test_add_to_export_stores_a_rendered_figure_and_names_it(client):
     response = client.post("/api/export/queue", json=queue_body())
     assert response.status_code == 200, response.text
     item = response.json()
-    assert item["filename"] == "F3_2D_Inline_IL0012_SeismicOnly_Seismic_180x100mm_600dpi.png"
+    assert item["filename"] == "2D_IL12.png"
     assert item["view_type"] == "2d_inline"
     assert item["folder"] == "2D/Inline"
     assert item["detail"] == "PNG · 180 × 100 mm · 600 dpi"
@@ -159,7 +159,7 @@ def test_add_to_export_stores_a_rendered_figure_and_names_it(client):
 def test_duplicate_names_get_a_suffix_and_deleted_files_are_removed(client):
     first = client.post("/api/export/queue", json=queue_body()).json()
     second = client.post("/api/export/queue", json=queue_body()).json()
-    assert second["filename"].endswith("_600dpi_02.png")
+    assert second["filename"] == "2D_IL12_02.png"
     assert first["filename"] != second["filename"]
 
     stored = first["temporary_path"]
@@ -217,13 +217,13 @@ def test_crossline_and_horizon_content_naming(client):
     item = client.post("/api/export/queue", json=body).json()
     assert item["view_type"] == "2d_crossline"
     assert item["folder"] == "2D/Crossline"
-    assert item["filename"].startswith("F3_2D_Crossline_XL0030_")
+    assert item["filename"] == "2D_XL30.png"
 
     with_horizon = queue_body(
         state={"horizons": [{"id": "h", "name": "my horizon"}]},
     )
     item = client.post("/api/export/queue", json=with_horizon).json()
-    assert "_h_Seismic_" in item["filename"]
+    assert item["filename"] == "2D_IL12.png"
 
 
 def test_rename_changes_only_the_exported_file_name(client):
@@ -252,7 +252,7 @@ def test_rename_changes_only_the_exported_file_name(client):
 def test_dataset_falls_back_to_the_segy_file_name(client):
     item = client.post("/api/export/queue", json=queue_body(dataset=None)).json()
     assert item["dataset"] == "tiny"
-    assert item["filename"].startswith("tiny_2D_Inline_")
+    assert item["filename"] == "2D_IL12.png"
     item = client.post("/api/export/queue", json=queue_body(dataset="My Project")).json()
     assert item["dataset"] == "My-Project"
 
@@ -283,7 +283,7 @@ def test_horizon_map_is_queued_with_its_contour_parameters(client):
     item = client.post("/api/export/queue", json=body).json()
     assert item["view_type"] == "horizon_map"
     assert item["folder"] == "HorizonMap"
-    assert item["filename"] == "F3_HorizonMap_h_Time_FilledContour_Petrel_90x80mm_600dpi.png"
+    assert item["filename"] == "层位图_h.png"
 
     manifest_body = {
         "kind": "map",
@@ -341,10 +341,8 @@ def test_difference_export_names_the_pair_type_and_display(
     ))
     assert response.status_code == 200, response.text
     item = response.json()
-    color = "" if display == "contour" else f"_{naming.colormap_label(colormap)}"
-    assert item["filename"] == (
-        f"F3_HorizonMap_Grid-H-1_Pred-H2-vs-Ref-H-1_{label}_{label_display}{color}_60x50mm_300dpi.png"
-    )
+    kind = "差值图" if difference_type == "signed" else "误差图"
+    assert item["filename"] == f"{kind}_Pred-H2-vs-Ref-H-1.png"
     assert client.get(f"/api/export/queue/{item['id']}/file").content.startswith(b"\x89PNG")
     manifest = export_queue.session().manifest()["figures"][0]
     assert manifest["name"] == item["filename"]
@@ -362,14 +360,14 @@ def test_difference_export_swap_duplicate_and_renamed_horizon(client, difference
     swapped = client.post("/api/export/queue", json=difference_queue_body(
         difference_reference="comp", difference_comparison="ref",
     )).json()
-    assert "_Ref-H-1-vs-Pred-H2_SignedDifference_" in swapped["filename"]
+    assert swapped["filename"] == "差值图_Ref-H-1-vs-Pred-H2.png"
     assert not swapped["filename"].endswith("_02.png")
     duplicate = client.post("/api/export/queue", json=difference_queue_body()).json()
     assert duplicate["filename"] == first["filename"].removesuffix(".png") + "_02.png"
 
     assert client.patch("/api/horizons/comp", json={"name": "Updated Prediction"}).status_code == 200
     renamed = client.post("/api/export/queue", json=difference_queue_body()).json()
-    assert "_Updated-Prediction-vs-Ref-H-1_" in renamed["filename"]
+    assert renamed["filename"] == "差值图_Updated-Prediction-vs-Ref-H-1.png"
     figures = export_queue.session().manifest()["figures"]
     assert figures[0]["name"] == first["filename"]
     assert figures[0]["difference"]["comparison_name"] == "Pred:H2"
@@ -409,7 +407,7 @@ def test_three_dimensional_items_keep_their_own_format(client):
     assert item["format"] == "pdf"
     assert item["pixel_size"] == [400, 300]
     assert item["detail"] == "PDF · 400 × 300 px · 1×"
-    assert item["filename"] == "F3_3D_MultiSlice_IL0010-0012_XL0030_180x100mm_300dpi.pdf"
+    assert item["filename"] == "3D_IL10-12_XL30.pdf"
 
     preview = client.get(f"/api/export/queue/{item['id']}/file")
     assert preview.headers["content-type"] == "application/pdf"
@@ -436,7 +434,7 @@ def test_three_dimensional_scene_with_only_surfaces_is_a_horizon_surface(client)
     }
     item = client.post("/api/export/queue", json=body).json()
     assert item["view_type"] == "3d_horizon_surface"
-    assert item["filename"] == "F3_3D_HorizonSurface_H1_Time_Petrel_180x100mm_300dpi.png"
+    assert item["filename"] == "3D层位_H1.png"
     assert client.get(f"/api/export/queue/{item['id']}/file").content.startswith(b"\x89PNG")
 
 
@@ -450,7 +448,7 @@ def test_three_dimensional_amplitude_surface_keeps_coloring_in_export(client, fm
     response = client.post("/api/export/queue", json=body)
     assert response.status_code == 200, response.text
     item = response.json()
-    assert "_Amplitude_Seismic_" in item["filename"]
+    assert item["filename"] == f"3D层位_H1.{fmt}"
     assert item["view_state"]["horizons"][0]["color_by"] == "amplitude"
     assert item["view_state"]["seismic"]["reverse_polarity"] is True
     assert export_queue.session().manifest()["figures"][0]["horizon_amplitude_colormap"] == "seismic"
