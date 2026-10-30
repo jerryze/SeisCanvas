@@ -7,6 +7,7 @@ frontend/dist/
 .DS_Store
 outputs/
 /data/
-/docs/
+/output/
+/.local-notes/
 
 .cache/

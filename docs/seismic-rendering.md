@@ -41,7 +41,13 @@ Export Queue 在加入图件时记录两个开关、有效背景算法和绘图�
 
 色阶仍取完整原生切片及可见振幅层位的有效样本，不以显示像素、抽样分位数或分块分位数平均代替。大分布用有界块和精确秩选择复现 NumPy 的线性分位数、dtype 提升及浮点运算次序；三维所有可见面共用同一分布。没有振幅层位时，大切片的色阶标量随切片位置与裁剪参数缓存，缩放、换色不重复全量统计。首次精确统计可能多遍读取数据，这是保留精确色阶的开销。
 
-这些限制约束振幅工作块与统计的中间内存，不是整个进程的固定内存上限。坐标与逐 Inline 去重索引仍随几何规模增长；非标准文件布局的 segyio 兼容读取可能使用整道缓冲。关闭背景插值时仍返回可见范围内每个原始单元，不静默抽稀；原生网格、波形路径、导出像素和 JSON 本身仍按输出规模占用内存。探针查询单个原始样本，不依赖完整剖面或显示栅格。复现实测见 `benchmarks/slice_memory.py` 和 `output/slice-memory-qa/`。
+这些限制约束振幅工作块与统计的中间内存，不是整个进程的固定内存上限。坐标与逐 Inline 去重索引仍随几何规模增长；非标准文件布局的 segyio 兼容读取可能使用整道缓冲。关闭背景插值时仍返回可见范围内每个原始单元，不静默抽稀；原生网格、波形路径、导出像素和 JSON 本身仍按输出规模占用内存。探针查询单个原始样本，不依赖完整剖面或显示栅格。复现实测见 `benchmarks/slice_memory.py` （结果保存在本地 `output/slice-memory-qa/`，不纳入版本控制）。
+
+## 连续导航
+
+二维与 A–B 剖面保留最多 512×256 的全域概览，平移或缩放等待精细数据时显示新增区域。概览与精细图使用同一色阶和极性；精细位图按实际绘制范围遮挡概览，空值继续保留为空白。概览不参与原始振幅读数和后端导出。
+
+二维历史窗口缓存最多 3 项，估计数组占用上限 24 MiB；这不是浏览器总内存上限。历史插值窗口只能作过渡，相同请求网格才可直接作为最终结果；其余情况按当前视窗重新采样。换数据或剖面立即使旧缓存失效。
 
 ## 3D 与层位地图剖面
 
@@ -51,39 +57,10 @@ Export Queue 在加入图件时记录两个开关、有效背景算法和绘图�
 
 A–B 剖面保留原有空间路径取样：从 A、B 的四邻道线性组合出原始时间道，路径按固定网格步长取样，并缓存这一序列。随后使用与 2D 一致的时间 Sinc8／横向 Linear 背景与波形规则。背景开关关闭时，只显示这些路径道的原始时间采样单元。层位曲线使用固定原始路径坐标 `curve_distance`，缩放或切换背景插值不会改变曲线几何。鼠标振幅读数沿用已有 `/api/sample` 和原始 SEG-Y 查询，不查询重建后的显示像素。地图自身的层位 Time、沿层振幅和差值计算不受显示插值开关影响。
 
-A–B 的“剖面显示”中可设置固定横纵比例；比例与 2D 共用已保存的设置。剖面缩放、平移范围单独保存在地图工作状态中，调整端点后重置范围，调整剖面高度会按实际子图大小更新采样。独立剖面导出沿用插值、裁剪、极性、Gain、填充、可见范围和比例，并复用 2D 层位的可见性、线型、线宽、标记和描边，传递曲线／图例／A–B 标注开关；背景关闭时不调用隐藏的高阶图像重采样。
+A–B 的“剖面显示”中可设置固定横纵比例；比例与 2D 分别保存，只约束绘图区形状，不限制鼠标框选比例。剖面缩放、平移范围单独保存在地图工作状态中，调整端点后重置范围，调整剖面高度会按实际子图大小更新采样。独立剖面导出沿用插值、裁剪、极性、Gain、填充、可见范围和比例，并复用 2D 层位的可见性、线型、线宽、标记和描边，传递曲线／图例／A–B 标注开关；背景关闭时不调用隐藏的高阶图像重采样。
 
 PNG、SVG、PDF 均提供白色／透明背景选择。2D 和 A–B 的文字、坐标轴、波形、填充及层位为矢量对象，地震背景为栅格；3D 场景保留相机一致的高清 RGBA 栅格，PDF/SVG 坐标轴、刻度和文字从当前 GL 字形与线条几何投影为矢量轮廓。3D 文字轮廓可以无损缩放，但不是可选择的 PDF 文本。旧队列文件需重新保存才能采用新流程。
 
 ## 验证
 
 数值测试覆盖 SU 核参考系数、原始点保持、短道及时间边界、正弦重建、缺失值、8 点有限支撑、横向线性与世界坐标映射。渲染测试覆盖开关独立性、原始网格、零交叉填充、平移核支撑、缓存、最终绘图区一次重建、三种导出格式及工作状态恢复。
-
-## 修改文件
-
-| 文件 | 修改职责 |
-| --- | --- |
-| `backend/slice_source.py`、`backend/preview.py` | 原生窗口读取、精度保持、稀疏有效样本遍历与单点读取 |
-| `backend/amplitude_stats.py` | 有界内存的精确分位数与共享色阶 |
-| `backend/resample.py` | 共享 Sinc8 相位表与时间 Sinc／横向 Linear 背景振幅函数 |
-| `backend/trace_overlay.py` | 原始网格边界、可见范围、波形时间重建与共享填充路径 |
-| `backend/section_service.py` | 2D、3D、A–B 共用背景、原始网格、缓存及配置元数据 |
-| `backend/scene.py`、`backend/horizon_map.py` | 3D 与 A–B 剖面接入公共振幅、叠加路径和比例导出 |
-| `backend/rendering.py` | 2D 背景与矢量叠加导出，原始单元显示，共用层位绘制 |
-| `backend/figure_export.py` | 最终绘图区一次振幅重建、三格式透明背景和矢量字体 |
-| `backend/export3d.py`、`frontend/src/components/SeismicViewer3D/vectorAxes.ts`、`shaderUniforms.ts` | 3D RGBA 与当前原生字形、轴线的矢量导出，安全读取 GL 程序参数 |
-| `backend/models.py` | 两个独立插值开关与即时绘图区高度参数 |
-| `backend/export_service.py` | 导出清单中的开关、有效算法和绘图区高度 |
-| `frontend/src/types.ts` | 显示配置、原始单元边界和响应元数据类型 |
-| `frontend/src/App.tsx` | 默认值、开关更新、绘图区宽高请求和导出传递 |
-| `frontend/src/components/panels/SeismicPanel.tsx` | 三种剖面共用的显示与独立插值开关 |
-| `frontend/src/components/SeismicViewer3D/sceneGeometry.ts`、`sliceViewport.ts` | 采样单元面色、波形和填充几何、相机投影像素测量 |
-| `frontend/src/components/HorizonMap.tsx`、`horizonMapLogic.ts`、`workspace.ts` | A–B 显示、缩放、比例、请求依赖、工作状态和导出配置 |
-| `frontend/src/components/SeismicViewer2D/SectionPlot.tsx` | 布局与尺寸变化后测量实际绘图区宽高 |
-| `frontend/src/components/SeismicViewer2D/sectionDisplay.ts` | 绘图区测量、请求依赖与旧后端响应检查 |
-| `frontend/src/components/SeismicViewer2D/sectionGeometry.ts` | 原始单元边界与稳定世界坐标，空白振幅的极性处理 |
-| `README.md`、`SEISMIC_2D_RENDERING.md` | 用户入口、实际流程、边界处理和验证说明 |
-
-新增 `tests/test_sinc8.py`、`tests/test_sinc_rendering.py`、`frontend/tests/sectionPlot.test.mjs`；更新现有 display interpolation、trace overlay、fit export、export queue、workspace、section geometry 和坐标范围测试。
-
-新增跨视图回归测试 `tests/test_shared_sections.py`，覆盖相同输入下 2D／3D 背景和波形路径一致、Time Slice 空间线性、原始单元、禁止旧 Bicubic、缓存、裁剪极性与 A–B 比例及导出。前端测试覆盖凹形波瓣、零交叉、平面坐标、关闭状态、面色、投影尺寸和显示请求失效。

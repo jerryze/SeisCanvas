@@ -113,3 +113,12 @@ npm --prefix frontend run build
 点击顶部项目名称进入“项目管理”，统一新建、打开、重命名和创建副本。视图与层位配置自动保存，顶部保存状态可点击立即保存。
 
 “关闭项目”保留项目；“删除”移至“最近删除”。其中可恢复项目，或彻底删除项目配置与图件（无法恢复）；原始数据文件保留。
+
+## 项目文档
+
+- [Linux 部署](docs/deployment-linux.md)
+- [界面规范](docs/ui-design.md)
+- [地震剖面渲染](docs/seismic-rendering.md)
+- [层位显示与平滑](docs/horizon-display.md)
+
+`docs/` 维护长期说明；旧方案与过程笔记存放在本地 `.local-notes/`，验收截图、日志和测量结果存放在本地 `output/`，两者均不提交。
