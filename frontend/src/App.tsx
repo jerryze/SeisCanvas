@@ -61,7 +61,7 @@ import { useExportQueue } from "./hooks/useExportQueue";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence";
 import { useModalFocus } from "./hooks/useModalFocus";
 import { useSectionData } from "./hooks/useSectionData";
-import { initialMapWorkspace, initialExport3D, reconcileMapWorkspace, restoreState, readDraft, draftTabId, projectDrafts, type DraftCandidate, type WorkspaceResponse, type WorkspaceState } from "./workspace";
+import { initialMapWorkspace, initialExport3D, reconcileMapWorkspace, restoreState, readDraft, draftTabId, projectDrafts, removeProjectDrafts, type DraftCandidate, type WorkspaceResponse, type WorkspaceState } from "./workspace";
 
 /* -------------------------------------------------------------------------- */
 /* Initial state                                                              */
@@ -151,7 +151,7 @@ function loadedView(meta: Meta, horizons: HS[]): VS {
 /* App                                                                        */
 /* -------------------------------------------------------------------------- */
 
-function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: { initialProject: WorkspaceResponse; onActivate: (result: WorkspaceResponse) => void; bootstrapError?: string }) {
+function ProjectWorkspace({ initialProject, onActivate, managerOpen, onManagerOpenChange, bootstrapError = "" }: { initialProject: WorkspaceResponse; onActivate: (result: WorkspaceResponse) => void; managerOpen: boolean; onManagerOpenChange: (open: boolean) => void; bootstrapError?: string }) {
   /* ------------------------------------------------------------------------ */
   /* Refs                                                                     */
   /* ------------------------------------------------------------------------ */
@@ -257,6 +257,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
 
   function applyRecovered(result: WorkspaceResponse, chosenDraft?: WorkspaceState | null) {
     setProject(result);
+    if (result.notice) setNotice(result.notice);
     if (!result.project_id) return;
     if (chosenDraft === undefined && !result.issues.length) {
       try {
@@ -327,6 +328,32 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
       if (!project?.issues.length && !conflict) await persistence.flush();
       await waitForMutations();
       action.signal?.throwIfAborted();
+      if (action.type === "purge") {
+        setBusy("正在彻底删除项目…");
+        action.onCommit?.();
+        committing = true;
+        const result = await (await api(`/projects/${action.id}/permanent`, { method: "DELETE" })).json();
+        try { removeProjectDrafts(localStorage, action.id!); } catch { /* Server deletion has completed; browser storage can be unavailable. */ }
+        return result;
+      }
+      if (action.type === "close") {
+        setBusy("正在关闭项目…");
+        action.onCommit?.();
+        committing = true;
+        const result = await (await api(`/projects/${action.id}/close`, { method: "POST" })).json();
+        onActivate({ ...result, notice: "项目已关闭" });
+        return result;
+      }
+      if (action.type === "delete" || action.type === "restore") {
+        const deleting = action.type === "delete";
+        setBusy(deleting ? "正在删除项目…" : "正在恢复项目…");
+        action.onCommit?.();
+        committing = true;
+        const result = await (await api(`/projects/${action.id}${deleting ? "" : "/restore"}`, { method: deleting ? "DELETE" : "POST" })).json();
+        const notice = deleting ? "项目已移至最近删除" : "项目已恢复";
+        if (result.workspace) onActivate({ ...result.workspace, notice });
+        return result;
+      }
       if (action.type === "relink") {
         if (!action.relink?.path) {
           const paths = await selectServerFiles(action.relink?.horizon_id ? "层位" : "SEG-Y");
@@ -339,15 +366,14 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
         return result;
       }
       if (action.type === "rename") {
-        const result = await (await api(`/projects/${project?.project_id}`, { ...json({ name: action.name }), method: "PATCH" })).json();
-        setProject(p => p ? { ...p, name: result.name } : p);
-        setNotice("项目已重命名");
-        return;
+        const result = await (await api(`/projects/${action.id}`, { ...json({ name: action.name }), method: "PATCH" })).json();
+        if (action.id === project?.project_id) setProject(p => p ? { ...p, name: result.name } : p);
+        return result;
       }
       let target = action.id;
       if (action.type === "create" || action.type === "clone") {
         setBusy("正在创建项目…");
-        const result = await (await api("/projects", json({ name: action.name, request_id: action.requestId, template_id: action.type === "clone" ? project?.project_id : null }))).json();
+        const result = await (await api("/projects", json({ name: action.name, request_id: action.requestId, template_id: action.type === "clone" ? action.id : null }))).json();
         target = result.project_id;
       }
       intendedTarget = target;
@@ -365,6 +391,34 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
       const result = await (await api(`/project-switches/${prepared.token}/commit`, { method: "POST" })).json();
       onActivate(result);
     } catch (e) {
+      // Retrying a purge is idempotent; a failed cleanup must not be reported as success.
+      if (committing && action.type === "purge") throw e;
+      if (committing && action.type === "close") {
+        const result = await api("/workspace").then(r => r.json()).catch(() => null);
+        if (result && (result.project_id !== origin.project_id || result.activation_epoch !== origin.activation_epoch)) {
+          onActivate({ ...result, notice: result.project_id ? "已恢复当前项目。" : "项目已关闭" });
+          return;
+        }
+        if (!result) setConflict("无法确认关闭结果，请重新加载。");
+        throw e;
+      }
+      if (committing && (action.type === "delete" || action.type === "restore")) {
+        // Reconcile a lost response without treating an unrelated active project
+        // as evidence that this specific delete/restore succeeded.
+        const deleted = action.type === "delete";
+        const listing = await api(`/projects?deleted=${deleted}`).then(r => r.json()).catch(() => null);
+        if (listing?.projects.some((p: { id: string }) => p.id === action.id)) {
+          const result = await api("/workspace").then(r => r.json()).catch(() => null);
+          if (result) {
+            const notice = deleted ? "项目已移至最近删除" : "项目已恢复";
+            if (result.project_id !== origin.project_id || result.activation_epoch !== origin.activation_epoch) onActivate({ ...result, notice });
+            else setNotice(notice);
+            return;
+          }
+          setConflict("无法确认当前项目状态，请重新加载。");
+        }
+        throw e;
+      }
       // A lost commit response must be reconciled with the server's identity.
       if (committing) {
         const result = await api("/workspace").then(r => r.json()).catch(() => null);
@@ -526,14 +580,6 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
   }
 
   /* ------------------------------------------------------------------------ */
-  /* Dataset loaded                                                           */
-  /* ------------------------------------------------------------------------ */
-
-  function loaded(result: WorkspaceResponse) {
-    onActivate(result);
-  }
-
-  /* ------------------------------------------------------------------------ */
   /* Dataset name                                                             */
   /* ------------------------------------------------------------------------ */
 
@@ -546,22 +592,6 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
   const datasetPlaceholder = meta
     ? meta.filename.replace(/\.[^.]+$/, "")
     : "Dataset";
-
-  /* ------------------------------------------------------------------------ */
-  /* Load example                                                             */
-  /* ------------------------------------------------------------------------ */
-
-  function loadExample() {
-    task("加载 F3 示例数据…", async () => {
-      await persistence.flush();
-      persistence.pause();
-      const r = await api(`/example?ilbyte=${bytes.il}&xlbyte=${bytes.xl}`, {
-        method: "POST",
-      });
-
-      loaded(await r.json());
-    });
-  }
 
   /* ------------------------------------------------------------------------ */
   /* Open SEG-Y from the local disk                                           */
@@ -606,7 +636,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
         const result = await r.json();
         active = false;
         if (!result.cancelled) {
-          loaded(result);
+          onActivate(result);
           setImportProgress({
             percent: 100,
             stage: "导入完成",
@@ -949,20 +979,17 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
             height={24}
           />
 
-          <span className="version">V0.4</span>
+          <span className="version">V0.5</span>
         </div>
 
-        <ProjectMenu project={project} disabled={!!busy || !!conflict} onAction={projectAction}/>
+        <ProjectMenu project={project} disabled={!!busy || !!conflict} open={managerOpen} onOpenChange={onManagerOpenChange} onAction={projectAction}/>
 
         <div className="top-status">
           <span className="status-dot" />
           {serverPathMode ? "远程" : "本地"}
-          <span className="autosave-status" role="status">
-            {busy === "正在恢复上次工作…" ? "恢复中…" : project?.issues.length ? "恢复待处理" : saveStatus === "saving" ? "保存中…" : saveStatus === "saved" ? "已保存" : saveStatus === "error" ? "保存失败" : saveStatus === "dirty" ? "有未保存更改" : ""}
-          </span>
         </div>
 
-        <button className="secondary project-save-button" disabled={!project?.project_id || !!busy || !!conflict || !!project.issues.length} onClick={() => void saveProject()} title="保存项目（Ctrl / ⌘ + S）"><Save size={15}/>{saveStatus === "error" ? "重试保存" : "保存项目"}</button>
+        {project?.project_id && <button className={`project-save-status${saveStatus === "error" ? " is-error" : ""}`} disabled={!!busy || !!conflict || !!project.issues.length} onClick={() => void saveProject()} title="自动保存已启用，点击立即保存（Ctrl / ⌘ + S）"><Save size={15}/><span role="status">{project.issues.length ? "数据待关联" : saveStatus === "saving" ? "正在保存…" : saveStatus === "error" ? "保存失败，重试" : saveStatus === "dirty" ? "等待自动保存" : saveStatus === "saved" ? "已保存" : "自动保存"}</span></button>}
 
         <button
           className="primary"
@@ -1027,7 +1054,6 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
               onOpenSegy={openSegy}
               onImportHorizons={uploadHorizons}
               horizonCount={view.horizons.length}
-              onLoadExample={loadExample}
               geometryMode={geometryMode}
               onGeometryMode={setGeometryMode}
               bytes={bytes}
@@ -1222,7 +1248,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
                         <Activity size={32} strokeWidth={1.5} />
                       </div>
 
-                      <h2>{project?.name || "暂无地震数据"}</h2>
+                      <h2>{project?.name || "开始新项目"}</h2>
 
                       <div className="empty-actions">
                         <button
@@ -1243,6 +1269,7 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
                           导入层位
                         </button>
                       </div>
+                      {!project?.project_id && <button className="empty-project-library" onClick={() => onManagerOpenChange(true)}>打开已有项目</button>}
                     </div>
                   ) : null}
 
@@ -1254,32 +1281,23 @@ function ProjectWorkspace({ initialProject, onActivate, bootstrapError = "" }: {
                   )}
                 </div>
 
-                <div className="viewer-bottom">
-                  {meta && section?.has_seismic !== false && <ProbeReadout reading={probe} />}
+                {meta && section?.has_seismic !== false && (
+                  <div className="viewer-bottom" role="region" aria-label="坐标与振幅读数" tabIndex={0}>
+                    <ProbeReadout reading={probe} />
 
-                  <div className="legend">
-                    {view.horizons
-                      .filter((h) => h.visible)
-                      .map((h) => (
-                        <span key={h.id}>
-                          <i style={{ background: h.color }} />
-                          {h.name}
-                        </span>
-                      ))}
+                    {section?.vmin != null && section.vmax != null && (
+                      <div className="amplitude-key">
+                        <span>{formatAmplitude(section.vmin)}</span>
+
+                        <i style={{ background: preview }} />
+
+                        <span>{formatAmplitude(section.vmax)}</span>
+
+                        <b>振幅</b>
+                      </div>
+                    )}
                   </div>
-
-                  {meta && section?.has_seismic !== false && section?.vmin != null && section.vmax != null && (
-                    <div className="amplitude-key">
-                      <span>{formatAmplitude(section.vmin)}</span>
-
-                      <i style={{ background: preview }} />
-
-                      <span>{formatAmplitude(section.vmax)}</span>
-
-                      <b>振幅</b>
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
 
               <div className="canvas-footer">
@@ -1448,6 +1466,7 @@ export default function App() {
   const [active, setActive] = useState<WorkspaceResponse | null>(null);
   const [generation, setGeneration] = useState(0);
   const [startupError, setStartupError] = useState("");
+  const [managerOpen, setManagerOpen] = useState(false);
   function activate(result: WorkspaceResponse) {
     setApiProject(result);
     setActive(result);
@@ -1460,5 +1479,5 @@ export default function App() {
     return () => { alive = false; };
   }, []);
   if (!active) return <div className="project-switch-progress" role="status"><LoaderCircle size={18} className="spin"/>正在恢复上次项目…</div>;
-  return <ProjectWorkspace key={`${active.project_id}:${active.activation_epoch}:${generation}`} initialProject={active} onActivate={activate} bootstrapError={startupError}/>;
+  return <ProjectWorkspace key={`${active.project_id}:${active.activation_epoch}:${generation}`} initialProject={active} onActivate={activate} managerOpen={managerOpen} onManagerOpenChange={setManagerOpen} bootstrapError={startupError}/>;
 }

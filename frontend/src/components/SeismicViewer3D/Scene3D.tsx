@@ -502,10 +502,10 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
               </div>
             )}
         </div>
-        <div className="viewer-bottom scene-bottom">
-          <div className="scene-readouts">
-            {hasSeismic && data?.has_seismic !== false && <ProbeReadout reading={probe} />}
-            {hasSeismic && data?.has_seismic !== false && data?.vmin != null && data.vmax != null && (
+        {hasSeismic && data?.has_seismic !== false && (
+          <div className="viewer-bottom" role="region" aria-label="坐标与振幅读数" tabIndex={0}>
+            <ProbeReadout reading={probe} />
+            {data?.vmin != null && data.vmax != null && (
               <div className="amplitude-key">
                 <b>共享振幅</b>
                 <span>
@@ -514,20 +514,7 @@ const Scene3D = forwardRef<Scene3DHandle, Props>(function Scene3D(
               </div>
             )}
           </div>
-          <div className="legend scene-legend" aria-label="三维层位图例">
-            {view.horizons
-              .filter((h) => h.visible)
-              .map((h) => (
-                <span key={h.id}>
-                  <i style={{ background: h.color }} />
-                  {h.name}
-                  <small>{h.display_mode === "full_surface" ? "曲面" : "交线"}</small>
-                  {h.display_mode === "full_surface" && h.color_by === "amplitude" ? <small>振幅</small> :
-                    h.display_mode === "full_surface" && h.color_by !== "solid" && h.twt_range ? <small>{Number(h.twt_range[0].toFixed(1))}–{Number(h.twt_range[1].toFixed(1))} ms</small> : null}
-                </span>
-              ))}
-          </div>
-        </div>
+        )}
       </div>
     </>
   );

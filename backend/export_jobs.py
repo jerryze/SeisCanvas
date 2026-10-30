@@ -296,6 +296,12 @@ class ExportJobManager:
             project = self._load(project_id, folder)
             return [self._public(project, job) for job in reversed(list(project["jobs"].values()))]
 
+    def has_active(self, project_id):
+        # Called under the application lock, which also fences job submissions.
+        with self._condition:
+            project = self._projects.get(project_id)
+            return bool(project and any(j["status"] not in TERMINAL for j in project["jobs"].values()))
+
     def get(self, project_id, folder, job_id):
         with self._condition:
             project, job = self._find(project_id, folder, job_id)

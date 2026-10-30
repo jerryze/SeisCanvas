@@ -11,7 +11,6 @@ type Props = {
   onOpenSegy: () => void;
   onImportHorizons: () => void;
   horizonCount: number;
-  onLoadExample: () => void;
   geometryMode: string;
   onGeometryMode: (mode: string) => void;
   bytes: { il: number; xl: number };
@@ -29,7 +28,6 @@ export default function DataPanel({
   onOpenSegy,
   onImportHorizons,
   horizonCount,
-  onLoadExample,
   geometryMode,
   onGeometryMode,
   bytes,
@@ -134,17 +132,6 @@ export default function DataPanel({
           </button>
         )}
 
-        {!meta && !horizonCount && (
-          <button
-            className="panel-action full"
-            disabled={!!busy}
-            onClick={onLoadExample}
-          >
-            <Layers size={14} />
-            加载 F3 示例
-          </button>
-        )}
-
         <details className="subsettings">
           <SubsectionSummary title="SEG-Y 导入设置" tooltip="用于下一次导入" />
           <div className="subsettings-body">
@@ -182,15 +169,6 @@ export default function DataPanel({
                 />
               </label>
             </div>
-            {(meta || horizonCount > 0) && (
-              <button
-                className="panel-action full"
-                disabled={!!busy}
-                onClick={onLoadExample}
-              >
-                <Layers size={14} /> 加载 F3 示例
-              </button>
-            )}
           </div>
         </details>
       </div>

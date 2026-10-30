@@ -10,11 +10,61 @@ from backend.slice_source import read_window, section_input
 from backend.trace_overlay import build_trace_overlay, coordinate_cell_edges, overlays_enabled, reconstruction_extent
 
 
+# A persistent navigation fallback, independent of the current viewport. It
+# never supplies samples to the detailed raster, clipping, probes or exports.
+OVERVIEW_WIDTH = 512
+OVERVIEW_HEIGHT = 256
+OVERVIEW_BUDGET = OVERVIEW_WIDTH * OVERVIEW_HEIGHT
+
+
 def _json_values(values):
     """Preserve native/reconstructed amplitudes exactly; gaps stay empty cells."""
     if np.isfinite(values).all():
         return values.tolist()
     return np.where(np.isfinite(values), values, None).tolist()
+
+
+def section_overview(survey, x, t, z, interpolate, cache_id):
+    """Bounded full-section amplitudes for uncovered areas during navigation.
+
+    Reconstruct directly from the original source with the same scientific
+    kernel as a detailed raster. When interpolation is disabled, select exact
+    original samples instead; never average, quantize or alter source values.
+    All display styling continues to use the detailed response's color scale.
+    """
+    width, height = resample.fit_target(
+        len(x), len(t), OVERVIEW_WIDTH, OVERVIEW_HEIGHT,
+        budget=OVERVIEW_BUDGET, max_upscale=1.0,
+    )
+    extent = reconstruction_extent(x, t)
+    key = ("section-overview", cache_id, len(x), len(t), width, height, interpolate)
+    raster = survey.render_cache.get(key)
+    if interpolate:
+        display_x = extent[0] + (np.arange(width) + 0.5) * (extent[1] - extent[0]) / width
+        display_time = extent[2] + (np.arange(height) + 0.5) * (extent[3] - extent[2]) / height
+        x_edges = np.linspace(extent[0], extent[1], width + 1)
+        time_edges = np.linspace(extent[2], extent[3], height + 1)
+        if raster is None:
+            raster, display_x, display_time, _ = resample.seismic_raster(x, t, z, width, height, extent)
+    else:
+        columns = np.rint(np.linspace(0, len(x) - 1, width)).astype(np.intp)
+        rows = np.rint(np.linspace(0, len(t) - 1, height)).astype(np.intp)
+        display_x, display_time = np.asarray(x)[columns], np.asarray(t)[rows]
+        x_edges, time_edges = coordinate_cell_edges(display_x), coordinate_cell_edges(display_time)
+        # Coarse cells represent the complete source domain, even when only
+        # one sample survives along a short axis.
+        x_edges[[0, -1]], time_edges[[0, -1]] = extent[:2], extent[2:]
+        if raster is None:
+            raster = z.read(rows, columns) if hasattr(z, "read") else z[np.ix_(rows, columns)]
+    if key in survey.render_cache:
+        survey.render_cache.move_to_end(key)
+    else:
+        survey.render_cache[key] = raster
+    return {
+        "x": display_x.tolist(), "time": display_time.tolist(),
+        "x_edges": x_edges.tolist(), "time_edges": time_edges.tolist(),
+        "raster_extent": list(extent), "z": _json_values(raster),
+    }
 
 
 def section_raster(survey, x, t, z, state, target_width=None, target_height=None,
@@ -107,6 +157,10 @@ def interactive_section(survey, horizons, req) -> dict:
         }
     if overlays_enabled(req.seismic):
         result["trace_overlay"] = build_trace_overlay(x, t, trace_amplitudes, req, lo, hi)
+    if req.include_overview:
+        result["overview"] = section_overview(
+            survey, x, t, z, req.seismic.background_interpolation, (req.view_type, req.section_number),
+        )
     return result
 
 

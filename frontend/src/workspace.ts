@@ -172,6 +172,18 @@ export function draftTabId(): string {
 }
 export const draftKey = (projectId: string, tabId: string) => `seiscanvas.workspace.v2:${projectId}:${tabId}`;
 
+export function removeProjectDrafts(storage: Pick<Storage, "getItem" | "key" | "length" | "removeItem">, projectId: string) {
+  const keys: string[] = [];
+  for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i);
+    if (key?.startsWith(draftKey(projectId, ""))) keys.push(key);
+  }
+  try {
+    if (JSON.parse(storage.getItem(DRAFT_KEY) || "null")?.project_id === projectId) keys.push(DRAFT_KEY);
+  } catch { /* An unidentifiable legacy draft may belong to another project. */ }
+  keys.forEach(key => storage.removeItem(key));
+}
+
 export type DraftCandidate = WorkspaceDraft & { key: string; compatible: boolean };
 
 /** A restarted browser has a new tab ID; recover only unambiguous drafts. */

@@ -8,8 +8,11 @@ import PlotScrollFrame, {
 } from "../PlotScrollFrame";
 import { ordered, type Range } from "../plotScrollMath";
 import { ProbeRequest } from "../Probe";
-import { buildTraces, buildLayout } from "./sectionGeometry";
+import { buildTraces, buildLayout, SECTION_MARGIN } from "./sectionGeometry";
 import { measureSectionViewport, SectionViewport } from "./sectionDisplay";
+import { plotAspectLayout } from "../plotAspect";
+import { buildOverviewImages } from "./overviewImages";
+import { installRasterBackdrop } from "../rasterBackdrop";
 
 type Props = {
   view: VS;
@@ -43,6 +46,7 @@ export default function SectionPlot({
   const renderedInputs = useRef<unknown[] | null>(null);
   const renderQueue = useRef(Promise.resolve());
   const lifetime = useRef({ active: true });
+  const backdropCleanup = useRef<(() => void) | null>(null);
   const viewRef = useRef(view);
   viewRef.current = view;
   const latest = useRef({ onPatch, onProbe, onError, onViewportSize });
@@ -80,6 +84,8 @@ export default function SectionPlot({
     renderedInputs.current = null;
     return () => {
       current.active = false;
+      backdropCleanup.current?.();
+      backdropCleanup.current = null;
       renderQueue.current = renderQueue.current.catch(() => {}).then(() => {
         if (el) Plotly.purge(el);
       }).catch(() => {});
@@ -92,17 +98,6 @@ export default function SectionPlot({
 
     let disposed = false;
     const current = lifetime.current;
-    const layout = buildLayout(
-      section,
-      meta
-        ? {
-            ...view,
-            x_range: view.x_range ?? xBounds,
-            time_range: view.time_range ?? [time[0], time[1]],
-          }
-        : view,
-      drag,
-    );
     const inputs = [
       section,
       colors,
@@ -121,18 +116,29 @@ export default function SectionPlot({
       .catch(() => {})
       .then(async () => {
         if (disposed || !current.active) return;
+        const layout = buildLayout(
+          section,
+          meta ? { ...view, x_range: view.x_range ?? xBounds,
+            time_range: view.time_range ?? [time[0], time[1]] } : view,
+          drag,
+          { width: el.clientWidth, height: el.clientHeight },
+        );
         if (
           renderedInputs.current?.every((value, i) =>
             Object.is(value, inputs[i]),
           )
         ) {
           await updatePlotLayout(el, {
+            width: layout.width, height: layout.height,
             "xaxis.range": layout.xaxis.range,
             "yaxis.range": layout.yaxis.range,
+            "xaxis.domain": layout.xaxis.domain,
+            "yaxis.domain": layout.yaxis.domain,
+            "xaxis.scaleanchor": layout.xaxis.scaleanchor,
             "yaxis.scaleanchor": layout.yaxis.scaleanchor,
-            "yaxis.scaleratio": layout.yaxis.scaleratio,
             dragmode: drag,
           });
+          if (!disposed && current.active) reportViewportSize(el);
           return;
         }
         await updatePlotData(
@@ -142,14 +148,15 @@ export default function SectionPlot({
             xRange: layout.xaxis.range,
             pixelRatio: window.devicePixelRatio || 1,
           }),
-          layout as any,
+          { ...layout, images: buildOverviewImages(section, view, colors) } as any,
           {
-            responsive: true,
+            responsive: false,
             displayModeBar: false,
             scrollZoom: true,
           },
         );
         if (disposed || !current.active) return;
+        backdropCleanup.current ??= installRasterBackdrop(el);
         renderedInputs.current = inputs;
         reportViewportSize(el);
 
@@ -232,7 +239,10 @@ export default function SectionPlot({
       renderQueue.current = renderQueue.current.catch(() => {}).then(async () => {
         queued = false;
         if (disposed || !current.active || !(el as any).data) return;
-        await Plotly.Plots.resize(el);
+        if (!el.clientWidth || !el.clientHeight) return;
+        const ratio = viewRef.current.aspect_ratio_2d;
+        await updatePlotLayout(el, plotAspectLayout(el.clientWidth, el.clientHeight,
+          SECTION_MARGIN, ratio ? ratio[0] / ratio[1] : null));
         if (!disposed && current.active) reportViewportSize(el);
       }).catch((e) => {
         queued = false;

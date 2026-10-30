@@ -45,7 +45,7 @@ def guarded_lock():
         if identity is not None:
             document = current.read()
             project_id = document["id"] if document else "none"
-            if identity.project_id != project_id or (document and identity.epoch != current.epoch):
+            if identity.project_id != project_id or identity.epoch != current.epoch:
                 raise conflict("PROJECT_CHANGED", "活动项目已在其他页面切换，请重新加载。")
             if identity.revision is not None:
                 if document is None or identity.revision != document["revision"]:

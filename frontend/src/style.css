@@ -500,16 +500,6 @@ input[type="color"] {
   gap: 16px;
 }
 
-.legend i {
-  width: 15px;
-  height: 3px;
-
-  display: inline-block;
-  flex-shrink: 0;
-
-  border-radius: var(--radius-inset);
-}
-
 /* ==========================================================================
    Main
    ========================================================================== */
@@ -648,6 +638,10 @@ main {
 }
 
 /* SVG horizon strokes retain subpixel positions and browser antialiasing. */
+.plot .imagelayer image,
+.map-profile-plot .imagelayer image {
+  image-rendering: pixelated;
+}
 .plot .scatterlayer .js-line {
   shape-rendering: geometricPrecision;
 }
@@ -760,50 +754,41 @@ main {
 }
 
 /* ==========================================================================
-   Viewer legend
+   Viewer readouts
    ========================================================================== */
 
 .viewer-bottom {
-  min-height: 36px;
+  height: 44px;
+  min-width: 0;
+  flex: 0 0 44px;
 
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
 
-  flex-shrink: 0;
-  flex-wrap: wrap;
-
-  padding: 8px 12px;
+  padding: 0 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
 
   border-top: var(--stroke-hairline) solid var(--border-light);
 
-  background: #ffffff;
+  background: var(--surface);
 }
 
-.legend {
-  display: flex;
-  align-items: center;
-  gap: 4px 8px;
-
-  flex-wrap: wrap;
+.viewer-bottom > .probe-readout {
+  flex-shrink: 0;
 }
 
-.legend > span {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 4px;
-  background: var(--surface-subtle);
-  border-radius: var(--radius-sm);
-  overflow-wrap: anywhere;
-
-  color: var(--text-secondary);
-
-  font-size: var(--ui-meta-size);
+.viewer-bottom:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
 }
 
 .amplitude-key {
   margin-left: auto;
+  flex-shrink: 0;
+  white-space: nowrap;
 
   display: flex;
   align-items: center;
@@ -1288,10 +1273,6 @@ main {
     padding-right: 18px;
   }
 
-  .legend {
-    gap: 8px;
-  }
-
   .canvas-footer {
     font-size: var(--fs-xs);
   }
@@ -1392,12 +1373,6 @@ main {
 .map-profile-plot-region { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .map-profile-plot { width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .profile-status { color: var(--text-muted); font-size: var(--ui-meta-size); font-weight: 400; white-space: nowrap; }
-.profile-footer { flex-shrink: 0; min-width: 0; padding: 0 12px 8px; }
-.profile-readout-slot { min-height: 29px; }
-.profile-readout-slot .probe-readout { padding: 4px 8px; overflow: hidden; }
-.profile-legend { display: flex; flex-shrink: 0; flex-wrap: wrap; justify-content: center; gap: 4px 12px; font-size: var(--ui-meta-size); color: var(--text-secondary); }
-.profile-legend span { display: inline-flex; align-items: center; gap: 4px; }
-.profile-legend i { width: 14px; height: 3px; border-radius: var(--radius-inset); }
 .map-profile-hint { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 16px; align-items: center; justify-content: center; padding: 20px; font-size: var(--fs-md); line-height: 1.6; color: var(--text-muted); text-align: center; background: #fff; }
 .map-profile-hint p { margin: 0; }
 .map-profile-hint > button { padding: 8px 12px; }
@@ -1441,19 +1416,8 @@ main {
 .scene-toolbar { gap: 8px 8px; }
 .scene-toolbar .viewer-label { flex-shrink: 0; white-space: nowrap; }
 .scene-toolbar .tools { flex-shrink: 0; flex-wrap: nowrap; }
-.scene-bottom { flex-direction: column; align-items: stretch; gap: 4px; min-height: 0; padding: 8px 12px; }
-.scene-readouts { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; min-height: 22px; }
-.scene-readouts .probe-readout { padding: 4px 8px; gap: 8px; }
-.scene-readouts .probe-amplitude { padding-left: 8px; }
-.scene-readouts .amplitude-key { padding: 4px 8px; white-space: nowrap; }
-.scene-readouts .amplitude-key b { margin-left: 0; }
-.scene-legend { gap: 4px 8px; }
-.scene-legend:empty { display: none; }
-.scene-legend > span { padding: 2px 4px; line-height: 1.4; font-variant-numeric: tabular-nums; }
-.scene-legend i { width: 12px; }
 @media (max-width: 980px) {
   .scene-toolbar .scene-presets { order: 1; width: 100%; }
-  .scene-readouts .probe-readout { flex-wrap: wrap; white-space: normal; }
 }
 
 /* Compact publication export panel; styles stay local to this dialog. */
@@ -1891,7 +1855,7 @@ main {
   overflow-wrap: anywhere;
 }
 
-/* Shared chrome: stable status, tool states and compact, wrapping legends. */
+/* Shared chrome: stable status and tool states. */
 .topbar { gap: 8px; }
 .topbar .autosave-status { display: inline-block; min-width: 60px; }
 .topbar :is(.primary, .queue-button) { white-space: nowrap; }
@@ -1899,9 +1863,6 @@ main {
 .section-navigation > span { min-width: 60px; font-size: var(--ui-meta-size); }
 .section-navigation > button { width: 30px; height: 30px; border-radius: var(--ui-radius); }
 .scene-presets button { min-height: 30px; font-size: var(--ui-label-size); border-radius: var(--ui-radius); }
-.viewer-bottom:not(.scene-bottom) > .legend { flex: 1 1 240px; min-width: 0; }
-:is(.legend, .scene-legend, .profile-legend) > span { max-width: 100%; overflow-wrap: anywhere; line-height: 1.5; }
-.amplitude-key { flex-shrink: 0; font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) {
   :is(button, input, select, .colormap-trigger) { transition: none; }
 }
@@ -1981,7 +1942,7 @@ main {
 .primary .meta-count { color: inherit; }
 .meta-divider { display: inline-block; height: 10px; border-left: var(--stroke-hairline) solid var(--border); margin: 0 var(--space-2); }
 small { font-size: var(--font-caption); }
-.legend > span, .amplitude-key, .export-note, .organization-move, .mapping-warning, .organization-message { border-radius: var(--radius-inset); box-shadow: none; }
+.amplitude-key, .export-note, .organization-move, .mapping-warning, .organization-message { border-radius: var(--radius-inset); box-shadow: none; }
 .organization-shell .organization-table-wrap { border-radius: var(--radius-inset); }
 .organization-tabs > button[aria-selected="true"], .import-steps > span[aria-current="step"] { background: var(--primary-soft); }
 .organization-editor, .organization-models, .queue-list { scrollbar-gutter: stable; }

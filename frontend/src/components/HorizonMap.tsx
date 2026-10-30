@@ -7,11 +7,13 @@ import { reconcileMapWorkspace } from "../workspace";
 import { mapPresentation, mapSelectionError, profileEndpointError, profileRequestKey, profileProbeRequest, profileHorizonStyleKey,
   PROFILE_MARGIN, profileContainerViewport, profileAspectPair, mapViewForKey, mapWorkspaceForData } from "./horizonMapLogic";
 import { createProfilePlotRenderer } from "./profilePlotRenderer";
+import { installRasterBackdrop } from "./rasterBackdrop";
 import { createPortal } from "react-dom";
 import Plotly from "plotly.js-dist-min";
 import PlotScrollFrame, { isScrollPreview, updatePlotLayout, updatePlotData } from "./PlotScrollFrame";
 import { coversViewport } from "./loadedRaster";
 import { ordered } from "./plotScrollMath";
+import { plotAspectLayout } from "./plotAspect";
 import type { HS, Section, VS, MapProfileOverlay } from "../types";
 import type { ExportDialogSettings, SS } from "../types";
 import { api } from "../api/client";
@@ -20,6 +22,7 @@ import { Group, Num, Toggle, SubsectionSummary, Select } from "./Controls";
 import ColormapSelect, { colormapOptions } from "./ColormapSelect";
 import { SeismicSettings } from "./panels/SeismicPanel";
 import { buildTraces as sectionTraces } from "./SeismicViewer2D/sectionGeometry";
+import { buildOverviewImages } from "./SeismicViewer2D/overviewImages";
 import { measureSectionViewport, samplingViewport, type SectionViewport } from "./SeismicViewer2D/sectionDisplay";
 import { useOriginalProbe, ProbeReadout } from "./Probe";
 
@@ -44,6 +47,7 @@ type ProfileData = {
   time_edges: number[];
   raster_extent: [number, number, number, number];
   preview_shape?: number[];
+  overview?: Section["overview"];
   x_range: [number, number];
   time_range: [number, number];
   trace_overlay: Section["trace_overlay"];
@@ -134,6 +138,7 @@ export default function HorizonMap({
   const tabId = useId();
   const [mapDrawn, setMapDrawn] = useState(false);
   const [profileDrawn, setProfileDrawn] = useState(false);
+  const [profileDrawnContentKey, setProfileDrawnContentKey] = useState<string | null>(null);
   // Display mode controls contour visibility, including for older saved workspaces.
   const state = { ...savedState, contours: savedState.display !== "filled" };
   const presentation = mapPresentation(state, horizons);
@@ -184,6 +189,7 @@ export default function HorizonMap({
       colormap: seismic.colormap, seismic }, profileSettings.format);
   const profileRef = useRef<HTMLDivElement>(null);
   const profileRenderer = useRef<ReturnType<typeof createProfilePlotRenderer> | null>(null);
+  const profileBackdropCleanup = useRef<(() => void) | null>(null);
   const profileRenderedInputs = useRef<unknown[] | null>(null);
   const mapRenderedInputs = useRef<unknown[] | null>(null);
   const profileStyleKey = profileHorizonStyleKey(horizons);
@@ -238,8 +244,14 @@ export default function HorizonMap({
   }, [pathKey]);
   const endpointError = profileEndpointError(profileA, profileB);
   const profileData = !endpointError && !mapIssue && profileResult?.contentKey === profileContentKey ? profileResult.data : null;
+  // Source/project activation remounts this module; path/settings changes get
+  // a new content key. Data arrival alone must not reveal the previous SVG.
+  // Viewport-only requests retain this identity and keep their transition.
+  const profileDisplayReady = !!profileData && profileDrawnContentKey === profileContentKey;
   const profilePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-  const profileFresh = profileResult?.key === profileQueryKey || !!profileData && coversViewport(profileData,
+  // Interpolated grids depend on the exact viewport sampling centres; coverage
+  // alone only permits reuse of native cells without viewport-dependent traces.
+  const profileFresh = profileResult?.key === profileQueryKey || !seismic.background_interpolation && !!profileData && coversViewport(profileData,
     workspace.profileXRange ?? profileData.x_range, workspace.profileTimeRange ?? profileData.time_range,
     Math.round((profileViewport?.width || profileRef.current?.clientWidth || 1) * profilePixelRatio),
     Math.round((profileViewport?.height || profileRef.current?.clientHeight || 1) * profilePixelRatio),
@@ -555,6 +567,7 @@ export default function HorizonMap({
             trace_viewport_width: profileViewport?.width || box.clientWidth,
             trace_viewport_height: profileViewport?.height || box.clientHeight,
             x_range: workspace.profileXRange, time_range: workspace.profileTimeRange,
+            include_overview: hasSeismic && !profileData?.overview,
           }),
           signal: abort.signal,
         });
@@ -562,7 +575,12 @@ export default function HorizonMap({
         if (active) {
           if (hasSeismic && result.background_interpolation !== seismic.background_interpolation)
             throw new Error("剖面显示后端版本不匹配，请重启 SeisCanvas 后端以启用插值和波形功能。");
-          setProfileResult({ key: profileQueryKey, contentKey: profileContentKey, pathKey, data: result });
+          // The bounded full-path raster survives viewport resampling, but never
+          // crosses a path, source, or scientific display-settings change.
+          setProfileResult(previous => ({ key: profileQueryKey, contentKey: profileContentKey, pathKey,
+            data: { ...result, overview: hasSeismic && result.has_seismic !== false
+              ? result.overview ?? (previous?.contentKey === profileContentKey ? previous.data.overview : undefined)
+              : undefined } }));
         }
       } catch (e) {
         if (active && (e as Error).name !== "AbortError")
@@ -577,8 +595,8 @@ export default function HorizonMap({
   }, [sectionActive, profileOn, profileQueryKey, profileContentKey, endpointError, mapIssue, profileFresh, hasSeismic]);
 
   useEffect(() => {
-    onReady(mapActive ? mapDrawn && !!data && !loading : profileDrawn && !!profileData && !profilePending && !profileError);
-  }, [mapActive, mapDrawn, data, loading, profileDrawn, profileData, profilePending, profileError, onReady]);
+    onReady(mapActive ? mapDrawn && !!data && !loading : profileDrawn && profileDisplayReady && !profilePending && !profileError);
+  }, [mapActive, mapDrawn, data, loading, profileDrawn, profileDisplayReady, profilePending, profileError, onReady]);
 
   // The section occupies the same workspace as the map, with independent axes.
   useEffect(() => {
@@ -589,15 +607,14 @@ export default function HorizonMap({
       relayout: updatePlotLayout, purge: Plotly.purge } as any, el,
       message => profileErrorHandler.current(message));
     void renderer.visibility(horizons);
+    const frame = plotAspectLayout(el.clientWidth, el.clientHeight, PROFILE_MARGIN, profileAspectRatio);
     const inputs = [profileData, maps, profileStyleKey, seismic];
     if (profileRenderedInputs.current?.every((value, i) => Object.is(value, inputs[i]))) {
-      void renderer.resize(el.clientWidth, el.clientHeight, () => reportProfileViewport(el));
       const x = workspace.profileXRange || profileData.x_range;
       const t = workspace.profileTimeRange || profileData.time_range;
-      void renderer.viewport({ "xaxis.range": x, "yaxis.range": [...t].reverse(), dragmode: workspace.profileDrag,
-        "yaxis.scaleanchor": profileAspectRatio === null ? false : "x",
-        "yaxis.scaleratio": profileAspectRatio === null ? 1 : Math.abs((x[1] - x[0]) / (t[1] - t[0])) / profileAspectRatio,
-      }, () => setProfileDrawn(true));
+      void renderer.viewport({ ...frame,
+        "xaxis.range": x, "yaxis.range": [...t].reverse(), dragmode: workspace.profileDrag,
+      }, () => { reportProfileViewport(el); setProfileDrawn(true); });
       return;
     }
     setProfileDrawn(false);
@@ -605,6 +622,7 @@ export default function HorizonMap({
     const sharedSection: Section = { has_seismic: profileData.has_seismic, x: profileData.distance, time: profileData.time,
       x_edges: profileData.distance_edges, time_edges: profileData.time_edges,
       raster_extent: profileData.raster_extent, z: profileData.amplitude,
+      overview: profileData.overview,
       vmin: profileData.vmin, vmax: profileData.vmax, trace_overlay: profileData.trace_overlay,
       horizons: Object.fromEntries(profileData.curves.map(curve => [curve.id,
         profileData.curve_distance.map((x, n) => [x, curve.values[n]])])) as Section["horizons"] };
@@ -644,16 +662,16 @@ export default function HorizonMap({
         showlegend: false,
         paper_bgcolor: "#fff",
         plot_bgcolor: "#fff",
+        images: buildOverviewImages(sharedSection, { seismic } as VS, maps[seismic.colormap] || []),
         font: { family: "DM Sans, 'PingFang SC', Arial, sans-serif", color: "#425367", size: 11 },
         xaxis: { title: { text: "距离 (网格)", standoff: 8 }, showgrid: false, linecolor: "#bcc8cf", ticks: "outside",
-          range: [...xRange], autorange: false, constrain: "domain", layer: "above traces" },
+          range: [...xRange], autorange: false, domain: frame["xaxis.domain"], scaleanchor: false, layer: "above traces" },
         yaxis: {
           title: { text: profileData.label_y, standoff: 4 },
           range: [...timeRange].reverse(),
           autorange: false,
-          scaleanchor: profileAspectRatio === null ? false : "x",
-          scaleratio: profileAspectRatio === null ? 1 : Math.abs((xRange[1] - xRange[0]) / (timeRange[1] - timeRange[0])) / profileAspectRatio,
-          constrain: "domain",
+          domain: frame["yaxis.domain"],
+          scaleanchor: false,
           showgrid: false,
           linecolor: "#bcc8cf",
           ticks: "outside",
@@ -671,7 +689,9 @@ export default function HorizonMap({
       } as any,
       { responsive: false, displayModeBar: false, scrollZoom: true },
       () => {
+        profileBackdropCleanup.current ??= installRasterBackdrop(el);
         profileRenderedInputs.current = inputs;
+        setProfileDrawnContentKey(profileContentKey);
         setProfileDrawn(true);
         reportProfileViewport(el);
         el.removeAllListeners?.("plotly_relayout");
@@ -695,7 +715,7 @@ export default function HorizonMap({
         });
       },
     );
-  }, [sectionActive, profileData, maps, profileStyleKey, seismic, hasSeismic, profileAspectRatio, workspace.profileDrag, workspace.profileXRange, workspace.profileTimeRange]);
+  }, [sectionActive, profileData, profileContentKey, maps, profileStyleKey, seismic, hasSeismic, profileAspectRatio, workspace.profileDrag, workspace.profileXRange, workspace.profileTimeRange]);
 
   useEffect(() => {
     if (sectionActive && profileData) void profileRenderer.current?.visibility(horizons);
@@ -712,7 +732,8 @@ export default function HorizonMap({
         const viewport = profileContainerViewport(el.clientWidth, el.clientHeight, profileAspectRatio);
         if (!viewport) return;
         setProfileViewport(previous => previous?.width === viewport.width && previous?.height === viewport.height ? previous : viewport);
-        void profileRenderer.current?.resize(el.clientWidth, el.clientHeight, () => reportProfileViewport(el));
+        void profileRenderer.current?.resize(el.clientWidth, el.clientHeight, () => reportProfileViewport(el),
+          plotAspectLayout(el.clientWidth, el.clientHeight, PROFILE_MARGIN, profileAspectRatio));
       });
     };
     const observer = new ResizeObserver(resize);
@@ -746,6 +767,8 @@ export default function HorizonMap({
     return () => {
       version.current++;
       queue.current.finally(() => Plotly.purge(el));
+      profileBackdropCleanup.current?.();
+      profileBackdropCleanup.current = null;
       void profileRenderer.current?.dispose();
       profileRenderer.current = null;
     };
@@ -1298,24 +1321,19 @@ export default function HorizonMap({
               xBounds={profilePath?.x_range ?? null} yBounds={profilePath?.time_range ?? null}
               xLabel="距离 (网格)" yLabel="Time (ms)" onError={setProfileError}
               onCommit={({ x, y }) => onWorkspace(current => ({ ...current, profileXRange: x, profileTimeRange: ordered(y) }))}>
-            <div ref={profileRef} className="map-profile-plot" style={{ visibility: sectionActive && profileData ? "visible" : "hidden" }} />
+            <div ref={profileRef} className="map-profile-plot" style={{ visibility: sectionActive && profileDisplayReady ? "visible" : "hidden" }} />
             </PlotScrollFrame>
-            {!profileData && <div role={validEndpoints && profileError ? "alert" : "status"} className="map-profile-hint">
+            {!profileDisplayReady && <div role={validEndpoints && profileError ? "alert" : "status"} className="map-profile-hint">
               <p>{!validEndpoints ? endpointError || "请返回地图拾取 A、B 点。" : profileError || mapIssue || "正在更新剖面…"}</p>
               {(!validEndpoints || mapIssue || profileError) && <button className="secondary" onClick={returnToMap}>返回地图</button>}
             </div>}
             </div>
-            <div className="profile-footer" style={{ visibility: sectionActive && profileData ? "visible" : "hidden" }}>
-            {hasSeismic && <div className="profile-readout-slot"><ProbeReadout reading={profileReading} /></div>}
-            <div className="profile-legend" aria-label="剖面层位图例">
-              {horizons.map(h => (
-                <span key={h.id} aria-hidden={!h.visible || !profileData}
-                  style={{ visibility: sectionActive && h.visible && profileData ? "visible" : "hidden" }}>
-                  <i style={{ background: h.color }} />{h.name}
-                </span>
-              ))}
-            </div>
-            </div>
+            {hasSeismic && (
+              <div className="viewer-bottom" role="region" aria-label="坐标与振幅读数" tabIndex={0}
+                style={{ visibility: sectionActive && profileDisplayReady ? "visible" : "hidden" }}>
+                <ProbeReadout reading={profileReading} />
+              </div>
+            )}
         </section>
         </div>
       </div>

@@ -5,7 +5,7 @@ import ts from 'typescript';
 
 const source = await readFile(new URL('../src/workspace.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
-const { initialMapWorkspace, initialExport3D, reconcileMapWorkspace, restoreState, readDraft, draftKey, projectDrafts } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'));
+const { initialMapWorkspace, initialExport3D, reconcileMapWorkspace, restoreState, readDraft, draftKey, projectDrafts, removeProjectDrafts, DRAFT_KEY } = await import('data:text/javascript;base64,' + Buffer.from(compiled).toString('base64'));
 
 function defaults() {
   return {
@@ -209,4 +209,18 @@ test('draft enumeration omits committed bodies and recognises interrupted acknow
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].compatible, true);
   assert.deepEqual(candidates[0].state, later);
+});
+
+test('permanent deletion removes only the selected project drafts across tabs', () => {
+  const values = new Map([
+    [draftKey('a', 'tab-1'), 'first'], [draftKey('a', 'tab-2'), 'second'],
+    [draftKey('ab', 'tab-1'), 'another project'], ['preferences', 'keep'],
+    [DRAFT_KEY, JSON.stringify({ project_id: 'a' })],
+  ]);
+  const storage = { getItem: key => values.get(key) || null, key: i => [...values.keys()][i], get length() { return values.size; }, removeItem: key => values.delete(key) };
+  removeProjectDrafts(storage, 'a');
+  assert.deepEqual([...values.entries()], [[draftKey('ab', 'tab-1'), 'another project'], ['preferences', 'keep']]);
+  values.set(DRAFT_KEY, JSON.stringify({ project_id: 'b' }));
+  removeProjectDrafts(storage, 'a');
+  assert.equal(JSON.parse(values.get(DRAFT_KEY)).project_id, 'b');
 });

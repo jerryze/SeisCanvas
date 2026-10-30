@@ -280,6 +280,9 @@ def create_export_router(context: ExportContext, *, manager_factory=ExportJobMan
     def queue_list():
         try:
             with guarded_lock():
+                if (context.get_project().read() is None and context.get_survey is not None
+                        and context.get_survey() is None and not context.get_horizons()):
+                    return {"session": "", "count": 0, "items": []}
                 return export_queue.session().snapshot()
         except (ValueError, OSError) as error:
             raise _error(error)

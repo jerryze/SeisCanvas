@@ -43,7 +43,7 @@ ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:8000:127.0.0.1:8000 user@server
 - 已有项目缺失文件时，“重新关联”也可填写新的服务器路径。
 - 项目默认保存在 `~/.local/share/seiscanvas`（设置 `XDG_DATA_HOME` 时使用其下的 `seiscanvas`）。也可指定固定位置：`SEISCANVAS_STATE_DIR=/data/seiscanvas-state bash deploy/start-linux.sh`。
 - 备份时同时保留项目状态目录和原始数据。项目保存的是源文件路径，不会复制 SEG-Y 和层位文件。
-- 本包不含当前电脑的原始数据、已保存项目和导出图件。“加载 F3 示例”需要自行将示例放进 `data/` 和 `data/horizons/`。
+- 本包不含当前电脑的原始数据、已保存项目和导出图件。
 
 ## 4. 持续运行与使用边界
 

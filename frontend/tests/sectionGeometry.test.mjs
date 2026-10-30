@@ -9,8 +9,10 @@ const compile = source => ts.transpileModule(source, {
 const moduleURL = source => 'data:text/javascript;base64,' + Buffer.from(compile(source)).toString('base64');
 const styles = moduleURL(await readFile(new URL('../src/components/plotStyle.ts', import.meta.url), 'utf8'));
 const curve = moduleURL(await readFile(new URL('../src/components/SeismicViewer2D/horizonCurve.ts', import.meta.url), 'utf8'));
+const aspect = moduleURL(await readFile(new URL('../src/components/plotAspect.ts', import.meta.url), 'utf8'));
 const source = (await readFile(new URL('../src/components/SeismicViewer2D/sectionGeometry.ts', import.meta.url), 'utf8'))
   .replace('"../plotStyle"', JSON.stringify(styles))
+  .replace('"../plotAspect"', JSON.stringify(aspect))
   .replace('"./horizonCurve"', JSON.stringify(curve));
 const { buildTraces, buildLayout } = await import(moduleURL(source));
 const { measureSectionViewport, samplingViewport, sectionResponseError } = await import(moduleURL(
@@ -50,6 +52,20 @@ function data() {
   };
 }
 
+function dataWithOverview() {
+  return {
+    ...data(), x: [10.3, 10.6, 10.95], time: [100.75, 102.25],
+    x_edges: [10.2, 10.4, 10.8, 11.1], time_edges: [100, 101.5, 103],
+    z: [[null, -4, 8], [3, null, 2]], raster_extent: [10.2, 11.1, 100, 103],
+    overview: {
+      x: [9, 10.35, 11, 12.15], time: [94.5, 100, 102.5, 107],
+      x_edges: [8, 10, 10.7, 11.3, 13], time_edges: [90, 99, 101, 104, 110],
+      raster_extent: [8, 13, 90, 110],
+      z: [[-10, null, 30, 4], [5, -6, 7, 8], [9, 10, -11, 12], [13, 14, 15, 16]],
+    },
+  };
+}
+
 test('disabled overlays preserve the existing color background and horizons', () => {
   const section = data();
   const traces = buildTraces(section, state(), colors);
@@ -75,6 +91,64 @@ test('horizon-only sections preserve raw curves and styling without fabricated s
   assert.equal(sectionResponseError(section, view.seismic), null);
   view.horizons = [{ ...horizon, visible: false }];
   assert.deepEqual(buildTraces(section, view, colors), []);
+});
+
+test('navigation overview never becomes a data trace or changes fine raster and overlay geometry', () => {
+  const section = dataWithOverview(), before = structuredClone(section);
+  const view = state({ variable_area: true, wiggle: true });
+  const traces = buildTraces(section, view, colors);
+  assert.equal(traces.length, 5);
+  assert.equal(traces.filter(trace => trace.type === 'heatmap').length, 1);
+  assert.ok(traces.every(trace => !trace.meta?.navigationOverview));
+  assert.deepEqual(traces, buildTraces({ ...section, overview: undefined }, view, colors));
+  const fine = traces[0];
+  assert.equal(fine.type, 'heatmap');
+  assert.equal(fine.x, section.x_edges);
+  assert.equal(fine.y, section.time_edges);
+  assert.equal(fine.z, section.z);
+  assert.equal(fine.z[0][0], null);
+  assert.equal(fine.z[1][1], null);
+  assert.equal(fine.zsmooth, false);
+  assert.equal(fine.showscale, false);
+  assert.equal(traces[1].x, section.trace_overlay.variable_area.x);
+  assert.equal(traces[2].x, section.trace_overlay.wiggle.x);
+  assert.equal(traces.at(-1).name, 'Horizon');
+  assert.deepEqual(section, before);
+});
+
+test('overview attachment leaves fine scalar values, nulls, color scale and polarity unchanged', () => {
+  const section = dataWithOverview(), before = structuredClone(section);
+  for (const reverse_polarity of [false, true]) for (const reverse_colormap of [false, true]) {
+    const view = state({ reverse_polarity, reverse_colormap });
+    const heatmaps = buildTraces(section, view, colors).filter(trace => trace.type === 'heatmap');
+    const expectedColors = reverse_colormap ? [[0, '#ff0000'], [1, '#0000ff']] : colors;
+    assert.equal(heatmaps.length, 1);
+    for (const trace of heatmaps) {
+      assert.equal(trace.zmin, section.vmin);
+      assert.equal(trace.zmax, section.vmax);
+      assert.deepEqual(trace.colorscale, expectedColors);
+      assert.equal(trace.zsmooth, false);
+    }
+    assert.deepEqual(heatmaps.at(-1).z, section.z.map(row => row.map(value =>
+      value === null ? null : reverse_polarity ? -value : value)));
+    assert.deepEqual(heatmaps, buildTraces({ ...section, overview: undefined }, view, colors)
+      .filter(trace => trace.type === 'heatmap'));
+  }
+  assert.deepEqual(section, before);
+});
+
+test('full-domain detail hides overview and horizon-only responses never draw overview amplitudes', () => {
+  const section = dataWithOverview();
+  section.raster_extent = [...section.overview.raster_extent];
+  const full = buildTraces(section, state(), colors);
+  assert.equal(full.filter(trace => trace.type === 'heatmap').length, 1);
+  assert.equal(full[0].z, section.z);
+  for (const patch of [{ has_seismic: false }, { z: [] }, { has_seismic: false, z: [] }]) {
+    const horizonOnly = buildTraces({ ...section, ...patch }, state({ wiggle: true, variable_area: true }), colors);
+    assert.equal(horizonOnly.length, 2);
+    assert.ok(horizonOnly.every(trace => trace.type === 'scatter' && trace.meta?.horizonId === 'h'));
+    assert.deepEqual(horizonOnly.at(-1).y, [100, 102]);
+  }
 });
 
 test('hollow circles use a white fill and coloured ring in sections and A–B profiles without black outlines', () => {
@@ -264,7 +338,7 @@ test('missing or empty overlay paths remain compatible with section responses', 
   assert.equal(buildTraces(section, state({ wiggle: true, variable_area: true }), colors).length, 3);
 });
 
-test('axes render above overlays while trace and TWT ranges and aspect stay unchanged', () => {
+test('fixed drawing aspect keeps freely selected trace and TWT ranges without linking zoom axes', () => {
   const view = state({ wiggle: true, variable_area: true });
   view.x_range = [10.2, 10.8];
   view.time_range = [100.5, 101.5];
@@ -274,8 +348,20 @@ test('axes render above overlays while trace and TWT ranges and aspect stay unch
   assert.equal(layout.yaxis.layer, 'above traces');
   assert.deepEqual(layout.xaxis.range, [10.2, 10.8]);
   assert.deepEqual(layout.yaxis.range, [101.5, 100.5]);
-  assert.equal(layout.yaxis.scaleanchor, 'x');
-  assert.ok(Math.abs(layout.yaxis.scaleratio - 0.3) < 1e-12);
+  assert.equal(layout.xaxis.scaleanchor, false);
+  assert.equal(layout.yaxis.scaleanchor, false);
+  const width = (layout.width - layout.margin.l - layout.margin.r) * (layout.xaxis.domain[1] - layout.xaxis.domain[0]);
+  const height = (layout.height - layout.margin.t - layout.margin.b) * (layout.yaxis.domain[1] - layout.yaxis.domain[0]);
+  assert.ok(Math.abs(width / height - 2) < 1e-12);
+  for (const [x, t] of [[[10.45, 10.55], [100, 102]], [[10, 11], [100.9, 101]], [[12, 13], [200, 204]]]) {
+    const zoom = buildLayout(data(), { ...view, x_range: x, time_range: t }, 'zoom');
+    assert.deepEqual(zoom.xaxis.range, x);
+    assert.deepEqual(zoom.yaxis.range, [...t].reverse());
+    assert.deepEqual(zoom.xaxis.domain, layout.xaxis.domain);
+    assert.deepEqual(zoom.yaxis.domain, layout.yaxis.domain);
+    assert.equal(zoom.xaxis.scaleanchor, false);
+    assert.equal(zoom.yaxis.scaleanchor, false);
+  }
 });
 
 test('all 2D interpolation and overlay modes keep native coordinate ranges independent of render centres', () => {

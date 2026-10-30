@@ -94,3 +94,21 @@ test('viewport updates preserve loaded background and foreground traces', async 
   assert.equal(drawn, 1);
   assert.deepEqual(h.calls.at(-1), ['relayout', { 'xaxis.range': [15, 25], 'yaxis.range': [700, 300] }]);
 });
+
+test('profile resizing applies the drawing frame atomically without resetting a free zoom selection', async () => {
+  const h = harness();
+  await h.renderer.render(h.traces, {}, {}, () => {});
+  await h.renderer.viewport({ 'xaxis.range': [12, 12.5], 'yaxis.range': [190, 110] }, () => {});
+  const frame = { 'xaxis.domain': [0.25, 0.75], 'yaxis.domain': [0, 1],
+    'xaxis.scaleanchor': false, 'yaxis.scaleanchor': false };
+  let measured = 0;
+  await h.renderer.resize(1200, 600, () => measured++, frame);
+  assert.deepEqual(h.calls.at(-1), ['relayout', { ...frame, width: 1200, height: 600 }]);
+  assert.equal(measured, 1);
+  assert.equal(h.el.data, h.traces);
+  assert.equal(h.calls.filter(call => call[0] === 'react').length, 1);
+  const before = h.calls.length;
+  await h.renderer.viewport({ ...frame, width: 1400, height: 700 }, () => {});
+  await h.renderer.resize(1400, 700, () => assert.fail('viewport already applied these dimensions'), frame);
+  assert.equal(h.calls.length, before + 1);
+});

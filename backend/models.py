@@ -329,6 +329,7 @@ class SectionRequest(ViewState):
     interpolation: Literal["nearest", "bilinear", "bicubic"] | None = None
     target_width: int | None = Field(None, ge=8, le=8000)
     target_height: int | None = Field(None, ge=8, le=8000)
+    include_overview: bool = False
 
 
 class SampleRequest(BaseModel):
@@ -512,6 +513,7 @@ class HorizonProfileRequest(ProfileDisplayState):
     target_width: int | None = Field(None, ge=8, le=8000)
     target_height: int | None = Field(None, ge=8, le=8000)
     interpolation: Literal["nearest", "bilinear", "bicubic"] | None = None
+    include_overview: bool = False
 
 
 class NamedExport(BaseModel):

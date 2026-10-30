@@ -56,10 +56,10 @@ export function createProfilePlotRenderer(plotly: PlotAPI, el: any, onError: (er
         if (!disposed && token === revision) onRendered();
       });
     },
-    resize(width: number, height: number, onResized: () => void) {
+    resize(width: number, height: number, onResized: () => void, layout: Record<string, unknown> = {}) {
       return enqueue(async () => {
         if (!traces || width <= 0 || height <= 0 || (size?.width === width && size.height === height)) return;
-        await plotly.relayout(el, { width, height });
+        await plotly.relayout(el, { ...layout, width, height });
         size = { width, height };
         if (!disposed) onResized();
       });
@@ -68,6 +68,8 @@ export function createProfilePlotRenderer(plotly: PlotAPI, el: any, onError: (er
       return enqueue(async () => {
         if (!traces) return;
         await plotly.relayout(el, update);
+        if (typeof update.width === "number" && typeof update.height === "number")
+          size = { width: update.width, height: update.height };
         if (!disposed) onRendered();
       });
     },

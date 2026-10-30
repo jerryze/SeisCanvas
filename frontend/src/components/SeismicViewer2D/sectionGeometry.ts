@@ -1,8 +1,13 @@
 import { Section, VS } from "../../types";
 import { PLOT_DASH, SYMBOLS_2D } from "../plotStyle";
 import { horizonCurve, HorizonCurveViewport } from "./horizonCurve";
+import { plotAspectLayout } from "../plotAspect";
 
-/** Layer order: color raster, variable area, wiggle, then horizon lines. */
+export const SECTION_MARGIN = { l: 72, r: 28, t: 28, b: 60 };
+
+/** Layer order: fine raster, variable area, wiggle, then horizon lines.
+ * Navigation lives in layout.images so Plotly cannot discard off-screen tiles.
+ */
 export function buildTraces(section: Section, view: VS, colors: any[], horizontalLabel?: string,
   horizonViewport?: HorizonCurveViewport): any[] {
   const s = view.seismic;
@@ -163,7 +168,8 @@ export function buildTraces(section: Section, view: VS, colors: any[], horizonta
 }
 
 /** Plotly layout for one 2D section, honouring ranges and the aspect lock. */
-export function buildLayout(section: Section, view: VS, drag: "zoom" | "pan") {
+export function buildLayout(section: Section, view: VS, drag: "zoom" | "pan",
+  size = { width: 700, height: 450 }) {
   const extent = section.raster_extent;
   const xr =
     view.x_range || (extent ? [extent[0], extent[1]] : [section.x[0] - 0.5, section.x.at(-1)! + 0.5]);
@@ -172,10 +178,13 @@ export function buildLayout(section: Section, view: VS, drag: "zoom" | "pan") {
     || [section.time[0], section.time.at(-1)!];
 
   const inline = view.view_type === "inline";
+  const frame = plotAspectLayout(size.width, size.height, SECTION_MARGIN,
+    view.aspect_ratio_2d ? view.aspect_ratio_2d[0] / view.aspect_ratio_2d[1] : null);
 
   return {
+    width: size.width, height: size.height,
     autosize: true,
-    margin: { l: 72, r: 28, t: 28, b: 60 },
+    margin: SECTION_MARGIN,
     paper_bgcolor: "#fff",
     plot_bgcolor: "#fff",
     font: {
@@ -187,7 +196,8 @@ export function buildLayout(section: Section, view: VS, drag: "zoom" | "pan") {
     xaxis: {
       layer: "above traces",
       title: { text: inline ? "Crossline" : "Inline", standoff: 18 },
-      constrain: "domain",
+      domain: frame["xaxis.domain"],
+      scaleanchor: false,
       range: [...xr],
       autorange: false,
       showgrid: false,
@@ -197,12 +207,8 @@ export function buildLayout(section: Section, view: VS, drag: "zoom" | "pan") {
     },
     yaxis: {
       layer: "above traces",
-      constrain: "domain",
-      scaleanchor: view.aspect_ratio_2d ? "x" : false,
-      scaleratio: view.aspect_ratio_2d
-        ? (view.aspect_ratio_2d[1] / view.aspect_ratio_2d[0]) *
-          Math.abs((xr[1] - xr[0]) / (tr[1] - tr[0]))
-        : 1,
+      domain: frame["yaxis.domain"],
+      scaleanchor: false,
       title: { text: "Time (ms)", standoff: 16 },
       range: [Math.max(...tr), Math.min(...tr)],
       autorange: false,

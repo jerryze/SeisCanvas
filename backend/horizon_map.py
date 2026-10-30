@@ -22,7 +22,7 @@ from backend import resample
 from backend.preview import read_samples, sample_horizon_amplitude, trace_ids_at
 from backend.scene import horizon_grid, serial
 from backend.style import font_family
-from backend.section_service import section_raster
+from backend.section_service import section_overview, section_raster
 from backend.rendering import amplitude, _path_segments, _publication_raster, draw_horizon
 from backend.trace_overlay import build_trace_overlay, overlays_enabled, WIGGLE_WIDTH
 from matplotlib.collections import LineCollection, PolyCollection
@@ -414,10 +414,11 @@ def map_profile(
     target_height=None,
     interpolation=None,
     display_state=None,
+    include_overview=False,
 ):
     """Serialized A–B section for the web profile subplot."""
     d = _profile_data(survey, state, horizons, a, b, target_width, target_height, interpolation, display_state)
-    return dict(
+    result = dict(
         has_seismic=d["has_seismic"],
         distance=d["distance"].tolist(),
         time=[float(v) for v in d["time"]],
@@ -444,6 +445,13 @@ def map_profile(
         vmax=d["vmax"],
         label_y=d["label_y"],
     )
+    if include_overview and d["has_seismic"]:
+        result["overview"] = section_overview(
+            survey, d["native_distance"], d["native_time"], d["native_amplitude"],
+            d["view"].seismic.background_interpolation,
+            ("ab-native", *a, *b, len(d["native_distance"])),
+        )
+    return result
 
 
 def render_profile(

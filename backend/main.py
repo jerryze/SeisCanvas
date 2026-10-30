@@ -62,7 +62,7 @@ async def lifespan(_: FastAPI):
             export_queue.shutdown()
 
 
-app = FastAPI(title="SeisCanvas", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="SeisCanvas", version="0.5.0", lifespan=lifespan)
 app.router.route_class = ProjectRoute
 # Local single-user application. Serialize mutations and section/export reads.
 lock = RLock()
@@ -148,17 +148,15 @@ def persist_horizons(removed=(), added=None, renamed=None, added_styles=None):
     project.update_horizons(entries)
 
 
-def activate_survey(new, ilbyte, xlbyte, geometry_mode="auto", imported=()):
+def activate_survey(new, ilbyte, xlbyte, geometry_mode="auto"):
     global survey, restored_project
     current = project.read()
     # The first seismic volume supplements a horizon-only project. Replacing
     # an existing volume still creates a separate project as before.
     retained = dict(horizons) if current and current["source"] is None else {}
-    pending = {uuid4().hex: h for h in imported}
-    styles = [horizon_style(key, h, i) for i, (key, h) in enumerate(pending.items())]
     document = project.new(
         source(new.path, ilbyte=ilbyte, xlbyte=xlbyte, geometry_mode=geometry_mode),
-        [horizon_entry(style["id"], pending[style["id"]], style) for style in styles],
+        [],
         seismic_view={
             "view_type": "inline", "section_number": int(new.inlines[len(new.inlines) // 2]),
             "x_range": None, "time_range": None,
@@ -169,7 +167,6 @@ def activate_survey(new, ilbyte, xlbyte, geometry_mode="auto", imported=()):
     survey = new
     horizons.clear()
     horizons.update(retained)
-    horizons.update(pending)
     restored_project = document["id"]
     export_queue.bind(project.export_folder(document))
     return workspace_response(document, new, horizons)
@@ -231,10 +228,10 @@ def restore_workspace(force=False):
 
 
 @app.get("/api/projects")
-def project_list():
+def project_list(deleted: bool = False):
     try:
         with guarded_lock():
-            return project.list()
+            return project.list(deleted=deleted)
     except (ValueError, OSError) as e:
         raise error(e)
 
@@ -244,8 +241,6 @@ def project_create(req: ProjectCreate):
     try:
         with guarded_lock():
             template = project.get(req.template_id) if req.template_id else None
-            if template and (not project.read() or template["id"] != project.read()["id"]):
-                raise conflict("PROJECT_CHANGED", "只能复制当前已保存的项目。")
             document = project.create(req.name, request_id=req.request_id, template=template)
             return {"project_id": document["id"], "revision": document["revision"]}
     except (ValueError, OSError) as e:
@@ -257,12 +252,67 @@ def project_rename(project_id: str, req: ProjectRename):
     try:
         with guarded_lock():
             document = project.get(project_id)
-            if not project.read() or document["id"] != project.read()["id"]:
-                raise conflict("PROJECT_CHANGED", "请先打开该项目。")
             document["name"] = project_name(req.name)
             document["revision"] += 1
-            document = project.commit(document)
+            current = project.read()
+            document = project.commit(document) if current and current["id"] == project_id else project.write(document)
             return {"name": document["name"], "revision": document["revision"]}
+    except (ValueError, OSError) as e:
+        raise error(e)
+
+
+@app.delete("/api/projects/{project_id}")
+def project_delete(project_id: str):
+    global survey, restored_project
+    try:
+        with guarded_lock():
+            if export_router.export_jobs.has_active(project_id):
+                raise conflict("PROJECT_BUSY", "该项目仍有图件在生成或排队，请等待完成或取消排队任务后再删除。")
+            was_active = project.delete(project_id)
+            if was_active:
+                survey, restored_project = None, None
+                horizons.clear()
+                horizon_selections.clear()
+                export_queue.bind(None)
+            return {"deleted_id": project_id, "workspace": restore_workspace() if was_active else None}
+    except (ValueError, OSError) as e:
+        raise error(e)
+
+
+@app.post("/api/projects/{project_id}/restore")
+def project_restore(project_id: str):
+    try:
+        with guarded_lock():
+            return project.restore_deleted(project_id)
+    except (ValueError, OSError) as e:
+        raise error(e)
+
+
+@app.delete("/api/projects/{project_id}/permanent")
+def project_purge(project_id: str):
+    try:
+        with guarded_lock():
+            if export_router.export_jobs.has_active(project_id):
+                raise conflict("PROJECT_BUSY", "该项目仍有图件在生成或排队，暂时无法彻底删除。")
+            return project.purge(project_id)
+    except (ValueError, OSError) as e:
+        raise error(e)
+
+
+@app.post("/api/projects/{project_id}/close")
+def project_close(project_id: str):
+    global survey, restored_project
+    try:
+        with guarded_lock():
+            document = project.read()
+            if not document or document["id"] != project_id:
+                raise conflict("PROJECT_CHANGED", "该项目不是当前打开的项目，请刷新项目列表。")
+            project.close()
+            survey, restored_project = None, None
+            horizons.clear()
+            horizon_selections.clear()
+            export_queue.bind(None)
+            return restore_workspace()
     except (ValueError, OSError) as e:
         raise error(e)
 
@@ -474,6 +524,7 @@ def horizon_map_profile(req: HorizonProfileRequest):
                 req.target_height,
                 req.interpolation,
                 req.section_state(),
+                include_overview=req.include_overview,
             )
         except ValueError as e:
             raise error(e)
@@ -489,12 +540,6 @@ def catalog():
     }
     return {
         "server_path_mode": server_path_mode(),
-        "segy": [
-            p.name
-            for p in sorted((ROOT / "data").glob("*"))
-            if p.suffix.lower() in [".sgy", ".segy"]
-        ],
-        "horizons": [p.name for p in sorted((ROOT / "data/horizons").glob("*.txt"))],
         "colormaps": {
             name: [[i / 255, to_hex(get_cmap(name)(i / 255))] for i in range(256)]
             for name in CMAPS
@@ -504,25 +549,6 @@ def catalog():
             for name, cmap in map_palettes.items()
         },
     }
-
-
-@app.post("/api/example")
-def example(ilbyte: int = 189, xlbyte: int = 21):
-    global survey
-    try:
-        paths = sorted(
-            p
-            for p in (ROOT / "data").glob("*")
-            if p.suffix.lower() in [".sgy", ".segy"]
-        )
-        if not paths:
-            raise ValueError("No example SEG-Y found in data/.")
-        new = Survey(paths[0], ilbyte, xlbyte)
-        hs = [Horizon(p) for p in sorted((ROOT / "data/horizons").glob("*.txt"))]
-        with guarded_lock():
-            return activate_survey(new, ilbyte, xlbyte, imported=hs)
-    except (ValueError, OSError, RuntimeError, IndexError) as e:
-        raise error(e)
 
 
 import_progress = {}

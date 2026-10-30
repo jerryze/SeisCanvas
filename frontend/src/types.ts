@@ -67,7 +67,17 @@ export type Meta = {
   time_range: number[];
   traces: number;
 };
+/** Bounded full-section navigation raster; never a source for final sampling. */
+export type SectionOverview = {
+  x: number[];
+  time: number[];
+  x_edges: number[];
+  time_edges: number[];
+  raster_extent: [number, number, number, number];
+  z: (number | null)[][];
+};
 export type Section = {
+  overview?: SectionOverview;
   has_seismic?: boolean;
   x: number[];
   time: number[];

@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 import re
+import shutil
 from uuid import uuid4
 
 from backend.storage import atomic_json, read_json, state_dir
@@ -104,11 +105,24 @@ class WorkspaceStore:
             # Rebuild summaries from the documents; never overwrite them.
             return {"version": 2, "active_id": None, "recent": []}
 
+    def deleted_path(self, project_id):
+        return self.project_path(project_id).with_name("deleted.json")
+
+    def is_deleted(self, project_id):
+        return self.deleted_path(project_id).exists() or self.purged_path(project_id).exists()
+
+    def purged_path(self, project_id):
+        self.project_path(project_id)  # Validate before constructing any filesystem path.
+        return self.root / "purged" / f"{project_id}.json"
+
     def _migrate(self):
         legacy = self.root / "workspace.json"
         if (self.root / "projects.json").exists() or not (legacy.exists() or legacy.with_suffix(".json.bak").exists()):
             return
         old = read_json(legacy, validate_document)
+        if self.purged_path(old["id"]).exists():
+            atomic_json(self.root / "projects.json", {"version": 2, "active_id": None, "recent": []}, validate=validate_index)
+            return
         target = self.project_path(old["id"])
         if not target.exists():
             old = deepcopy(old)
@@ -130,7 +144,7 @@ class WorkspaceStore:
             self.loaded = True
             self._migrate()
             active_id = self._index().get("active_id")
-            if active_id:
+            if active_id and not self.is_deleted(active_id):
                 self.path = self.project_path(active_id)
                 self.loaded = True
                 self.document = read_json(self.path, validate_document)
@@ -138,6 +152,10 @@ class WorkspaceStore:
         return self.document
 
     def get(self, project_id):
+        if self.purged_path(project_id).exists():
+            raise ValueError("项目已彻底删除。")
+        if self.is_deleted(project_id):
+            raise ValueError("项目已删除，请在最近删除中恢复。")
         if self.read() is not None and self.document["id"] == project_id:
             return deepcopy(self.document)
         document = read_json(self.project_path(project_id), validate_document)
@@ -145,11 +163,17 @@ class WorkspaceStore:
             raise ValueError("找不到该项目")
         return document
 
-    def list(self):
+    def list(self, deleted=False):
         self.read()
         index = self._index()
         result = []
         for path in (self.root / "projects").glob("*/project.json"):
+            if not re.fullmatch(r"[a-f0-9]{32}", path.parent.name):
+                continue
+            if self.purged_path(path.parent.name).exists():
+                continue
+            if self.is_deleted(path.parent.name) != deleted:
+                continue
             try:
                 d = read_json(path, validate_document)
                 item = d.get("source")
@@ -163,9 +187,125 @@ class WorkspaceStore:
                 result.append({"id": path.parent.name, "name": "损坏的项目", "status": "damaged", "updated_at": ""})
         recent = index.get("recent", [])
         result.sort(key=lambda d: (recent.index(d["id"]) if d["id"] in recent else len(recent), -_date_order(d["updated_at"])))
+        if deleted:
+            for marker in (self.root / "purged").glob("*.json"):
+                if not re.fullmatch(r"[a-f0-9]{32}", marker.stem):
+                    continue
+                record = read_json(marker)
+                if not record.get("complete"):
+                    result.append({"id": marker.stem, "name": record.get("name", "清理未完成的项目"),
+                                   "status": "purging", "updated_at": ""})
         return {"active_id": self.document["id"] if self.document else None, "projects": result}
 
+    def delete(self, project_id):
+        """Hide a project atomically; shared sources and figures remain recoverable."""
+        path = self.project_path(project_id)
+        if not path.is_file():
+            raise ValueError("找不到该项目")
+        marker = self.deleted_path(project_id)
+        if marker.exists():
+            return False  # A retry must never delete a different active project.
+        current = self.read()
+        was_active = current is not None and current["id"] == project_id
+        index = self._index()
+        index["recent"] = [p for p in index["recent"] if p != project_id]
+        if index["active_id"] == project_id:
+            index["active_id"] = None
+        atomic_json(marker, {"id": project_id, "deleted_at": timestamp()})
+        try:
+            atomic_json(self.root / "projects.json", index, validate=validate_index)
+        except Exception:
+            marker.unlink()
+            raise
+        self.pending.clear()
+        if was_active:
+            self.document, self.loaded = None, True
+            self.epoch = uuid4().hex
+        return was_active
+
+    def restore_deleted(self, project_id):
+        if self.purged_path(project_id).exists():
+            raise ValueError("该项目已开始彻底删除，无法恢复。")
+        path = self.project_path(project_id)
+        if not path.is_file():
+            raise ValueError("找不到该项目")
+        # Only restore visibility; opening still validates sources and settings.
+        self.deleted_path(project_id).unlink(missing_ok=True)
+        return {"project_id": project_id}
+
+    def _owned_legacy_exports(self, document):
+        """Only remove managed legacy queues with no other project references."""
+        if not document or not document.get("legacy_exports"):
+            return None
+        folder = Path(document["legacy_exports"])
+        if folder.is_symlink() or folder.parent.resolve() != (self.root / "exports").resolve() or not folder.name.startswith("session_"):
+            return None
+        for path in (self.root / "projects").glob("*/project.json"):
+            if path.parent.name == document["id"]:
+                continue
+            try:
+                other = read_json(path, validate_document)
+            except (ValueError, OSError):
+                return None  # Ownership cannot be established while another document is damaged.
+            if other and other.get("legacy_exports") and Path(other["legacy_exports"]).resolve() == folder.resolve():
+                return None
+        return folder.name
+
+    def purge(self, project_id):
+        """Delete project-owned files, retaining a minimal fence against stale writes."""
+        path = self.project_path(project_id)
+        marker = self.purged_path(project_id)
+        current = self.read()
+        if current and current["id"] == project_id:
+            raise ValueError("请先将项目移至最近删除。")
+        if path.parent.is_symlink():
+            raise ValueError("项目目录异常，无法彻底删除。")
+        record = read_json(marker)
+        if record is None:
+            if not self.deleted_path(project_id).exists():
+                raise ValueError("只能彻底删除最近删除中的项目。")
+            try:
+                document = read_json(path, validate_document)
+            except (ValueError, OSError):
+                document = None
+            record = {"complete": False, "name": document.get("name", "未命名项目") if document else "损坏的项目",
+                      "legacy_exports": self._owned_legacy_exports(document)}
+            atomic_json(marker, record, backup=False)
+        if record.get("complete"):
+            return {"purged_id": project_id}
+        # This marker survives a partial rmtree or process exit, disables restore,
+        # and lets the library offer a safe retry even if project.json is gone.
+        self.pending.clear()
+        legacy = record.get("legacy_exports")
+        if legacy:
+            if Path(legacy).name != legacy or not legacy.startswith("session_"):
+                raise ValueError("无效的图件目录。")
+            folder = self.root / "exports" / legacy
+            if folder.is_symlink():
+                raise ValueError("图件目录异常，无法彻底删除。")
+            if folder.exists():
+                shutil.rmtree(folder)
+        if path.parent.exists():
+            shutil.rmtree(path.parent)
+        # Keep no project name, source paths or settings after completion.
+        atomic_json(marker, {"complete": True}, backup=False)
+        return {"purged_id": project_id}
+
+    def close(self):
+        """Leave the current project available in the library without deleting it."""
+        current = self.read()
+        if current is None:
+            return
+        index = self._index()
+        index["active_id"] = None
+        atomic_json(self.root / "projects.json", index, validate=validate_index)
+        self.document, self.loaded = None, True
+        self.pending.clear()
+        self.epoch = uuid4().hex
+
     def activate(self, document):
+        if self.is_deleted(document["id"]):
+            raise ValueError("项目已删除，请先恢复。")
         index = self._index()
         recent = [document["id"], *[p for p in index["recent"] if p != document["id"]]]
         atomic_json(self.root / "projects.json", {"version": 2, "active_id": document["id"], "recent": recent}, validate=validate_index)
@@ -176,6 +316,8 @@ class WorkspaceStore:
         return self.document
 
     def write(self, document):
+        if self.is_deleted(document["id"]):
+            raise ValueError("项目已删除，无法保存。")
         document = deepcopy(document)
         document["updated_at"] = timestamp()
         validate_document(document)
