@@ -80,7 +80,9 @@ def amplitude(z, s):
         if not finite.size:
             finite = np.array([0.0])
         if s.symmetric:
-            hi = float(np.percentile(np.abs(finite), s.clip_percentile)) or 1.0
+            # An array of quantiles preserves float64 interpolation across
+            # NumPy 1.x/2.x; a Python scalar can retain float16/32 in NumPy 2.
+            hi = float(np.percentile(np.abs(finite), [s.clip_percentile])[0]) or 1.0
             lo = -hi
         else:
             tail = (100 - s.clip_percentile) / 2

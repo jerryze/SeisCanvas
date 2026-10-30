@@ -123,6 +123,14 @@ def test_small_lazy_data_uses_one_read_pass():
     assert source.passes == 1
 
 
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+def test_symmetric_limits_preserve_float64_percentile_across_numpy_versions(dtype):
+    data = np.arange(100, dtype=dtype)
+    expected = (-98.505, 98.505)
+    np.testing.assert_equal(amplitude(data, Seismic())[1:], expected)
+    np.testing.assert_equal(amplitude_limits(Blocks(data), Seismic()), expected)
+
+
 @pytest.mark.parametrize("other", [np.empty(0, dtype=np.float64), np.array([np.nan, np.inf])])
 def test_empty_and_nonfinite_sources_still_participate_in_requested_promotion(monkeypatch, other):
     monkeypatch.setattr(amplitude_stats, "SMALL_BUFFER_BYTES", 8)

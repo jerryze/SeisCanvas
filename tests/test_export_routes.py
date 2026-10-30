@@ -119,9 +119,14 @@ def test_archive_response_cleans_only_its_zip_when_body_send_is_interrupted(isol
         if message["type"] == "http.response.body":
             raise failure("download interrupted")
     async def receive():
-        return {"type": "http.disconnect"}
+        # Keep the client connected until send() fails. Newer Starlette
+        # listens for disconnects concurrently and otherwise exits first.
+        await asyncio.Event().wait()
     with pytest.raises(failure):
-        asyncio.run(response({"type": "http", "method": "GET", "headers": []}, receive, send))
+        # ASGI 2.4 reports disconnects through send(); older protocols may
+        # consume task cancellation inside their disconnect listener.
+        asyncio.run(response({"type": "http", "method": "GET", "headers": [],
+                              "asgi": {"spec_version": "2.4"}}, receive, send))
     assert sent == ["http.response.start", "http.response.body"]
     assert not path.exists()
     assert other.exists()
