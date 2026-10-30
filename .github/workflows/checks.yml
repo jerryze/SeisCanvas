@@ -9,8 +9,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MPLBACKEND: Agg
-      MPLCONFIGDIR: ${{ runner.temp }}/seiscanvas-matplotlib
-      SEISCANVAS_STATE_DIR: ${{ runner.temp }}/seiscanvas-state
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -31,3 +29,6 @@ jobs:
         working-directory: frontend
       # Build first so Python tests also exercise the served production assets.
       - run: python -m pytest -q
+        env:
+          MPLCONFIGDIR: ${{ runner.temp }}/seiscanvas-matplotlib
+          SEISCANVAS_STATE_DIR: ${{ runner.temp }}/seiscanvas-state
