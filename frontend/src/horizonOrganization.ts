@@ -7,6 +7,25 @@ export const layerOf = (h: Pick<HS, "horizon_key">) =>
 export const naturalOrder = (a: string, b: string) =>
   a.localeCompare(b, "zh-CN", { numeric: true });
 
+/** Filtering never changes the source indices used to edit a batch. */
+export function mappingRows(
+  names: string[],
+  keys: string[],
+  query: string,
+  onlyMissing: boolean,
+) {
+  const search = query.trim().toLocaleLowerCase();
+  return names
+    .map((name, index) => ({ name, index }))
+    .filter(
+      ({ name, index }) =>
+        (!onlyMissing || !keys[index]?.trim()) &&
+        (!search ||
+          name.toLocaleLowerCase().includes(search) ||
+          keys[index]?.toLocaleLowerCase().includes(search)),
+    );
+}
+
 export function modelGroups(horizons: HS[]) {
   const groups = new Map<string, HS[]>();
   for (const h of horizons) {

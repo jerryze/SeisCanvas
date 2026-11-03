@@ -1048,7 +1048,7 @@ function ProjectWorkspace({ initialProject, onActivate, managerOpen, onManagerOp
               </div>
             }>
             <DataPanel
-              datasetName={dataset || datasetPlaceholder}
+              datasetName={datasetPlaceholder}
               progress={importProgress}
               busy={busy}
               onOpenSegy={openSegy}

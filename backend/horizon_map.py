@@ -73,11 +73,10 @@ def sample_amplitude(survey, horizon, x, y, twt):
 
     Non-integer sample positions interpolate between the two bracketing
     samples; cells without a trace or outside the survey time range stay NaN.
-    The result only depends on the horizon grid, so it is cached on the
-    horizon object like ``_grid3d`` (horizons are dropped with the survey).
+    The result depends on both the horizon grid and the active seismic volume.
     """
     cached = getattr(horizon, "_amplitude3d", None)
-    if cached is not None and cached[0] is x:
+    if cached is not None and cached[0] is x and cached[3] is survey:
         return cached[2]
     # Maps and 3D surfaces share exact-node and time-boundary semantics. Work
     # only on picked cells rather than materialising two full coordinate grids.
@@ -86,7 +85,7 @@ def sample_amplitude(survey, horizon, x, y, twt):
     amplitude[rows, cols] = sample_horizon_amplitude(
         survey, y[rows], x[cols], twt[rows, cols],
     )
-    horizon._amplitude3d = (x, y, amplitude)
+    horizon._amplitude3d = (x, y, amplitude, survey)
     return amplitude
 
 

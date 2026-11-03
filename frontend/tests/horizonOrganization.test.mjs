@@ -5,9 +5,21 @@ import ts from 'typescript';
 const code = ts.transpileModule(await readFile(new URL('../src/horizonOrganization.ts', import.meta.url), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText;
-const { modelGroups, layerFromName, suggestModel, referenceMapping, referencePreview, patchHorizon, organizeHorizons, inheritLayerColors } =
+const { modelGroups, layerFromName, suggestModel, referenceMapping, referencePreview, patchHorizon, organizeHorizons, inheritLayerColors, mappingRows } =
   await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
 const row = (id, model_group = '', horizon_key = '', color = '#112233') => ({ id, name: id, model_group, horizon_key, color, visible: true, line: { style: 'solid', width: 1.5 } });
+
+test('mapping search and missing filter preserve original row indices when editing a batch', () => {
+  const names = ['Base_1', 'Base_2', 'Base_3', 'Base_10'];
+  const keys = ['T24', '', 'T30', ' '];
+  assert.deepEqual(mappingRows(names, keys, ' base_ ', true), [{name:'Base_2', index:1}, {name:'Base_10', index:3}]);
+  assert.deepEqual(mappingRows(names, keys, 't30', false), [{name:'Base_3', index:2}]);
+  assert.deepEqual(mappingRows(names, keys, 't30', true), []);
+  const visible = mappingRows(names, keys, '10', true);
+  const next = keys.map((key, index) => index === visible[0].index ? 'T33' : key);
+  assert.deepEqual(next, ['T24', '', 'T30', 'T33']);
+  assert.deepEqual(keys, ['T24', '', 'T30', ' ']);
+});
 
 test('existing files remain ungrouped; same-named models collect nonadjacent members without changing source IDs', () => {
   const hs = [row('old'), row('Base_1', 'Base'), row('Ours_1', 'Ours'), row('Base_2', 'Base')];

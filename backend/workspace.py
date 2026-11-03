@@ -342,21 +342,22 @@ class WorkspaceStore:
                         created_at=timestamp())
         return self.write(document)
 
-    def new(self, survey_source, horizons, *, seismic_view=None):
+    def set_survey(self, survey_source, *, seismic_view=None):
+        """Replace the active data source without replacing the project."""
         current = self.read()
-        if current and current["source"] is None:
+        if current:
             document = deepcopy(current)
-            document.update(source=survey_source, horizons=[*current["horizons"], *horizons],
-                            revision=current["revision"] + 1)
+            document.update(source=survey_source, revision=current["revision"] + 1)
             if document["state"]:
                 document["state"]["view"].update(seismic_view or {})
-                document["state"]["view"]["horizons"].extend(h["style"] for h in horizons)
+                document["state"]["bytes"] = {"il": survey_source["ilbyte"], "xl": survey_source["xlbyte"]}
+                document["state"]["geometryMode"] = survey_source["geometry_mode"]
             result = self.commit(document)
             self.epoch = uuid4().hex
             self.pending.clear()
             return result
         document = self.create(Path(survey_source["path"]).stem[:80] or "未命名项目",
-                               template={"source": survey_source, "horizons": horizons, "state": None})
+                               template={"source": survey_source, "horizons": [], "state": None})
         return self.activate(document)
 
     def update_horizons(self, entries):

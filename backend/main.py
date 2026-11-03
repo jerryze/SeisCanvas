@@ -47,7 +47,6 @@ from backend.project_scope import ProjectRoute, guarded_lock, configure, conflic
 from backend.api.exports import ExportContext, create_export_router
 
 ROOT = Path(__file__).resolve().parents[1]
-HORIZON_SUFFIXES = {".txt", ".dat"}
 
 
 @asynccontextmanager
@@ -151,22 +150,42 @@ def persist_horizons(removed=(), added=None, renamed=None, added_styles=None):
 def activate_survey(new, ilbyte, xlbyte, geometry_mode="auto"):
     global survey, restored_project
     current = project.read()
-    # The first seismic volume supplements a horizon-only project. Replacing
-    # an existing volume still creates a separate project as before.
-    retained = dict(horizons) if current and current["source"] is None else {}
-    document = project.new(
+    seismic_view = {
+        "view_type": "inline", "section_number": int(new.inlines[len(new.inlines) // 2]),
+        "x_range": None, "time_range": None,
+        "slices": {kind: [SliceState(id=uuid4().hex, position=float(axis[len(axis) // 2])).model_dump()]
+                   for kind, axis in (("inline", new.inlines), ("crossline", new.crosslines), ("time", new.times))},
+    }
+    if current and current["source"] and current.get("state"):
+        view = current["state"]["view"]
+        axes = {"inline": new.inlines, "crossline": new.crosslines, "time": new.times}
+
+        def nearest(kind, value):
+            axis = axes[kind]
+            return float(axis[np.argmin(np.abs(axis - value))])
+
+        def valid_range(value, axis):
+            return value if value is None or (value[1] >= axis[0] and value[0] <= axis[-1]) else None
+
+        seismic_view = {
+            "section_number": int(nearest(view["view_type"], view["section_number"])),
+            "x_range": valid_range(view.get("x_range"), new.crosslines if view["view_type"] == "inline" else new.inlines),
+            "time_range": valid_range(view.get("time_range"), new.times),
+            "slices": {kind: [{**s, "position": nearest(kind, s["position"])} for s in items]
+                       for kind, items in view["slices"].items()},
+        }
+    document = project.set_survey(
         source(new.path, ilbyte=ilbyte, xlbyte=xlbyte, geometry_mode=geometry_mode),
-        [],
-        seismic_view={
-            "view_type": "inline", "section_number": int(new.inlines[len(new.inlines) // 2]),
-            "x_range": None, "time_range": None,
-            "slices": {kind: [SliceState(id=uuid4().hex, position=float(axis[len(axis) // 2])).model_dump()]
-                       for kind, axis in (("inline", new.inlines), ("crossline", new.crosslines), ("time", new.times))},
-        },
+        seismic_view=seismic_view,
     )
     survey = new
-    horizons.clear()
-    horizons.update(retained)
+    if current is None:
+        horizons.clear()
+    for horizon in horizons.values():
+        # Geometry belongs to the picks; amplitude caches belong to a volume.
+        for attribute in ("_amplitude3d", "_amplitude_mesh3d"):
+            if hasattr(horizon, attribute):
+                delattr(horizon, attribute)
     restored_project = document["id"]
     export_queue.bind(project.export_folder(document))
     return workspace_response(document, new, horizons)
@@ -657,8 +676,6 @@ def pick_horizon(req: PickHorizonRequest | None = None):
         for path in paths:
             if not path.is_absolute() or not path.is_file():
                 raise ValueError(f"请填写存在的服务器文件绝对路径：{path}")
-            if path.suffix.lower() not in HORIZON_SUFFIXES:
-                raise ValueError(f"{path.name}: Horizon files must use .txt or .dat extension.")
         preview = horizon_preview(paths[0])
         token = uuid4().hex
         with guarded_lock():
@@ -690,8 +707,6 @@ def local_horizon(req: LocalHorizonRequest):
 @app.post("/api/horizons/preview")
 def preview_horizon(file: UploadFile = File(...)):
     try:
-        if Path(file.filename or "").suffix.lower() not in HORIZON_SUFFIXES:
-            raise ValueError("Horizon files must use .txt or .dat extension.")
         with tempfile.NamedTemporaryFile(dir=workspace.name, suffix=".txt") as tmp:
             shutil.copyfileobj(file.file, tmp)
             tmp.flush()
@@ -716,8 +731,6 @@ def upload_horizons(
     try:
         columns = (inline_column, xline_column, time_column)
         for file in files:
-            if Path(file.filename or "").suffix.lower() not in HORIZON_SUFFIXES:
-                raise ValueError("Horizon files must use .txt or .dat extension.")
             folder = project.asset_folder()
             folders.append(folder)
             path = folder / Path(file.filename).name

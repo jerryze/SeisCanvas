@@ -239,9 +239,10 @@ def test_stale_project_and_revision_cannot_replace_newer_work(cube):
     assert save(client, first, state).status_code == 200
     assert save(client, first, state, revision=0).status_code == 409
     second = client.post("/api/segy/local", json={"path": str(cube.path)}).json()
-    assert second["project_id"] != first["project_id"]
+    assert second["project_id"] == first["project_id"]
+    assert second["activation_epoch"] != first["activation_epoch"]
     assert save(client, first, state, revision=1).status_code == 409
-    assert server.project.document["state"] is None
+    assert server.project.document["state"] == state
     invalid = deepcopy(state)
     invalid["view"]["seismic"]["colormap"] = "unknown"
     assert save(client, second, invalid).status_code == 422

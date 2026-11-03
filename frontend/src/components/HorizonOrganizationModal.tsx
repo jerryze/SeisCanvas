@@ -1,5 +1,5 @@
 import { useId, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { Folder, Search, X } from "lucide-react";
 import type { HS } from "../types";
 import {
   layerColors,
@@ -32,9 +32,7 @@ export default function HorizonOrganizationModal({
   const [draft, setDraft] = useState(() => horizons.map((h) => ({ ...h })));
   const [page, setPage] = useState<Page>("groups");
   // null is the cross-model file list; an empty name is the ungrouped model.
-  const [active, setActive] = useState<string | null>(
-    horizons.some((h) => !modelOf(h)) ? "" : null,
-  );
+  const [active, setActive] = useState<string | null>(null);
   const [selected, setSelected] = useState(new Set<string>());
   const [query, setQuery] = useState("");
   const [target, setTarget] = useState("");
@@ -50,7 +48,9 @@ export default function HorizonOrganizationModal({
   const members = allFiles ? draft : (current?.members ?? []);
   const currentName = current?.name ?? "";
   const shown = members.filter((h) =>
-    h.name.toLowerCase().includes(query.trim().toLowerCase()),
+    [h.name, modelOf(h), layerOf(h)].some((value) =>
+      value.toLowerCase().includes(query.trim().toLowerCase()),
+    ),
   );
   const picked = members.filter((h) => selected.has(h.id));
   const allShown = shown.length > 0 && shown.every((h) => selected.has(h.id));
@@ -130,7 +130,7 @@ export default function HorizonOrganizationModal({
   );
 
   return (
-    <div className="modal-backdrop" onClick={close}>
+    <div className="modal-backdrop">
       <div
         className="modal horizon-organization-modal organization-shell"
         ref={dialog}
@@ -146,7 +146,9 @@ export default function HorizonOrganizationModal({
             <div className="organization-overview">
               <span>{groups.filter((g) => g.name).length} 个分组</span>
               <span>{draft.length} 个文件</span>
-              <span className={missing ? "organization-attention" : undefined}>
+              <span
+                className={`mapping-status ${missing ? "pending" : "complete"}`}
+              >
                 {!draft.length
                   ? "尚未添加文件"
                   : missing
@@ -211,7 +213,10 @@ export default function HorizonOrganizationModal({
                   disabled={previewPending}
                   onClick={() => chooseModel(null)}
                 >
-                  <span>全部文件</span>
+                  <span className="organization-group-name">
+                    <Folder size={15} />
+                    全部文件
+                  </span>
                   <small>{draft.length}</small>
                 </button>
               )}
@@ -223,7 +228,10 @@ export default function HorizonOrganizationModal({
                   disabled={previewPending}
                   onClick={() => chooseModel(g.name)}
                 >
-                  <span>{g.name || "未分组"}</span>
+                  <span className="organization-group-name">
+                    <Folder size={15} />
+                    <span>{g.name || "未分组"}</span>
+                  </span>
                   <small>{g.members.length}</small>
                 </button>
               ))}
@@ -256,26 +264,31 @@ export default function HorizonOrganizationModal({
               {page === "groups" ? (
                 <>
                   <div className="organization-list-tools">
-                    <input
-                      className="organization-search"
-                      aria-label="查找层位文件"
-                      value={query}
-                      placeholder="搜索文件名"
-                      onChange={(e) => {
-                        setQuery(e.target.value);
-                        setSelected(new Set());
-                      }}
-                    />
+                    <label className="horizon-search">
+                      <Search size={15} />
+                      <input
+                        aria-label="查找层位文件"
+                        value={query}
+                        placeholder="搜索文件、分组或层位"
+                        onChange={(e) => {
+                          setQuery(e.target.value);
+                          setSelected(new Set());
+                        }}
+                      />
+                    </label>
                     <span className="organization-muted">
                       {picked.length
                         ? `已选 ${picked.length} 个`
-                        : "勾选文件后可批量分组"}
+                        : `${shown.length} 个文件`}
                     </span>
                   </div>
                   {picked.length > 0 && (
-                    <div className="organization-move">
+                    <div
+                      className="organization-move"
+                      aria-label="批量移动所选文件"
+                    >
                       <label>
-                        移至分组
+                        将 {picked.length} 个文件移至
                         <input
                           aria-label="目标分组名称"
                           list={`${id}-models`}
@@ -293,7 +306,7 @@ export default function HorizonOrganizationModal({
                         }
                         onClick={() => move(target.trim())}
                       >
-                        移至分组
+                        应用分组
                       </button>
                       {picked.some((h) => modelOf(h)) && (
                         <button
@@ -316,8 +329,18 @@ export default function HorizonOrganizationModal({
                       {message}，保存后生效。
                     </p>
                   )}
-                  <div className="organization-table-wrap">
+                  <div
+                    className="organization-table-wrap"
+                    tabIndex={0}
+                    aria-label="分组文件列表"
+                  >
                     <table className="organization-table organization-files-table">
+                      <colgroup>
+                        <col style={{ width: 44 }} />
+                        <col />
+                        <col style={{ width: "21%" }} />
+                        <col style={{ width: "21%" }} />
+                      </colgroup>
                       <thead>
                         <tr>
                           <th>
@@ -358,6 +381,7 @@ export default function HorizonOrganizationModal({
                               <input
                                 type="checkbox"
                                 aria-label={`选择文件 ${h.name}`}
+                                id={`${id}-file-${h.id}`}
                                 checked={selected.has(h.id)}
                                 onChange={(e) => {
                                   const checked = e.target.checked;
@@ -371,17 +395,45 @@ export default function HorizonOrganizationModal({
                                 }}
                               />
                             </td>
-                            <td title={h.name}>{h.name}</td>
                             <td>
-                              {modelOf(h) || (
+                              <label
+                                className="horizon-file-label"
+                                htmlFor={`${id}-file-${h.id}`}
+                                title={h.name}
+                              >
+                                {h.name}
+                              </label>
+                            </td>
+                            <td>
+                              {modelOf(h) ? (
+                                <span
+                                  className="horizon-file-label"
+                                  title={modelOf(h)}
+                                >
+                                  {modelOf(h)}
+                                </span>
+                              ) : (
                                 <span className="organization-muted">
                                   未分组
                                 </span>
                               )}
                             </td>
                             <td>
-                              {layerOf(h) || (
-                                <span className="organization-attention">
+                              {layerOf(h) ? (
+                                <span className="organization-layer-name">
+                                  <span
+                                    className="layer-color-dot"
+                                    style={{ background: h.color }}
+                                  />
+                                  <span
+                                    className="horizon-file-label"
+                                    title={layerOf(h)}
+                                  >
+                                    {layerOf(h)}
+                                  </span>
+                                </span>
+                              ) : (
+                                <span className="mapping-status pending">
                                   未对应
                                 </span>
                               )}
@@ -396,6 +448,9 @@ export default function HorizonOrganizationModal({
                       </p>
                     )}
                   </div>
+                  <p className="organization-help">
+                    勾选文件可批量移动分组；层位对应和颜色保持不变。
+                  </p>
                   <datalist id={`${id}-models`}>
                     {groups
                       .filter((g) => g.name)
@@ -439,20 +494,31 @@ export default function HorizonOrganizationModal({
             aria-labelledby={`${id}-colors-tab`}
           >
             <div className="organization-section-heading">
-              <h3>层位颜色</h3>
+              <h3>跨分组统一配色</h3>
               <span>{colors.size} 个统一层位</span>
             </div>
             <p className="organization-help">
-              修改一行的颜色，会同步到所有分组中对应的文件。
+              每行代表同一层位，修改颜色会同步到该行所有文件。
             </p>
             {colors.size ? (
-              <div className="organization-table-wrap">
+              <div
+                className="organization-table-wrap"
+                tabIndex={0}
+                aria-label="跨分组层位配色表"
+              >
                 <table className="organization-table organization-color-table">
                   <thead>
                     <tr>
                       <th>层位与颜色</th>
                       {groups.map((g) => (
-                        <th key={g.name}>{g.name || "未分组"}</th>
+                        <th key={g.name}>
+                          <span
+                            className="horizon-file-label"
+                            title={g.name || "未分组"}
+                          >
+                            {g.name || "未分组"}
+                          </span>
+                        </th>
                       ))}
                     </tr>
                   </thead>
@@ -476,15 +542,26 @@ export default function HorizonOrganizationModal({
                                 );
                               }}
                             />
-                            <span>{key}</span>
+                            <span className="horizon-file-label" title={key}>
+                              {key}
+                            </span>
                           </label>
                         </th>
                         {groups.map((g) => (
                           <td key={g.name}>
-                            {g.members
-                              .filter((h) => layerOf(h) === key)
-                              .map((h) => h.name)
-                              .join("、") || (
+                            {g.members.some((h) => layerOf(h) === key) ? (
+                              g.members
+                                .filter((h) => layerOf(h) === key)
+                                .map((h) => (
+                                  <span
+                                    className="horizon-file-label"
+                                    key={h.id}
+                                    title={h.name}
+                                  >
+                                    {h.name}
+                                  </span>
+                                ))
+                            ) : (
                               <button
                                 className="text-action organization-missing-link"
                                 aria-label={`检查 ${g.name || "未分组"} 的 ${key} 对应`}
@@ -524,9 +601,6 @@ export default function HorizonOrganizationModal({
                 </button>
               </div>
             )}
-            <p className="organization-help">
-              用于线条、图例和单色曲面；时间与振幅色标在各视图设置。
-            </p>
           </div>
         )}
         <div

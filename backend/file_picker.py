@@ -51,7 +51,12 @@ finally:
     root.destroy()
 ''']
         if kind == "Horizon":
-            command = [part.replace("SEG-Y (*.sgy;*.segy)|*.sgy;*.segy", "Horizon (*.txt;*.dat)|*.txt;*.dat").replace("*.sgy *.segy", "*.txt *.dat").replace("SEG-Y", "Horizon") for part in command]
+            command = [
+                part.replace("SEG-Y (*.sgy;*.segy)|*.sgy;*.segy|All files (*.*)|*.*", "All files (*.*)|*.*")
+                .replace('[("SEG-Y", "*.sgy *.segy"), ("All files", "*")]', '[("All files", "*")]')
+                .replace("SEG-Y", "Horizon")
+                for part in command
+            ]
         if multiple:
             if sys.platform == 'darwin':
                 command[-1] = command[-1].replace(

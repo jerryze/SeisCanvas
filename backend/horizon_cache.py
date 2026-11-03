@@ -12,7 +12,7 @@ CACHE_DIR = Path(__file__).resolve().parents[1] / '.cache' / 'horizons'
 def cache_path(path, columns):
     path = Path(path).resolve()
     stat = path.stat()
-    identity = [1, str(path), stat.st_size, stat.st_mtime_ns, list(columns)]
+    identity = [2, str(path), stat.st_size, stat.st_mtime_ns, list(columns)]
     return CACHE_DIR / (hashlib.sha256(json.dumps(identity).encode()).hexdigest() + '.npy')
 
 
