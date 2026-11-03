@@ -34,7 +34,7 @@ end try''']
 Add-Type -AssemblyName System.Windows.Forms
 $dialog = New-Object System.Windows.Forms.OpenFileDialog
 $dialog.Title = 'SeisCanvas - Open SEG-Y'
-$dialog.Filter = 'SEG-Y (*.sgy;*.segy)|*.sgy;*.segy|All files (*.*)|*.*'
+$dialog.Filter = 'All files (*.*)|*.*'
 if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Write($dialog.FileName) }
 $dialog.Dispose()
 ''']
@@ -46,17 +46,12 @@ from tkinter import filedialog
 root = tk.Tk()
 root.withdraw()
 try:
-    print(filedialog.askopenfilename(title="SeisCanvas - Open SEG-Y", filetypes=[("SEG-Y", "*.sgy *.segy"), ("All files", "*")]))
+    print(filedialog.askopenfilename(title="SeisCanvas - Open SEG-Y", filetypes=[("All files", "*")]))
 finally:
     root.destroy()
 ''']
         if kind == "Horizon":
-            command = [
-                part.replace("SEG-Y (*.sgy;*.segy)|*.sgy;*.segy|All files (*.*)|*.*", "All files (*.*)|*.*")
-                .replace('[("SEG-Y", "*.sgy *.segy"), ("All files", "*")]', '[("All files", "*")]')
-                .replace("SEG-Y", "Horizon")
-                for part in command
-            ]
+            command = [part.replace("SEG-Y", "Horizon") for part in command]
         if multiple:
             if sys.platform == 'darwin':
                 command[-1] = command[-1].replace(

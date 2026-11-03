@@ -618,8 +618,8 @@ def open_local_segy(req: LocalSegyRequest, progress=None):
     path = Path(req.path.strip()).expanduser()
     if not path.is_absolute():
         raise HTTPException(400, "请填写 SEG-Y 文件的绝对路径。")
-    if path.suffix.lower() not in [".sgy", ".segy"] or not path.is_file():
-        raise HTTPException(400, "文件不存在，或不是 .sgy / .segy 文件。")
+    if not path.is_file():
+        raise HTTPException(400, "文件不存在，或路径不是普通文件。")
     try:
         new = Survey(path, req.ilbyte, req.xlbyte, progress=progress, geometry_mode=req.geometry_mode)
         with guarded_lock():
@@ -637,10 +637,8 @@ def upload_segy(
     file: UploadFile = File(...), ilbyte: int = Form(189), xlbyte: int = Form(21)
 ):
     global survey
-    if Path(file.filename or "").suffix.lower() not in [".sgy", ".segy"]:
-        raise HTTPException(400, "Choose a .sgy or .segy file.")
     folder = project.asset_folder()
-    path = folder / Path(file.filename).name
+    path = folder / (Path(file.filename or "").name or "survey")
     try:
         if file.size and shutil.disk_usage(folder).free < file.size + 256 * 1024 * 1024:
             raise ValueError("临时磁盘空间不足。大文件请使用本地路径直接打开，避免上传和复制。")
@@ -733,7 +731,7 @@ def upload_horizons(
         for file in files:
             folder = project.asset_folder()
             folders.append(folder)
-            path = folder / Path(file.filename).name
+            path = folder / (Path(file.filename or "").name or "survey")
             with path.open("wb") as output:
                 shutil.copyfileobj(file.file, output)
             pending.append(Horizon(path, Path(file.filename).stem, columns=columns))
