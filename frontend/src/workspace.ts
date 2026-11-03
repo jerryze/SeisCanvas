@@ -43,7 +43,7 @@ export type MapWorkspace = {
 export function initialMapWorkspace(): MapWorkspace {
   const settings: ExportDialogSettings = {
     format: "png", canvas: "fit", long_edge: 3000, background: "white",
-    width: 180, height: 140, dpi: 300, font: "Times New Roman", font_size: 10,
+    width: 180, height: 140, dpi: 300, font: "Times New Roman", font_size: 16,
     show_axes: true, show_labels: true, show_title: true,
   };
   return {
@@ -73,7 +73,7 @@ export function normalizeMapWorkspace(map: MapWorkspace): MapWorkspace {
 }
 
 export const initialExport3D: Export3D = {
-  format: "png", font: "Times New Roman", font_size: 10,
+  format: "png", font: "Times New Roman", font_size: 16,
   canvas: "fit", long_edge: 3000, background: "white", width: 180, height: 120,
   dpi: 300, show_axes: true, show_axis_labels: true, show_bounding_box: true,
   interpolation: "bicubic",

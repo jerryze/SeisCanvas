@@ -53,7 +53,7 @@ export default function ExportDialog({
   useModalFocus(dialog, true, onClose, !busy);
   const axes = s.show_axes !== false;
   return createPortal(
-    <div className="modal-backdrop" onClick={() => !busy && onClose()}>
+    <div className="modal-backdrop">
       <div
         className="modal export-dialog"
         ref={dialog}
@@ -61,7 +61,6 @@ export default function ExportDialog({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-heading">
           <div>

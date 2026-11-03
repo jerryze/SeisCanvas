@@ -23,7 +23,7 @@ export default function ServerFilesModal({
     paths.every((path) => path.startsWith("/") || path.startsWith("~/"));
   useModalFocus(dialog, true, () => onDone(null));
   return (
-    <div className="modal-backdrop" onClick={() => onDone(null)}>
+    <div className="modal-backdrop">
       <div
         className="modal server-files-dialog"
         ref={dialog}
@@ -31,7 +31,6 @@ export default function ServerFilesModal({
         role="dialog"
         aria-modal="true"
         aria-label={`选择${kind === "SEG-Y" ? " SEG-Y " : kind}文件`}
-        onClick={(event) => event.stopPropagation()}
       >
         <div className="modal-heading">
           <h2>选择{kind === "SEG-Y" ? " SEG-Y " : kind}文件</h2>

@@ -88,8 +88,8 @@ export function SliceManager({
       hint={`${allSlices.filter((slice) => slice.visible).length} / ${allSlices.length} 显示`}
     >
       {pendingDelete && createPortal(
-        <div className="modal-backdrop" onClick={() => !disabled && setPendingDelete(null)}>
-          <div ref={deleteDialog} tabIndex={-1} className="modal delete-horizon-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-slice-title" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-backdrop">
+          <div ref={deleteDialog} tabIndex={-1} className="modal delete-horizon-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-slice-title">
             <h2 id="delete-slice-title">移除切片 {prefixes[pendingDelete.kind]} {pendingDelete.slice.position}{pendingDelete.kind === "time" ? " ms" : ""}？</h2>
             <div className="import-actions">
               <button className="secondary" disabled={disabled} onClick={() => setPendingDelete(null)}>取消</button>

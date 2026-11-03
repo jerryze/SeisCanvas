@@ -124,7 +124,7 @@ const initialExport: ExportDialogSettings = {
   dpi: 300,
 
   font: "Times New Roman",
-  font_size: 10,
+  font_size: 16,
 
   show_axes: true,
   show_labels: true,
@@ -1439,8 +1439,8 @@ function ProjectWorkspace({ initialProject, onActivate, managerOpen, onManagerOp
         }} />}
 
       {horizonToDelete && (
-        <div className="modal-backdrop" onClick={() => !busy && setHorizonToDelete(null)}>
-          <div ref={deleteDialog} tabIndex={-1} className="modal delete-horizon-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-horizon-title" onClick={e => e.stopPropagation()}>
+        <div className="modal-backdrop">
+          <div ref={deleteDialog} tabIndex={-1} className="modal delete-horizon-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-horizon-title">
             <h2 id="delete-horizon-title">移除层位 {horizonToDelete.name}？</h2>
             {mapWorkspace.state.color_by === "difference" && (mapWorkspace.state.difference_reference === horizonToDelete.id || mapWorkspace.state.difference_comparison === horizonToDelete.id) && (
               <p className="delete-horizon-impact">差值计算需重新选择层位。</p>

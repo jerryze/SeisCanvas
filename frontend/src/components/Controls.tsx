@@ -134,17 +134,20 @@ export function Toggle({
   onChange,
   label,
   title,
+  disabled = false,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   label: string;
   title?: string;
+  disabled?: boolean;
 }) {
   return (
     <label className="check" title={title}>
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
       />
       <span>{label}</span>

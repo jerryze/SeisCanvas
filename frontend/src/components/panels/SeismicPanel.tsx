@@ -140,7 +140,10 @@ export function SeismicSettings({ seismic: s, maps, onSeismic }: {
               />
               <Toggle
                 label="Wiggle 插值"
-                title="对地震道时间采样使用 Sinc8；关闭后连接原始采样点"
+                title={s.wiggle || s.variable_area
+                  ? "仅影响波形线与正振幅填充：开启使用 Sinc8，关闭连接原始采样点；放大时间轴可观察差异"
+                  : "先开启波形（Wiggle）或正振幅填充；此开关不影响彩色背景"}
+                disabled={!s.wiggle && !s.variable_area}
                 checked={s.wiggle_interpolation}
                 onChange={(wiggle_interpolation) => onSeismic({ wiggle_interpolation })}
               />

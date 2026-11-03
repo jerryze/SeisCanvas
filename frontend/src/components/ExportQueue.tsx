@@ -194,12 +194,7 @@ export default function ExportQueue({
 
   return (
     <>
-      <div
-        className="queue-backdrop"
-        onClick={() => {
-          if (!busy && !renaming) onClose();
-        }}
-      />
+      <div className="queue-backdrop" />
       <aside
         ref={drawer}
         tabIndex={-1}
@@ -540,10 +535,7 @@ export default function ExportQueue({
       </aside>
 
       {preview && (
-        <div
-          className="modal-backdrop queue-preview-backdrop"
-          onClick={() => setPreview(null)}
-        >
+        <div className="modal-backdrop queue-preview-backdrop">
           <div
             className="modal queue-preview"
             ref={previewDialog}
@@ -551,7 +543,6 @@ export default function ExportQueue({
             role="dialog"
             aria-modal="true"
             aria-label={`预览 ${preview.filename}`}
-            onClick={(e) => e.stopPropagation()}
           >
             <div className="modal-heading">
               <h2 title={preview.filename}>{preview.filename}</h2>

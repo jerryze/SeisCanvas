@@ -142,8 +142,8 @@ export default function ProjectMenu({ project, disabled, open, onOpenChange, onA
     <button className="project-switcher secondary" disabled={disabled} onClick={() => onOpenChange(true)} aria-label="项目管理" title={project?.name || "项目管理"}>
       <FolderOpen size={16}/><span>{project?.name || "项目管理"}</span>
     </button>
-    {open && <div className="modal-backdrop project-backdrop" onClick={dismiss}>
-      <div className={`modal project-dialog${screen.type === "list" ? " project-manager" : ""}`} ref={dialog} tabIndex={-1} role={screen.type === "delete" || screen.type === "purge" ? "alertdialog" : "dialog"} aria-modal="true" aria-labelledby="project-dialog-title" aria-describedby={screen.type === "delete" || screen.type === "purge" ? "project-delete-description" : undefined} onClick={e => e.stopPropagation()}>
+    {open && <div className="modal-backdrop project-backdrop">
+      <div className={`modal project-dialog${screen.type === "list" ? " project-manager" : ""}`} ref={dialog} tabIndex={-1} role={screen.type === "delete" || screen.type === "purge" ? "alertdialog" : "dialog"} aria-modal="true" aria-labelledby="project-dialog-title" aria-describedby={screen.type === "delete" || screen.type === "purge" ? "project-delete-description" : undefined}>
         <div className="modal-heading">
           <div className="project-heading-title">{screen.type !== "list" && <button className="icon" disabled={pending} onClick={back} aria-label="返回项目列表"><ArrowLeft size={18}/></button>}<h2 id="project-dialog-title">{title}</h2></div>
           <button className="icon" disabled={pending && !canCancel} onClick={close} aria-label="关闭项目管理"><X size={18}/></button>

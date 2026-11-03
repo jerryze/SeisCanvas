@@ -131,7 +131,7 @@ class Settings(BaseModel):
     font: Literal["DejaVu Sans", "DejaVu Serif", "Arial", "Times New Roman"] = (
         "Times New Roman"
     )
-    font_size: float = Field(10, ge=5, le=30)
+    font_size: float = Field(16, ge=5, le=30)
     show_axes: bool = True
     show_labels: bool = True
     show_title: bool = True
@@ -274,7 +274,7 @@ class Scene3DSettings(BaseModel):
     font: Literal["DejaVu Sans", "DejaVu Serif", "Arial", "Times New Roman"] = (
         "Times New Roman"
     )
-    font_size: float = Field(10, ge=5, le=30)
+    font_size: float = Field(16, ge=5, le=30)
     background: str = Field("white", pattern=r"^(white|transparent|#[0-9a-fA-F]{6})$")
     show_axes: bool = True
     show_axis_labels: bool = True
